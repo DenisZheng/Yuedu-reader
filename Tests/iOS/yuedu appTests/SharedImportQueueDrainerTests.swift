@@ -293,6 +293,27 @@ struct SharedImportQueueDrainerTests {
         #expect(outcome.failureCount == 0)
     }
 
+    @Test("RSS共享包先进入确认，缺名/搜索字段不会误分到书源")
+    func rssReviewBeforeWrite() async throws {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        try queuePayload(.init(storageKind: .remoteURL, remoteURLString: "https://example.invalid/pack.json"), in: defaults)
+        let drainer = SharedImportQueueDrainer(defaults: defaults, fetchURL: { _ in
+            Data(#"[{"sourceUrl":"fixture-key","searchUrl":"?q={{key}}","ruleContent":"body"}]"#.utf8)
+        })
+        let outcome = await drainer.drain()
+        #expect(outcome.importedCount == 0 && outcome.failureCount == 0)
+        #expect(drainer.rssReviewRequests.count == 1)
+        #expect(drainer.bookSourceReviewRequests.isEmpty)
+        let request = try #require(drainer.rssReviewRequest)
+        let loaded = try await RSSImportService.load(request.input)
+        #expect(loaded.candidates.first?.source?.sourceKey == "fixture-key")
+        drainer.didPresentRSSReview(requestID: request.id)
+        #expect(drainer.rssReviewRequests.isEmpty)
+        let wrapper = Data(#"{"sourceUrls":[]}"#.utf8)
+        #expect(try SharedImportPayloadClassifier.classify(data: wrapper, fileExtension: "json", suggestedFilename: nil) == .rssLegadoJSON)
+    }
+
     @Test("a failing import is counted and the queue is not retried")
     func importFailureClearsQueue() async {
         let (defaults, suiteName) = makeDefaults()

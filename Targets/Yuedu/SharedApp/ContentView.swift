@@ -157,6 +157,17 @@ struct ContentView: View {
                 }
             )
         }
+        .sheet(item: Binding(get: {
+            importDrainer.lastOutcome == nil && importDrainer.bookSourceReviewRequest == nil
+                && importDrainer.readerRequest == nil && importDrainer.customizationRequest == nil
+                ? importDrainer.rssReviewRequest : nil
+        }, set: { request in
+            if request == nil, let id = importDrainer.rssReviewRequest?.id {
+                importDrainer.didPresentRSSReview(requestID: id)
+            }
+        })) { request in
+            RSSImportReviewSheet(input: request.input, store: RSSStore.shared)
+        }
         .overlay(alignment: .bottom) {
             if importDrainer.activeImportCount > 0 {
                 ProgressView(localized("匯入中，請稍候…"))

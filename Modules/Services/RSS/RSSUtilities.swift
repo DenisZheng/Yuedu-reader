@@ -162,11 +162,12 @@ enum RSSRequestFactory {
     /// often lack a scheme ("shuyuan.nyasama.net") or contain non-ASCII characters;
     /// URLSession rejects those with NSURLErrorUnsupportedURL, so normalize first.
     static func requestURL(for source: RSSSource) -> URL? {
-        if let url = URL(string: source.url),
+        let address = source.hasLegadoSignature ? source.sourceKey : (source.resolvedFeedURL ?? source.sourceKey)
+        if let url = URL(string: address),
            url.scheme == "http" || url.scheme == "https" {
             return url.upgradedToHTTPS()
         }
-        return RSSSource.normalizedWebURL(from: source.url)
+        return RSSSource.normalizedWebURL(from: address)
     }
 }
 

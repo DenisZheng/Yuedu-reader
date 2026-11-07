@@ -41,6 +41,8 @@ struct RSSListView: View {
     @State private var showJSONImporter = false
     @State private var showJSONExporter = false
     @State private var showJSONURLSheet = false
+    @State private var pendingJSONFilePicker = false
+    @State private var jsonReview: RSSImportReviewRequest?
     @State private var importMessage = ""
     @State private var showImportResult = false
     @State private var didBackfillSourceMetadata = false
@@ -226,8 +228,19 @@ struct RSSListView: View {
             .sheet(isPresented: $showAddFolderSheet) {
                 AddRSSFolderSheet(isPresented: $showAddFolderSheet, store: store)
             }
-            .sheet(isPresented: $showJSONURLSheet) {
-                ImportLegadoJSONURLSheet(isPresented: $showJSONURLSheet, store: store)
+            .sheet(isPresented: $showJSONURLSheet, onDismiss: {
+                if pendingJSONFilePicker {
+                    pendingJSONFilePicker = false
+                    showJSONImporter = true
+                }
+            }) {
+                ImportLegadoJSONURLSheet(isPresented: $showJSONURLSheet, store: store, onFile: {
+                    pendingJSONFilePicker = true
+                    showJSONURLSheet = false
+                })
+            }
+            .sheet(item: $jsonReview) { request in
+                RSSImportReviewSheet(input: request.input, store: store)
             }
             .sheet(
                 isPresented: $showOPMLImportSheet,
@@ -579,21 +592,13 @@ struct RSSListView: View {
         didBackfillSourceMetadata = true
 
         let candidates = store.sources.filter { source in
-            !source.isLegadoRuleBased && (
+            source.enabled && !source.hasLegadoSignature && (
                 source.homepageURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false ||
                 source.faviconURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
             )
         }
 
-        await store.performRefreshBatch {
-            for source in candidates {
-                let fetcher = RSSFetcher()
-                await fetcher.fetchItems(from: source, metadata: store.feedMetadata(for: source.id))
-                guard let response = fetcher.response else { continue }
-                store.applyResolvedFeedURL(fetcher.resolvedFeedURL, homepageURL: fetcher.resolvedHomepageURL, to: source.id)
-                store.applyFeedResponse(response, for: source.id)
-            }
-        }
+        await RSSFeedRefreshService.refreshAll(store: store, sourceIDs: Set(candidates.map(\.id)))
     }
 
     @MainActor
@@ -614,23 +619,12 @@ struct RSSListView: View {
     }
 
     private func importLegadoJSON(_ result: Result<[URL], Error>) {
-        do {
-            guard let url = try result.get().first else { return }
-            let shouldStopAccessing = url.startAccessingSecurityScopedResource()
-            defer {
-                if shouldStopAccessing {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
-
-            let data = try Data(contentsOf: url)
-            let sources = try LegadoSourceJSONParser.parse(data: data)
-            let addedSources = store.addSourcesReturningAdded(sources)
-            importMessage = String(format: localized("已匯入 %d 個訂閱源"), addedSources.count)
-            showImportResult = true
-            Task { await refreshImportedSources(addedSources) }
-        } catch {
-            importMessage = String(format: localized("Legado JSON 匯入失敗：%@"), error.localizedDescription)
+        switch result {
+        case .success(let urls):
+            if let url = urls.first { jsonReview = .init(input: .file(url)) }
+        case .failure(let error):
+            guard (error as NSError).code != NSUserCancelledError else { return }
+            importMessage = DiagnosticRedactor.redact(error.localizedDescription)
             showImportResult = true
         }
     }
@@ -674,20 +668,7 @@ struct RSSListView: View {
 
     @MainActor
     private func refreshImportedSources(_ sources: [RSSSource]) async {
-        await store.performRefreshBatch {
-            for source in sources where source.enabled {
-                let fetcher = RSSFetcher()
-                await fetcher.fetchItems(from: source, metadata: nil)
-                guard fetcher.error == nil else { continue }
-
-                store.applyResolvedFeedURL(fetcher.resolvedFeedURL, homepageURL: fetcher.resolvedHomepageURL, to: source.id)
-                if let response = fetcher.response {
-                    store.applyFeedResponse(response, for: source.id)
-                } else {
-                    store.mergeFetchedItems(fetcher.items, for: source.id)
-                }
-            }
-        }
+        await RSSFeedRefreshService.refreshAll(store: store, sourceIDs: Set(sources.map(\.id)))
     }
 
     /// A link another app owns opens through `UIApplication`, not the environment's
@@ -735,7 +716,7 @@ struct RSSListView: View {
                 onAddFolder: { showAddFolderSheet = true },
                 onRefresh: { Task { await refreshAllSources() } },
                 onImportOPML: { showOPMLImportSheet = true },
-                onImportJSON: { showJSONImporter = true }
+                onImportJSON: { showJSONURLSheet = true }
             )
         }
     }
@@ -777,7 +758,7 @@ struct RSSListView: View {
         case .importOPML:
             showOPMLImportSheet = true
         case .importJSON:
-            showJSONImporter = true
+            showJSONURLSheet = true
         case .refresh:
             Task { await refreshAllSources() }
         }
@@ -1429,93 +1410,6 @@ struct RSSJSONDocument: FileDocument {
 }
 
 // MARK: - Import Legado JSON URL Sheet
-
-struct ImportLegadoJSONURLSheet: View {
-    @Binding var isPresented: Bool
-    @ObservedObject var store: RSSStore
-
-    @State private var urlString = ""
-    @State private var isLoading = false
-    @State private var message = ""
-    @State private var showMessage = false
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section(header: Text(localized("Legado JSON 網址")).foregroundStyle(DSColor.textSecondary)) {
-                    TextField("https://.../sources/xxx.json", text: $urlString)
-                        .keyboardType(.URL)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                }
-                .interfaceSectionSurface()
-
-            }
-            .softScrollEdges()
-            .navigationTitle(localized("從網址匯入 Legado JSON"))
-            .toolbarTitleDisplayMode(.inline)
-            .themedAppSurface(for: .rss)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        isPresented = false
-                    } label: {
-                        Label(localized("取消"), systemImage: "xmark")
-                            .labelStyle(.iconOnly)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await importFromURL() }
-                    } label: {
-                        Label(localized("匯入"), systemImage: "checkmark")
-                            .labelStyle(.iconOnly)
-                    }
-                    .disabled(urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading)
-                }
-            }
-            .alert(localized("匯入"), isPresented: $showMessage) {
-                Button(localized("確定"), role: .cancel) {
-                    if !message.hasPrefix("❌") { isPresented = false }
-                }
-            } message: {
-                Text(message)
-            }
-            .disabled(isLoading)
-            .overlay {
-                if isLoading {
-                    ProgressView(localized("匯入中，請稍候…"))
-                        .padding()
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                }
-            }
-        }
-    }
-
-    @MainActor
-    private func importFromURL() async {
-        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = URL(string: trimmed) else {
-            message = "❌ \(localized("RSS URL 無效"))"
-            showMessage = true
-            return
-        }
-
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            let sources = try LegadoSourceJSONParser.parse(data: data)
-            let addedCount = store.addSources(sources)
-            message = String(format: localized("已匯入 %d 個訂閱源"), addedCount)
-            showMessage = true
-        } catch {
-            message = "❌ \(String(format: localized("Legado JSON 匯入失敗：%@"), error.localizedDescription))"
-            showMessage = true
-        }
-    }
-}
 
 // MARK: - Add Source Sheet
 

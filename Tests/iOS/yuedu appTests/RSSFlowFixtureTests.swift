@@ -109,7 +109,7 @@ struct RSSFlowFixtureTests {
     }
 
     @MainActor
-    @Test("现状差异：旧批量导入只新增，同key配置更新被跳过且不会替换本地id")
+    @Test("旧OPML追加入口只新增；JSON更新已由S2确认用例覆盖：旧批量导入只新增，同key配置更新被跳过且不会替换本地id")
     func reimportSkipsChangedConfiguration() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("rss-update-fixture-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

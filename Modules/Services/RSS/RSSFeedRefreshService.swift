@@ -7,24 +7,27 @@ enum RSSFeedRefreshService {
     @discardableResult
     static func refreshAll(
         store: RSSStore = .shared,
+        sourceIDs: Set<String>? = nil,
         makeFetcher: @MainActor () -> RSSFetcher = { RSSFetcher() },
         notify: @MainActor ([RSSArticleRecord], RSSSource) -> Void = {
             RSSNotificationManager.shared.notifyNewArticles($0, source: $1)
         },
         onProgress: @MainActor (Int, Int) -> Void = { _, _ in }
     ) async -> Bool {
-        await store.performRefreshBatch {
-            await refreshEach(store: store, makeFetcher: makeFetcher, notify: notify, onProgress: onProgress)
+        let succeeded = await store.performRefreshBatch {
+            await refreshEach(store: store, sourceIDs: sourceIDs, makeFetcher: makeFetcher, notify: notify, onProgress: onProgress)
         }
+        return succeeded && !store.persistenceFailed
     }
 
     private static func refreshEach(
         store: RSSStore,
+        sourceIDs: Set<String>?,
         makeFetcher: @MainActor () -> RSSFetcher,
         notify: @MainActor ([RSSArticleRecord], RSSSource) -> Void,
         onProgress: @MainActor (Int, Int) -> Void
     ) async -> Bool {
-        let sources = store.sources.filter { $0.enabled && !$0.opensAsWebPage }
+        let sources = store.sources.filter { $0.enabled && !$0.opensAsWebPage && (sourceIDs?.contains($0.id) ?? true) }
         onProgress(0, sources.count)
         var succeeded = true
         for (index, source) in sources.enumerated() {
@@ -37,13 +40,13 @@ enum RSSFeedRefreshService {
             let fetcher = makeFetcher()
             await fetcher.fetchItems(from: current, metadata: store.feedMetadata(for: source.id))
             guard !Task.isCancelled else { return false }
-            guard let refreshedSource = store.source(id: source.id), refreshedSource.enabled else {
+            guard let refreshedSource = store.source(id: source.id), refreshedSource.enabled, refreshedSource == current else {
                 onProgress(index + 1, sources.count)
                 continue
             }
             if let error = fetcher.error {
                 succeeded = false
-                AppLogger.network("RSS refresh failed", context: ["source": source.id, "error": error], level: .warning)
+                AppLogger.network("RSS refresh failed", context: ["source": source.id, "error": DiagnosticRedactor.redact(error)], level: .warning)
             } else {
                 store.applyResolvedFeedURL(fetcher.resolvedFeedURL, homepageURL: fetcher.resolvedHomepageURL, to: source.id)
                 let newArticles: [RSSArticleRecord]

@@ -6,8 +6,9 @@ import SwiftUI
 final class RSSStore: ObservableObject {
     static let shared = RSSStore()
 
-    @Published var sources: [RSSSource] = []
-    @Published var folders: [RSSFolder] = []
+    @Published var sources: [RSSSource] = [] { didSet { configurationRevision &+= 1 } }
+    @Published var folders: [RSSFolder] = [] { didSet { configurationRevision &+= 1 } }
+    private(set) var configurationRevision: UInt64 = 0
     @Published private var cachedArticlesBySource: [String: [RSSArticleRecord]] = [:]
     @Published private var articleStatuses: [String: RSSArticleStatus] = [:]
     @Published private var feedMetadataBySource: [String: RSSFeedFetchMetadata] = [:]
@@ -106,8 +107,8 @@ final class RSSStore: ObservableObject {
 
         if let feedURL,
            !feedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           source.url != feedURL {
-            source.url = feedURL
+           source.resolvedFeedURL != feedURL {
+            source.resolvedFeedURL = feedURL
             didChange = true
         }
 
@@ -658,13 +659,14 @@ final class RSSStore: ObservableObject {
     /// is cancelled — a background task expiring — so nothing merged is lost.
     func performRefreshBatch<T>(_ body: () async -> T) async -> T {
         refreshBatchDepth += 1
-        defer {
-            refreshBatchDepth -= 1
-            if refreshBatchDepth == 0, !pendingRefreshFiles.isEmpty {
-                save(pendingRefreshFiles)
-            }
+        let result = await body()
+        refreshBatchDepth -= 1
+        if refreshBatchDepth == 0 {
+            if !pendingRefreshFiles.isEmpty { save(pendingRefreshFiles) }
+            // 写入错误由drainPersistence记录并保留；服务读取persistenceFailed返回失败。
+            await persistenceTask?.value
         }
-        return await body()
+        return result
     }
 
     private var refreshBatchDepth = 0
@@ -686,28 +688,129 @@ final class RSSStore: ObservableObject {
     private func save(_ files: StoredFiles = .all) {
         let files = files.union(pendingRefreshFiles)
         pendingRefreshFiles = []
-        if files.contains(.sources) { save(sources, to: sourceStorageURL) }
-        if files.contains(.folders) { save(folders, to: folderStorageURL) }
-        if files.contains(.articles) { save(cachedArticlesBySource, to: articleStorageURL) }
-        if files.contains(.statuses) { save(articleStatuses, to: statusStorageURL) }
-        if files.contains(.feedMetadata) { save(feedMetadataBySource, to: feedMetadataStorageURL) }
+        dirtyFiles.formUnion(files)
+        if persistenceTask == nil {
+            persistenceTask = Task { await drainPersistence() }
+        }
         if !files.isDisjoint(with: [.articles, .statuses]) {
             RSSNotificationManager.shared.updateBadge(unreadCount: totalUnreadCount())
         }
     }
 
-    private func load<T: Decodable>(_ type: T.Type, from url: URL) -> T? {
-        guard FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url) else {
-            return nil
-        }
-        return try? JSONDecoder().decode(type, from: data)
+    private var dirtyFiles: StoredFiles = []
+    private var failedFiles: StoredFiles = []
+    private var unreadableFiles = Set<String>()
+    private var persistenceTask: Task<Void, Never>?
+    var persistenceFailed: Bool { !failedFiles.isEmpty || !unreadableFiles.isEmpty }
+
+    func importSnapshot() -> RSSImportService.Snapshot {
+        .init(revision: configurationRevision, sources: sources, folders: folders)
     }
 
-    private func save<T: Encodable>(_ value: T, to url: URL) {
-        guard let data = try? JSONEncoder().encode(value) else { return }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
-        writeCounts[url.lastPathComponent, default: 0] += 1
+    /// 检查比较期间的修改，发布一次，再等待真实落盘；首次抓取不属于此事务。
+    func commitImport(_ changes: RSSImportService.Changes) async throws {
+        try Task.checkCancellation()
+        guard changes.revision == configurationRevision else { throw RSSImportService.Issue.stalePlan }
+        guard unreadableFiles.isEmpty else { throw RSSImportService.Issue.persistence }
+        if !changes.changedIDs.isEmpty {
+            let foldersChanged = folders.count != changes.folders.count
+            sources = changes.sources
+            if foldersChanged { folders = changes.folders }
+            save(foldersChanged ? [.sources, .folders] : .sources)
+        }
+        try await flushPersistence()
+    }
+
+    func flushPersistence() async throws {
+        await persistenceTask?.value
+        guard !persistenceFailed else { throw RSSImportService.Issue.persistence }
+    }
+
+    /// 失败快照不会标成已保存；重试使用当前owner数据而非旧导入快照。
+    func retryPersistence() async throws {
+        if !failedFiles.isEmpty { save(failedFiles) }
+        try await flushPersistence()
+    }
+
+    private struct DiskSnapshot: Sendable {
+        var sources: [RSSSource]?
+        var folders: [RSSFolder]?
+        var articles: [String: [RSSArticleRecord]]?
+        var statuses: [String: RSSArticleStatus]?
+        var metadata: [String: RSSFeedFetchMetadata]?
+        var directory: URL
+    }
+
+    private func drainPersistence() async {
+        // 场景退出时给已排队的有限写入保留系统后台时间，不在主线程同步等待磁盘。
+        let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "RSS persistence")
+        defer {
+            if backgroundTask != .invalid { UIApplication.shared.endBackgroundTask(backgroundTask) }
+        }
+        while !dirtyFiles.isEmpty {
+            let files = dirtyFiles.union(failedFiles)
+            dirtyFiles = []
+            let snapshot = DiskSnapshot(
+                sources: files.contains(.sources) ? sources : nil,
+                folders: files.contains(.folders) ? folders : nil,
+                articles: files.contains(.articles) ? cachedArticlesBySource : nil,
+                statuses: files.contains(.statuses) ? articleStatuses : nil,
+                metadata: files.contains(.feedMetadata) ? feedMetadataBySource : nil,
+                directory: sourceStorageURL.deletingLastPathComponent()
+            )
+            let results = await Self.write(snapshot, excluding: unreadableFiles)
+            failedFiles = []
+            for (file, success) in results {
+                let kind: StoredFiles
+                switch file {
+                case "rss_sources.json": kind = .sources
+                case "rss_folders.json": kind = .folders
+                case "rss_articles.json": kind = .articles
+                case "rss_article_status.json": kind = .statuses
+                default: kind = .feedMetadata
+                }
+                if success { writeCounts[file, default: 0] += 1 } else { failedFiles.insert(kind) }
+            }
+        }
+        persistenceTask = nil
+    }
+
+    private nonisolated static func write(_ snapshot: DiskSnapshot, excluding: Set<String>) async -> [(String, Bool)] {
+        SourcePerfTrace.span("rss.persist", "main=\(Thread.isMainThread) sources=\(snapshot.sources?.count ?? 0)") {
+            var results: [(String, Bool)] = []
+            func write<Value: Encodable>(_ value: Value?, _ file: String) {
+                guard let value else { return }
+                guard !excluding.contains(file) else { results.append((file, false)); return }
+                do {
+                    let data = try JSONEncoder().encode(value)
+                    try FileManager.default.createDirectory(at: snapshot.directory, withIntermediateDirectories: true)
+                    try data.write(to: snapshot.directory.appendingPathComponent(file), options: .atomic)
+                    results.append((file, true))
+                } catch {
+                    // 编码错误也可能携带配置内容，只记录固定文件名与错误域/码。
+                    let failure = error as NSError
+                    AppLogger.info("RSS persistence failed", context: ["file": file, "domain": failure.domain, "code": failure.code], level: .error)
+                    results.append((file, false))
+                }
+            }
+            write(snapshot.sources, "rss_sources.json")
+            write(snapshot.folders, "rss_folders.json")
+            write(snapshot.articles, "rss_articles.json")
+            write(snapshot.statuses, "rss_article_status.json")
+            write(snapshot.metadata, "rss_feed_metadata.json")
+            return results
+        }
+    }
+
+    private func load<T: Decodable>(_ type: T.Type, from url: URL) -> T? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do {
+            return try JSONDecoder().decode(type, from: Data(contentsOf: url))
+        } catch {
+            unreadableFiles.insert(url.lastPathComponent)
+            let failure = error as NSError
+            AppLogger.info("RSS storage could not be read", context: ["file": url.lastPathComponent, "domain": failure.domain, "code": failure.code], level: .error)
+            return nil
+        }
     }
 }

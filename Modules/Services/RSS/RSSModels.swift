@@ -97,7 +97,15 @@ struct ParsedFeedInfo: Sendable {
 
 // MARK: - RSS Source
 
-struct RSSSource: Codable, Identifiable {
+/// RSS类型单独建模；未知整数保留，不与书源类型或书籍位标记混用。
+struct RSSContentType: RawRepresentable, Codable, Equatable, Sendable {
+    var rawValue: Int
+    static let web = Self(rawValue: 0)
+    static let image = Self(rawValue: 1)
+    static let video = Self(rawValue: 2)
+}
+
+struct RSSSource: Codable, Identifiable, Equatable, Sendable {
     var id: String = UUID().uuidString
     var name: String
     var url: String
@@ -146,6 +154,26 @@ struct RSSSource: Codable, Identifiable {
     var shouldOverrideUrlLoading: String?
     /// Set at Legado JSON import time; nil for hand-added feeds and legacy storage.
     var importedFromLegado: Bool?
+
+    // 可选字段保证Fork已有存储可升级；存在不代表执行器已接入该功能。
+    var configurationVersion: Int?
+    var contentType: RSSContentType?
+    var startHtml: String?
+    var startStyle: String?
+    var startJs: String?
+    var nextContentUrl: String?
+    var searchUrl: String?
+    var variable: String?
+    var preloadJs: String?
+    var preload: Bool?
+    var cacheFirst: Bool?
+    var showWebLog: Bool?
+    var enableReadRecord: Bool?
+    /// 仅未知字段与显式null的规范JSON，已知有值字段仍由上方属性唯一持有。
+    var preservedLegadoFields: Data?
+    /// 标准Feed发现的地址不是源身份，不能覆盖sourceKey或Legado模板/选项。
+    var resolvedFeedURL: String?
+    var sourceKey: String { url }
 
     var isLegadoRuleBased: Bool { ruleArticles != nil && !(ruleArticles?.isEmpty ?? true) }
     var displayFaviconURL: String? { faviconURL ?? sourceIcon }
@@ -273,7 +301,7 @@ enum LegadoSortURLParser {
     }
 }
 
-struct RSSFolder: Codable, Identifiable, Equatable {
+struct RSSFolder: Codable, Identifiable, Equatable, Sendable {
     var id: String = UUID().uuidString
     var name: String
     var sortOrder: Int = 0

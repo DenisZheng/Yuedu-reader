@@ -564,7 +564,7 @@ struct RSSStoreTests {
     }
 
     @Test("store persists article reader scroll position")
-    func storePersistsArticleReaderScrollPosition() throws {
+    func storePersistsArticleReaderScrollPosition() async throws {
         let directory = try temporaryDirectory()
         let store = RSSStore(storageDirectory: directory)
         let source = RSSSource(id: "source-1", name: "BBC", url: "https://feed.example/rss")
@@ -581,6 +581,7 @@ struct RSSStoreTests {
         store.addSource(source)
         store.mergeFetchedItems([item], for: source.id)
         store.updateReaderScrollY(articleId: item.id, scrollY: 480.5)
+        try await store.flushPersistence()
 
         let reloaded = RSSStore(storageDirectory: directory)
         let article = try #require(reloaded.article(id: item.id))
@@ -589,7 +590,7 @@ struct RSSStoreTests {
     }
 
     @Test("store persists article reader html and full text html")
-    func storePersistsArticleReaderHTMLAndFullTextHTML() throws {
+    func storePersistsArticleReaderHTMLAndFullTextHTML() async throws {
         let directory = try temporaryDirectory()
         let store = RSSStore(storageDirectory: directory)
         let source = RSSSource(id: "source-1", name: "BBC", url: "https://feed.example/rss")
@@ -611,6 +612,7 @@ struct RSSStoreTests {
             text: "Full text with link.",
             html: #"<p>Full text with <a href="https://example.com/full">link</a>.</p>"#
         )
+        try await store.flushPersistence()
 
         let reloaded = RSSStore(storageDirectory: directory)
         let article = try #require(reloaded.article(id: item.id))

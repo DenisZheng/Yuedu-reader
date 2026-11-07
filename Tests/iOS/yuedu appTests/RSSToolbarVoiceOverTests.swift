@@ -146,12 +146,12 @@ struct RSSToolbarVoiceOverTests {
         )
     }
 
-    @Test("從網址匯入 Legado JSON: cancel, import")
+    @Test("Legado JSON入口：取消、继续；确认前不写入")
     func legadoJSONImport() async throws {
         try await withStore { store in
             try await spokenBarButtons(
                 of: ImportLegadoJSONURLSheet(isPresented: .constant(true), store: store),
-                expected: [localized("取消"), localized("匯入")]
+                expected: [localized("取消"), localized("繼續")]
             )
         }
     }

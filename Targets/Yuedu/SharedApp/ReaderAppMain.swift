@@ -30,7 +30,12 @@ enum RSSPoCTestHost {
 private struct RSSPoCApplication: App {
     var body: some Scene {
         WindowGroup {
-            Color.clear.accessibilityIdentifier("rss-poc-isolated-host")
+            if let path = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_FIXTURE"],
+               let storage = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_STORAGE"] {
+                RSSImportUIFixtureHost(file: URL(fileURLWithPath: path), directory: URL(fileURLWithPath: storage))
+            } else {
+                Color.clear.accessibilityIdentifier("rss-poc-isolated-host")
+            }
         }
     }
 }

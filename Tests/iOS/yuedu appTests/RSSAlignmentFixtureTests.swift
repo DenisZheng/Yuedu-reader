@@ -33,7 +33,7 @@ struct RSSAlignmentFixtureTests {
         #expect(source.isLegadoRuleBased)
     }
 
-    @Test("S1差异记录：类型/启动/搜索/变量/未知字段当前丢失，S2必须补齐round-trip")
+    @Test("S2：类型/启动/搜索/变量/未知字段均保留round-trip")
     func missingFieldBaseline() throws {
         let raw = try fixture()
         let sources = try LegadoSourceJSONParser.parse(data: JSONSerialization.data(withJSONObject: raw))
@@ -42,7 +42,7 @@ struct RSSAlignmentFixtureTests {
         let missing = Set(zip(raw, objects).flatMap { original, result in
             original.keys.filter { result[$0] == nil }
         })
-        #expect(missing == Set(["type", "startHtml", "startStyle", "startJs", "nextContentUrl", "searchUrl", "variable", "futureField", "cacheFirst", "showWebLog", "preloadJs"]))
+        #expect(missing.isEmpty)
     }
 
     @Test("解析层确实保留短交互description；阅读层不得因长度覆盖它")

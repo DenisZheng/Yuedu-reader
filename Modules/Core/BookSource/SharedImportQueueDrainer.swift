@@ -179,6 +179,12 @@ final class SharedImportQueueDrainer: ObservableObject {
     }
 
     @Published private(set) var bookSourceReviewRequests: [BookSourceReviewRequest] = []
+    @Published private(set) var rssReviewRequests: [RSSImportReviewRequest] = []
+    var rssReviewRequest: RSSImportReviewRequest? { rssReviewRequests.first }
+
+    func didPresentRSSReview(requestID: UUID) {
+        rssReviewRequests.removeAll { $0.id == requestID }
+    }
 
     var bookSourceReviewRequest: BookSourceReviewRequest? { bookSourceReviewRequests.first }
 
@@ -280,7 +286,7 @@ final class SharedImportQueueDrainer: ObservableObject {
     private let fetchURL: (URL) async throws -> Data
     private let importBookFileOverride: ((URL) async throws -> Int)?
     private let importOPMLData: (Data) throws -> Int
-    private let importLegadoRSSData: (Data) throws -> Int
+    private let importLegadoRSSData: ((Data) throws -> Int)?
     private let importReplaceRuleData: (Data) throws -> Int
     private weak var bookStore: BookStore?
     private var isDraining = false
@@ -291,17 +297,15 @@ final class SharedImportQueueDrainer: ObservableObject {
         openInInboxURL: URL = SharedImportQueueDrainer.defaultOpenInInboxURL(),
         importData: ((Data) throws -> Int)? = nil,
         fetchURL: @escaping (URL) async throws -> Data = {
-            try await URLSession.shared.data(from: $0).0
+            // 类型尚未知时沿用书源包上限；识别为RSS后，展开与候选仍受RSS专属预算约束。
+            try await RSSImportService.download($0, maximumBytes: BookSourceStore.maxImportBytes)
         },
         importBookFile: ((URL) async throws -> Int)? = nil,
         importOPMLData: @escaping (Data) throws -> Int = { data in
             let sources = try RSSOPMLParser.parse(data: data)
             return RSSStore.shared.addSourcesReturningAdded(sources).count
         },
-        importLegadoRSSData: @escaping (Data) throws -> Int = { data in
-            let sources = try LegadoSourceJSONParser.parse(data: data)
-            return RSSStore.shared.addSourcesReturningAdded(sources).count
-        },
+        importLegadoRSSData: ((Data) throws -> Int)? = nil,
         importReplaceRuleData: @escaping (Data) throws -> Int = {
             try ReplaceRuleStore.shared.importFromLegadoData($0)
         }
@@ -460,7 +464,7 @@ final class SharedImportQueueDrainer: ObservableObject {
 
     private func importFilePayload(_ url: URL, suggestedFilename: String?) async throws -> ImportResult {
         let fileExtension = effectiveFileExtension(for: url, suggestedFilename: suggestedFilename)
-        let classification = try SharedImportPayloadClassifier.classify(
+        let classification = try await SharedImportPayloadClassifier.classifyOffMain(
             fileURL: url,
             fileExtension: fileExtension,
             suggestedFilename: suggestedFilename
@@ -476,7 +480,10 @@ final class SharedImportQueueDrainer: ObservableObject {
         case .rssOPML:
             return .init(count: try importOPMLData(Data(contentsOf: url)), category: .rss)
         case .rssLegadoJSON:
-            return .init(count: try importLegadoRSSData(Data(contentsOf: url)), category: .rss)
+            if let importLegadoRSSData {
+                return .init(count: try importLegadoRSSData(Data(contentsOf: url)), category: .rss)
+            }
+            return try await reviewRSS(.file(url))
         case .replaceRules:
             return .init(count: try importReplaceRuleData(Data(contentsOf: url)), category: .replaceRule)
         case .localBook(let ext):
@@ -497,7 +504,7 @@ final class SharedImportQueueDrainer: ObservableObject {
         fileExtension: String,
         suggestedFilename: String?
     ) async throws -> ImportResult {
-        let classification = try SharedImportPayloadClassifier.classify(
+        let classification = try await SharedImportPayloadClassifier.classifyOffMain(
             data: data,
             fileExtension: fileExtension,
             suggestedFilename: suggestedFilename
@@ -512,7 +519,8 @@ final class SharedImportQueueDrainer: ObservableObject {
         case .rssOPML:
             return .init(count: try importOPMLData(data), category: .rss)
         case .rssLegadoJSON:
-            return .init(count: try importLegadoRSSData(data), category: .rss)
+            if let importLegadoRSSData { return .init(count: try importLegadoRSSData(data), category: .rss) }
+            return try await reviewRSS(.data(data))
         case .replaceRules:
             return .init(count: try importReplaceRuleData(data), category: .replaceRule)
         case .localBook(let ext):
@@ -524,6 +532,12 @@ final class SharedImportQueueDrainer: ObservableObject {
             defer { try? FileManager.default.removeItem(at: tempURL.deletingLastPathComponent()) }
             return try await importBookFile(tempURL)
         }
+    }
+
+    private func reviewRSS(_ input: RSSImportService.Input) async throws -> ImportResult {
+        let loaded = try await RSSImportService.load(input)
+        rssReviewRequests.append(.init(input: .prepared(loaded)))
+        return .init(count: 0, category: .rss)
     }
 
     private func importBookSources(_ data: Data, fileExtension: String) throws -> Int {
@@ -617,6 +631,17 @@ enum SharedImportPayloadClassification: Equatable {
 }
 
 enum SharedImportPayloadClassifier {
+    nonisolated static func classifyOffMain(fileURL: URL, fileExtension: String, suggestedFilename: String?) async throws -> SharedImportPayloadClassification {
+        try SourcePerfTrace.span("import.classify.file", "main=\(Thread.isMainThread)") {
+            try classify(fileURL: fileURL, fileExtension: fileExtension, suggestedFilename: suggestedFilename)
+        }
+    }
+
+    nonisolated static func classifyOffMain(data: Data, fileExtension: String, suggestedFilename: String?) async throws -> SharedImportPayloadClassification {
+        try SourcePerfTrace.span("import.classify.data", "main=\(Thread.isMainThread) bytes=\(data.count)") {
+            try classify(data: data, fileExtension: fileExtension, suggestedFilename: suggestedFilename)
+        }
+    }
     private static let directLocalBookExtensions = LocalBookImportService.supportedExtensions
         .subtracting(textLocalBookExtensions)
 
@@ -711,11 +736,11 @@ enum SharedImportPayloadClassifier {
             if SharedCustomizationKind.isAppearanceJSON(root) {
                 return .customization(.appearanceJSON)
             }
-            if looksLikeBookSourceRoot(root) {
-                return .bookSource(fileExtension: ext.isEmpty ? "json" : ext)
-            }
             if looksLikeRSSRoot(root) {
                 return .rssLegadoJSON
+            }
+            if looksLikeBookSourceRoot(root) {
+                return .bookSource(fileExtension: ext.isEmpty ? "json" : ext)
             }
             if looksLikeReplaceRuleRoot(root) {
                 return .replaceRules
@@ -825,7 +850,7 @@ enum SharedImportPayloadClassifier {
 
     private static func looksLikeRSSRoot(_ root: Any) -> Bool {
         if let dictionary = root as? [String: Any] {
-            return looksLikeRSSSource(dictionary)
+            return dictionary["sourceUrls"] != nil || looksLikeRSSSource(dictionary)
         }
         if let array = root as? [[String: Any]] {
             return array.contains(where: looksLikeRSSSource)

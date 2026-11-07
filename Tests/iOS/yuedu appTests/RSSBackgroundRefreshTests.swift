@@ -103,6 +103,7 @@ struct RSSBackgroundRefreshTests {
         for id in ids {
             fixture.store.addSource(RSSSource(id: id, name: id, url: "https://rss.invalid/ok"))
         }
+        try await fixture.store.flushPersistence()
         let articles = fixture.store.writeCounts["rss_articles.json", default: 0]
         let metadata = fixture.store.writeCounts["rss_feed_metadata.json", default: 0]
 
