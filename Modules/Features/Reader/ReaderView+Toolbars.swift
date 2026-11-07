@@ -230,7 +230,7 @@ extension ReaderView {
                 // left 聽書 (then in the card) dead: the card slid back into the thumbnail and
                 // no panel came up.
                 // Retain the route and let the popover's real dismissal run it.
-                ReaderSecondaryAction(id: action.id, icon: action.icon, label: action.label, isLocked: action.isLocked) {
+                ReaderSecondaryAction(id: action.id, icon: action.icon, label: action.label) {
                     modernBookCardPresentation.select(.secondary(action.id))
                     showModernBookCard = false
                 }
@@ -381,16 +381,11 @@ extension ReaderView {
 
     /// AI 助手 and AI 翻譯, which 更多 in the bottom bar lists under 書籤.
     var readerMoreActions: [ReaderSecondaryAction] {
-        // Shown whatever the AI settings are: hiding it when unconfigured would leave a
-        // reader with no way to discover the feature exists. The panel itself explains what
-        // to fill in. Without Pro both are marked and open the paywall.
-        let aiLocked = !readerPremiumVisibility.allowsAI
         var actions = [
             ReaderSecondaryAction(
                 id: .aiAssistant,
                 icon: "sparkles",
                 label: localized("AI 助手"),
-                isLocked: aiLocked,
                 action: { openAIAssistant() }
             )
         ]
@@ -402,7 +397,6 @@ extension ReaderView {
                     id: .translation,
                     icon: "translate",
                     label: localized("AI 翻譯"),
-                    isLocked: aiLocked,
                     action: { openTranslationSheet() }
                 )
             )
@@ -448,21 +442,11 @@ extension ReaderView {
         }
     }
 
-    /// AI 助手, or the paywall without Pro.
     func openAIAssistant() {
-        guard readerPremiumVisibility.allowsAI else {
-            paywallFeature = .aiReading
-            return
-        }
         showAIAssistantPanel = true
     }
 
-    /// 整章翻譯's sheet, or the paywall without Pro.
     func openTranslationSheet() {
-        guard readerPremiumVisibility.allowsAI else {
-            paywallFeature = .aiReading
-            return
-        }
         showTranslationSheet = true
     }
 

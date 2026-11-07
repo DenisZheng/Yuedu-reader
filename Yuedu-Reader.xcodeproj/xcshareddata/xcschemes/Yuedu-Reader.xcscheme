@@ -80,9 +80,6 @@
             isEnabled = "YES">
          </CommandLineArgument>
       </CommandLineArguments>
-      <StoreKitConfigurationFileReference
-         identifier = "../../Configuration/YueduPro.storekit">
-      </StoreKitConfigurationFileReference>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

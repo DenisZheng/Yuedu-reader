@@ -30,7 +30,7 @@ struct ICloudSourceSyncConvergenceTests {
         Date(timeIntervalSince1970: TimeInterval(max(source.lastUpdateTime, 0)) / 1000)
     }
 
-    static func remote(_ cloud: Cloud) throws -> (records: [FirestoreSyncRecord<BookSource>], payloadHash: String?) {
+    static func remote(_ cloud: Cloud) throws -> (records: [SyncRecord<BookSource>], payloadHash: String?) {
         guard let blob = cloud.blob else { return ([], nil) }
         return try ICloudSyncManager.decodeCloudSyncBlob(
             blob, recordName: "book_sources", id: id, fallbackUpdatedAt: fallback

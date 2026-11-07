@@ -103,7 +103,6 @@ extension GlobalSettings {
             previewBackground: page,
             relativePreviewImagePath: nil,
             imagePaths: [],
-            requiresPro: false,
             isImagePreset: background.isImage,
             isCustom: true
         )

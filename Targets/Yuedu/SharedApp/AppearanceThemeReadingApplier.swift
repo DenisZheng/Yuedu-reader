@@ -175,7 +175,7 @@ extension GlobalSettings {
     /// The name shown for `readingSettingsThemeID`.
     var readingSettingsThemeName: String {
         // A name only: the same with Pro or without.
-        appearancePreset(id: readingSettingsThemeID, isProActive: true)?
+        appearancePreset(id: readingSettingsThemeID)?
             .localizedName ?? readingSettingsThemeID
     }
 

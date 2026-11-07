@@ -425,12 +425,10 @@ final class CoreTextCollectionScrollViewController: UIViewController, @MainActor
             return UIMenu(children: colorActions + [underlineAction])
         }
 
-        // AI items only with Pro (`ReaderPremiumVisibilityPolicy.showsAISelectionActions`).
-        let premium = ReaderPremiumVisibilityPolicy(isProActive: SubscriptionStore.shared.isProActive)
         // A translation is not the book's text: nothing to highlight, note or replace there,
         // and nothing the assistant could cite.
         if selectionTouchesTranslation {
-            let lookup = premium.showsAISelectionActions && AIWordLookup.isCandidate(selectedText ?? "")
+            let lookup = AIWordLookup.isCandidate(selectedText ?? "")
             return UIMenu(children: suggestedActions + (lookup ? [aiSelectionAction(.lookup)] : []))
         }
 
@@ -449,19 +447,15 @@ final class CoreTextCollectionScrollViewController: UIViewController, @MainActor
                 self?.presentEmphasisEditMenu()
             }
         ))
-        // 同分頁模式：沒訂閱時換鎖頭，實際分流在 ReaderView。
-        let canEditNote = premium.allowsParagraphNoteEditing
         actions.append(UIAction(
             title: localized(selectionHasNote ? "編輯筆記" : "筆記"),
-            image: UIImage(systemName: canEditNote ? "note.text" : "lock.fill"),
+            image: UIImage(systemName: "note.text"),
             handler: { [weak self] _ in
                 self?.requestNoteEdit()
             }
         ))
-        if premium.showsAISelectionActions {
-            for action in AIReadingAction.selectionMenu(for: selectedText ?? "") {
-                actions.append(aiSelectionAction(action))
-            }
+        for action in AIReadingAction.selectionMenu(for: selectedText ?? "") {
+            actions.append(aiSelectionAction(action))
         }
         return UIMenu(children: actions)
     }

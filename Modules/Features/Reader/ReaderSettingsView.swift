@@ -25,16 +25,11 @@ struct ReaderSettingsView: View {
     /// Hands an import — a font, a style, a layout — to the reader's first-level presenter.
     /// Nil in contexts that already are one; see `ReaderSettingsPresentationPolicy`.
     var onOpenStyleImporter: ((ReaderStyleImportRoute) -> Void)?
-    /// iOS 17: hands the paywall to the reader's first-level presenter, as the importers
-    /// above do — a sheet asked for from inside this sheet can be dropped there. Nil where
-    /// this view presents it itself.
-    var onOpenPaywall: ((PremiumFeature) -> Void)?
 
     @StateObject private var readerConfig = ReaderConfig.shared
     @Bindable private var settings = GlobalSettings.shared
-    @ObservedObject private var subscriptionStore = SubscriptionStore.shared
+
     @Environment(\.dismiss) private var dismiss
-    @State private var paywallFeature: PremiumFeature?
     @State private var layoutImportAlert: LayoutImportAlert?
     @State private var showingOverlayResetConfirmation = false
     @State private var showingLayoutResetConfirmation = false
@@ -90,8 +85,6 @@ struct ReaderSettingsView: View {
 
                     headerFooterSection
 
-                    // Pro sections stay in view without Pro, locked: a reader has to see a
-                    // feature where it would be used to want it (2026-09-27).
                     readerDecorationSection
 
                     if showsPagingSection {
@@ -126,12 +119,6 @@ struct ReaderSettingsView: View {
             }
         }
         .tint(readerTint)
-        .sheet(item: $paywallFeature) { feature in
-            PaywallView(highlightedFeature: feature)
-                .environmentObject(subscriptionStore)
-                // The app's accent, not the reader's ink these settings are opened over.
-                .tint(DSColor.accent)
-        }
         .readerStyleImportPresentation(route: $styleImportRoute) { _ in }
         .alert(item: $layoutImportAlert) { alert in
             Alert(
@@ -164,13 +151,7 @@ struct ReaderSettingsView: View {
         }
     }
 
-    private var premiumVisibility: ReaderPremiumVisibilityPolicy {
-        ReaderPremiumVisibilityPolicy(isProActive: subscriptionStore.isProActive)
-    }
-
-    private var showsCommentBubbleSettings: Bool {
-        premiumVisibility.showsCommentBubbleSettings(hasParagraphReviews: hasParagraphReviews)
-    }
+    private var showsCommentBubbleSettings: Bool { hasParagraphReviews }
 
     /// Paged-only gestures: scroll mode has no page turns and no tap zones.
     private var showsPagingSection: Bool {
@@ -351,22 +332,12 @@ struct ReaderSettingsView: View {
 
                 if !ReaderSettingsPresentationPolicy.requiresFirstLevelImporter {
                     Divider()
-                    if premiumVisibility.allowsFontImport {
-                        Button {
-                            requestStyleImporter(.readerFont)
-                        } label: {
-                            Label(localized("匯入字體..."), systemImage: "plus")
-                        }
-                    } else {
-                        // Locked: the second `Text` is the menu row's subtitle.
-                        Button {
-                            requestPaywall(.customFonts)
-                        } label: {
-                            Text(localized("匯入字體..."))
-                            Text(localized("需要 Pro"))
-                            Image(systemName: "lock.fill")
-                        }
+                    Button {
+                        requestStyleImporter(.readerFont)
+                    } label: {
+                        Label(localized("匯入字體..."), systemImage: "plus")
                     }
+
                 }
             } label: {
                 LabeledContent {
@@ -387,18 +358,14 @@ struct ReaderSettingsView: View {
             .buttonStyle(.plain)
 
             if ReaderSettingsPresentationPolicy.requiresFirstLevelImporter {
-                let locked = !premiumVisibility.allowsFontImport
                 Button {
-                    if locked {
-                        requestPaywall(.customFonts)
-                    } else {
-                        requestStyleImporter(.readerFont)
-                    }
+                    requestStyleImporter(.readerFont)
+
                 } label: {
-                    Image(systemName: locked ? "lock.fill" : "plus")
+                    Image(systemName: "plus")
                 }
                 .accessibilityLabel(localized("匯入字體..."))
-                .accessibilityValue(locked ? localized("需要 Pro") : "")
+                .accessibilityValue("")
             }
         }
     }
@@ -648,75 +615,60 @@ struct ReaderSettingsView: View {
 
     private var readerDecorationSection: some View {
         Section {
-            if premiumVisibility.showsReaderDecoration {
-                if showsCommentBubbleSettings {
-                    NavigationLink {
-                        ReaderCommentBubbleSettingsView(onOpenImporter: requestStyleImporter)
-                    } label: {
-                        SettingsRowLabel(
-                            localized("氣泡設定"),
-                            systemImage: ReadingSettingsScopeItem.commentBubble.systemImage
-                        )
-                    }
-                }
-
+            if showsCommentBubbleSettings {
                 NavigationLink {
-                    ReaderDialogueBubbleSettingsView(
-                        style: settings.dialogueBubbleStyle,
-                        onOpenImporter: { requestStyleImporter(.dialogueBubble) },
-                        onChange: { settings.dialogueBubbleStyle = $0 }
-                    )
+                    ReaderCommentBubbleSettingsView(onOpenImporter: requestStyleImporter)
                 } label: {
-                    SettingsValueLabel(
-                        title: localized(ReadingSettingsScopeItem.dialogueBubble.titleKey),
-                        systemImage: ReadingSettingsScopeItem.dialogueBubble.systemImage,
-                        value: onOffText(settings.dialogueBubbleStyle.isEnabled)
+                    SettingsRowLabel(
+                        localized("氣泡設定"),
+                        systemImage: ReadingSettingsScopeItem.commentBubble.systemImage
                     )
-                }
-
-                NavigationLink {
-                    RegexHighlightSettingsView(
-                        configuration: settings.regexHighlightConfiguration,
-                        onOpenImporter: { requestStyleImporter(.regexHighlights) },
-                        onChange: { settings.regexHighlightConfiguration = $0 }
-                    )
-                } label: {
-                    SettingsValueLabel(
-                        title: localized(ReadingSettingsScopeItem.regexHighlight.titleKey),
-                        systemImage: ReadingSettingsScopeItem.regexHighlight.systemImage,
-                        value: onOffText(settings.regexHighlightConfiguration.isEnabled)
-                    )
-                }
-
-                NavigationLink {
-                    ReaderTextUnderlineSettingsView()
-                } label: {
-                    SettingsValueLabel(
-                        title: localized(ReadingSettingsScopeItem.textUnderline.titleKey),
-                        systemImage: ReadingSettingsScopeItem.textUnderline.systemImage,
-                        value: onOffText(settings.readerTextUnderlineDecorationEnabled)
-                    )
-                }
-            } else {
-                ForEach(lockedDecorationItems) { item in
-                    SettingsLockedRow(
-                        title: localized(item == .commentBubble ? "氣泡設定" : item.titleKey),
-                        systemImage: item.systemImage
-                    ) {
-                        requestPaywall(.dialogueHighlight)
-                    }
                 }
             }
+
+            NavigationLink {
+                ReaderDialogueBubbleSettingsView(
+                    style: settings.dialogueBubbleStyle,
+                    onOpenImporter: { requestStyleImporter(.dialogueBubble) },
+                    onChange: { settings.dialogueBubbleStyle = $0 }
+                )
+            } label: {
+                SettingsValueLabel(
+                    title: localized(ReadingSettingsScopeItem.dialogueBubble.titleKey),
+                    systemImage: ReadingSettingsScopeItem.dialogueBubble.systemImage,
+                    value: onOffText(settings.dialogueBubbleStyle.isEnabled)
+                )
+            }
+
+            NavigationLink {
+                RegexHighlightSettingsView(
+                    configuration: settings.regexHighlightConfiguration,
+                    onOpenImporter: { requestStyleImporter(.regexHighlights) },
+                    onChange: { settings.regexHighlightConfiguration = $0 }
+                )
+            } label: {
+                SettingsValueLabel(
+                    title: localized(ReadingSettingsScopeItem.regexHighlight.titleKey),
+                    systemImage: ReadingSettingsScopeItem.regexHighlight.systemImage,
+                    value: onOffText(settings.regexHighlightConfiguration.isEnabled)
+                )
+            }
+
+            NavigationLink {
+                ReaderTextUnderlineSettingsView()
+            } label: {
+                SettingsValueLabel(
+                    title: localized(ReadingSettingsScopeItem.textUnderline.titleKey),
+                    systemImage: ReadingSettingsScopeItem.textUnderline.systemImage,
+                    value: onOffText(settings.readerTextUnderlineDecorationEnabled)
+                )
+            }
+
         } header: {
             Text(localized("閱讀裝飾"))
                 .foregroundStyle(DSColor.textSecondary)
         }
         .interfaceSectionSurface()
-    }
-
-    /// The same rows, in the same order, as with Pro.
-    private var lockedDecorationItems: [ReadingSettingsScopeItem] {
-        (hasParagraphReviews ? [.commentBubble] : []) + [.dialogueBubble, .regexHighlight, .textUnderline]
     }
 
     private func onOffText(_ isOn: Bool) -> String {
@@ -750,18 +702,13 @@ struct ReaderSettingsView: View {
             }
 
             if let onOpenTouchZoneEditor {
-                if premiumVisibility.showsTouchZoneEditor {
-                    Button {
-                        dismiss()
-                        DispatchQueue.main.async { onOpenTouchZoneEditor() }
-                    } label: {
-                        SettingsRowLabel(localized("翻頁區塊編輯"), systemImage: "square.grid.3x3", role: .action)
-                    }
-                } else {
-                    SettingsLockedRow(title: localized("翻頁區塊編輯"), systemImage: "square.grid.3x3") {
-                        requestPaywall(.touchZoneEditor)
-                    }
+                Button {
+                    dismiss()
+                    DispatchQueue.main.async { onOpenTouchZoneEditor() }
+                } label: {
+                    SettingsRowLabel(localized("翻頁區塊編輯"), systemImage: "square.grid.3x3", role: .action)
                 }
+
             }
         } header: {
             Text(localized("翻頁與手勢"))
@@ -832,36 +779,28 @@ struct ReaderSettingsView: View {
     /// reading setup to the new phone" file.
     private var readerSettingsBackupSection: some View {
         Section {
-            if premiumVisibility.showsLayoutPresetImport {
-                Button {
-                    readerSettingsExportName = localized("閱讀設定")
-                    showingReaderSettingsExport = true
-                } label: {
-                    SettingsRowLabel(localized("匯出閱讀設定"), systemImage: "square.and.arrow.up", role: .action)
-                }
-                // The file is named first, then shared: the file name is all that
-                // tells one exported setup from another.
-                .alert(localized("匯出閱讀設定"), isPresented: $showingReaderSettingsExport) {
-                    TextField(localized("名稱"), text: $readerSettingsExportName)
-                    Button(localized("匯出")) {
-                        exportReaderSettings(named: readerSettingsExportName)
-                    }
-                    Button(localized("取消"), role: .cancel) {}
-                }
-
-                Button {
-                    requestStyleImporter(.readerSettings)
-                } label: {
-                    SettingsRowLabel(localized("匯入閱讀設定"), systemImage: "square.and.arrow.down", role: .action)
-                }
-            } else {
-                SettingsLockedRow(title: localized("匯出閱讀設定"), systemImage: "square.and.arrow.up") {
-                    requestPaywall(.layoutPresetImport)
-                }
-                SettingsLockedRow(title: localized("匯入閱讀設定"), systemImage: "square.and.arrow.down") {
-                    requestPaywall(.layoutPresetImport)
-                }
+            Button {
+                readerSettingsExportName = localized("閱讀設定")
+                showingReaderSettingsExport = true
+            } label: {
+                SettingsRowLabel(localized("匯出閱讀設定"), systemImage: "square.and.arrow.up", role: .action)
             }
+            // The file is named first, then shared: the file name is all that
+            // tells one exported setup from another.
+            .alert(localized("匯出閱讀設定"), isPresented: $showingReaderSettingsExport) {
+                TextField(localized("名稱"), text: $readerSettingsExportName)
+                Button(localized("匯出")) {
+                    exportReaderSettings(named: readerSettingsExportName)
+                }
+                Button(localized("取消"), role: .cancel) {}
+            }
+
+            Button {
+                requestStyleImporter(.readerSettings)
+            } label: {
+                SettingsRowLabel(localized("匯入閱讀設定"), systemImage: "square.and.arrow.down", role: .action)
+            }
+
         } header: {
             Text(localized("閱讀設定備份"))
                 .foregroundStyle(DSColor.textSecondary)
@@ -873,16 +812,6 @@ struct ReaderSettingsView: View {
     }
 
     // MARK: - Presenting
-
-    /// A locked control's paywall: from this sheet on iOS 18, from the reader on iOS 17
-    /// (`onOpenPaywall`), where a sheet asked for from inside this one can be dropped.
-    private func requestPaywall(_ feature: PremiumFeature) {
-        if let onOpenPaywall {
-            onOpenPaywall(feature)
-        } else {
-            paywallFeature = feature
-        }
-    }
 
     /// iOS 17 cannot present a document picker from this sheet — hand it to the
     /// reader's first-level presenter instead. See

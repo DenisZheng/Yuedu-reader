@@ -65,7 +65,6 @@ final class PublicLibraryStorefrontUITests: XCTestCase {
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",
             "-yd_source_disclaimer_accepted", "YES", "-book-source-store-dir", fixtureDirectory.appendingPathComponent("sources").path,
             "-reset-public-library-explore", "-reset-explore-home"]
-        if pro { app.launchArguments.append("-debug-force-pro") }
         app.launchEnvironment["YUEDU_PUBLIC_LIBRARY_FIXTURES"] = fixtureDirectory.path
         return app
     }

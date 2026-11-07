@@ -1,6 +1,5 @@
 import YueduCoreText
 import Combine
-import FirebaseAuth
 import Foundation
 import SwiftUI
 import UIKit
@@ -694,48 +693,6 @@ class GlobalSettings {
             blue: CGFloat(rgbHex & 0xFF) / 255,
             alpha: 1
         )
-    }
-
-    // MARK: - Account State
-
-    var isLoggedIn: Bool {
-        didSet { UserDefaults.standard.set(isLoggedIn, forKey: "yd_account_logged_in") }
-    }
-    var accountDisplayName: String {
-        didSet { UserDefaults.standard.set(accountDisplayName, forKey: "yd_account_display_name") }
-    }
-    var accountEmail: String {
-        didSet { UserDefaults.standard.set(accountEmail, forKey: "yd_account_email") }
-    }
-    var accountProvider: String {
-        didSet { UserDefaults.standard.set(accountProvider, forKey: "yd_account_provider") }
-    }
-    var accountUserIdentifier: String {
-        didSet { UserDefaults.standard.set(accountUserIdentifier, forKey: "yd_account_user_identifier") }
-    }
-    var accountPhotoURL: String {
-        didSet { UserDefaults.standard.set(accountPhotoURL, forKey: "yd_account_photo_url") }
-    }
-
-    /// Subtitle shown under the account name. Prefers a real email, otherwise falls
-    /// back to a provider description so we never display an opaque identifier.
-    var accountSubtitle: String {
-        guard isLoggedIn else { return localized("登入後可同步進度") }
-        if !accountEmail.isEmpty { return accountEmail }
-        switch accountProvider {
-        case "Apple": return localized("透過 Apple 登入")
-        case "Google": return localized("透過 Google 登入")
-        default: return localized("已登入")
-        }
-    }
-    var accountAvatarData: Data? {
-        didSet {
-            if let accountAvatarData {
-                UserDefaults.standard.set(accountAvatarData, forKey: "yd_account_avatar_data")
-            } else {
-                UserDefaults.standard.removeObject(forKey: "yd_account_avatar_data")
-            }
-        }
     }
 
     var textConversion: TextConversion {
@@ -2001,13 +1958,6 @@ class GlobalSettings {
         UserDefaults.standard.removeObject(forKey: "yd_app_lang")
         // Before anything below reads the stores it rewrites.
         ReaderBackgroundMigration.runIfNeeded()
-        isLoggedIn = UserDefaults.standard.bool(forKey: "yd_account_logged_in")
-        accountDisplayName = UserDefaults.standard.string(forKey: "yd_account_display_name") ?? ""
-        accountEmail = UserDefaults.standard.string(forKey: "yd_account_email") ?? ""
-        accountProvider = UserDefaults.standard.string(forKey: "yd_account_provider") ?? ""
-        accountUserIdentifier = UserDefaults.standard.string(forKey: "yd_account_user_identifier") ?? ""
-        accountPhotoURL = UserDefaults.standard.string(forKey: "yd_account_photo_url") ?? ""
-        accountAvatarData = UserDefaults.standard.data(forKey: "yd_account_avatar_data")
         let rawConv = UserDefaults.standard.string(forKey: "yd_text_conv") ?? ""
         textConversion = TextConversion(rawValue: rawConv) ?? .original
         readerFontBold = UserDefaults.standard.bool(forKey: "yd_reader_font_bold")
@@ -3012,64 +2962,36 @@ class GlobalSettings {
         appearanceFollowsSystem ? systemColorScheme : appearancePinnedColorScheme.colorScheme
     }
 
-    /// The theme in effect for `colorScheme`, already resolved to that
-    /// appearance's palette — the light colors in light appearance, the derived
-    /// dark colors in dark appearance.
-    func appearanceTheme(
-        for colorScheme: ColorScheme,
-        isProActive: Bool
-    ) -> AppearanceThemePreset {
-        appearanceBaseTheme(for: colorScheme, isProActive: isProActive).palette(for: colorScheme)
+    /// 按系统外观解析所选主题；本地编辑与自定义配色不依赖账号状态。
+    func appearanceTheme(for colorScheme: ColorScheme) -> AppearanceThemePreset {
+        appearanceBaseTheme(for: colorScheme).palette(for: colorScheme)
     }
 
-    /// Same resolution as `appearanceTheme(for:isProActive:)` but without the
-    /// light/dark palette step — the theme's *identity*. Use it when comparing
-    /// against a preset id (selection state) rather than drawing with it.
-    func appearanceBaseTheme(
-        for colorScheme: ColorScheme,
-        isProActive: Bool
-    ) -> AppearanceThemePreset {
-        let selectedID = selectedAppearanceThemeID(for: colorScheme)
-        if let selected = appearancePreset(id: selectedID, isProActive: isProActive),
-           isProActive || !selected.requiresPro {
+    /// 主题身份（未进行浅色/深色 palette 转换），供选择状态比较使用。
+    func appearanceBaseTheme(for colorScheme: ColorScheme) -> AppearanceThemePreset {
+        if let selected = appearancePreset(id: selectedAppearanceThemeID(for: colorScheme)) {
             return selected
         }
-        return appearancePreset(id: Self.defaultAppearanceThemeID, isProActive: isProActive)
+        return appearancePreset(id: Self.defaultAppearanceThemeID)
             ?? AppearanceThemePreset.freeSolidPresets[0]
     }
 
-    /// The theme the app wears for `colorScheme`, or nil for 默認 as it ships (no tint,
-    /// system colours). Until launch has read every source of Pro, a false
-    /// `isProActive` may only mean "not read yet", so the Pro look is worn
-    /// optimistically — otherwise a Pro user's theme would flash 默認 for the
-    /// 0.5–2 s StoreKit takes. After that it is the truth: without Pro, a theme of the
-    /// user's own falls back to 默認 and a built-in one to the colours it ships with.
-    func appThemeOnScreen(
-        for colorScheme: ColorScheme,
-        isProActive: Bool,
-        hasResolvedEntitlements: Bool
-    ) -> AppearanceThemePreset? {
-        let wearsPro = isProActive || !hasResolvedEntitlements
-        let theme = appearanceTheme(for: colorScheme, isProActive: wearsPro)
+    /// 默認主题未编辑时沿用系统配色，其他主题直接采用用户配置。
+    func appThemeOnScreen(for colorScheme: ColorScheme) -> AppearanceThemePreset? {
+        let theme = appearanceTheme(for: colorScheme)
         return theme.isClassic ? nil : theme
     }
 
-    /// Any theme by id: one of the user's own, or a built-in one — in the colours the
-    /// user gave it in 配色 with Pro, which that is part of; as it ships without. The
-    /// edits are kept either way and come back with Pro, like the user's own themes.
-    /// The one lookup the app resolves themes through.
-    func appearancePreset(id: String?, isProActive: Bool) -> AppearanceThemePreset? {
+    func appearancePreset(id: String?) -> AppearanceThemePreset? {
         AppearanceThemePreset.preset(
             id: id,
             customThemes: customAppearanceThemes,
-            builtInColors: isProActive ? appearanceBuiltInThemeColors : [:]
+            builtInColors: appearanceBuiltInThemeColors
         )
     }
 
-    /// A built-in theme as the user coloured it in 配色 (with Pro), or as it ships.
-    func builtInThemePreset(_ preset: AppearanceThemePreset, isProActive: Bool) -> AppearanceThemePreset {
-        guard isProActive else { return preset }
-        return appearanceBuiltInThemeColors[preset.id].map(preset.withEditedColors) ?? preset
+    func builtInThemePreset(_ preset: AppearanceThemePreset) -> AppearanceThemePreset {
+        appearanceBuiltInThemeColors[preset.id].map(preset.withEditedColors) ?? preset
     }
 
     private static let appearanceBuiltInThemeColorsKey = "yd_appearance_builtin_theme_colors"
@@ -3834,80 +3756,6 @@ class GlobalSettings {
         }
     }
 
-    func signIn(displayName: String, email: String, provider: String, userIdentifier: String = "") {
-        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedIdentifier = userIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
-        accountDisplayName = trimmedName.isEmpty ? trimmedEmail : trimmedName
-        accountEmail = trimmedEmail
-        accountProvider = provider
-        accountUserIdentifier = trimmedIdentifier
-        isLoggedIn = true
-    }
-
-    @MainActor
-    func applyFirebaseUser(_ user: User?, providerOverride: String? = nil) {
-        guard let user else {
-            clearAccountState()
-            return
-        }
-        applyAccountUser(AccountUser(firebaseUser: user), providerOverride: providerOverride)
-    }
-
-    /// Single entry point for both auth routes. Keeping the mapping here means
-    /// the Gateway path and the SDK path cannot drift in what the UI shows.
-    @MainActor
-    func applyAccountUser(_ user: AccountUser?, providerOverride: String? = nil) {
-        guard let user else {
-            clearAccountState()
-            return
-        }
-        let email = user.email
-        let displayName = user.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Auth snapshots contain the provider's name, not necessarily the edited
-        // profile name. Refreshing credentials must not undo a local rename.
-        let name = AccountDisplayNameEdits().pendingName(for: user.uid)
-            ?? (accountUserIdentifier == user.uid && !accountDisplayName.isEmpty
-                ? accountDisplayName
-                : (!displayName.isEmpty ? displayName : (email.isEmpty ? localized("已登入") : email)))
-        if accountDisplayName != name { accountDisplayName = name }
-        accountEmail = email
-        accountProvider = providerOverride ?? user.providerDisplayName
-        accountUserIdentifier = user.uid
-        if !(user.photoURL ?? "").isEmpty {
-            accountPhotoURL = user.photoURL ?? accountPhotoURL
-        }
-        isLoggedIn = true
-    }
-
-    @MainActor
-    func applyFirebaseProfile(_ profile: UserProfile, preservingDisplayName: Bool = false) {
-        guard accountUserIdentifier.isEmpty || accountUserIdentifier == profile.uid else { return }
-        var updates = SettingsUpdateBatch(self, reason: "firebaseProfile")
-        defer { updates.finish() }
-        if !preservingDisplayName {
-            let name = AccountDisplayNameEdits().pendingName(for: profile.uid) ?? profile.displayName
-            updates.set(\.accountDisplayName, name, field: "accountDisplayName")
-        }
-        updates.set(\.accountEmail, profile.email, field: "accountEmail")
-        updates.set(\.accountProvider, profile.provider, field: "accountProvider")
-        updates.set(\.accountUserIdentifier, profile.uid, field: "accountUserIdentifier")
-        updates.set(\.accountPhotoURL, profile.photoURL ?? "", field: "accountPhotoURL")
-        updates.set(\.isLoggedIn, true, field: "isLoggedIn")
-        profile.preferences.apply(to: self)
-    }
-
-    func updateAccountAvatar(data: Data?) {
-        accountAvatarData = data
-    }
-
-    func updateAccountDisplayName(_ name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != accountDisplayName else { return }
-        AccountDisplayNameEdits().save(trimmed, for: accountUserIdentifier)
-        accountDisplayName = trimmed
-    }
-
     /// The asset store's revision as of launch; the notification subscription made in `init`
     /// reports only later changes. On the main actor so the task that sets it does not send
     /// `self` out of the nonisolated `init`.
@@ -3920,15 +3768,6 @@ class GlobalSettings {
         }
     }
 
-    func clearAccountState() {
-        isLoggedIn = false
-        accountDisplayName = ""
-        accountEmail = ""
-        accountProvider = ""
-        accountUserIdentifier = ""
-        accountPhotoURL = ""
-        accountAvatarData = nil
-    }
 }
 
 enum ReaderCustomBackgroundStorageError: Error {

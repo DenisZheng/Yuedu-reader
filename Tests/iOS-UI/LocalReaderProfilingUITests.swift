@@ -1,17 +1,11 @@
 import XCTest
-import StoreKitTest
 
 /// Opt-in local Simulator driver for reproducible, human-paced reader profiling.
 /// Commands and captures stay outside the repository, including login inputs.
 /// XCTest supplies real taps, drags, typing and accessibility snapshots.
 final class LocalReaderProfilingUITests: XCTestCase {
     private var directory = URL(fileURLWithPath: "/tmp/yuedu-reader-profiling", isDirectory: true)
-    private var storeKitSession: SKTestSession?
 
-    struct StoreKitScenario: Decodable {
-        let configurationPath: String
-        let productID: String
-    }
 
     struct Command: Decodable {
         let action: String
@@ -37,16 +31,6 @@ final class LocalReaderProfilingUITests: XCTestCase {
         try XCTSkipUnless(FileManager.default.fileExists(atPath: directory.appendingPathComponent("enabled").path), "Local profiling is opt-in")
         continueAfterFailure = false
         executionTimeAllowance = 3600
-        let storeKitFile = directory.appendingPathComponent("storekit.json")
-        if FileManager.default.fileExists(atPath: storeKitFile.path) {
-            let scenario = try JSONDecoder().decode(StoreKitScenario.self, from: Data(contentsOf: storeKitFile))
-            let session = try SKTestSession(contentsOf: URL(fileURLWithPath: scenario.configurationPath))
-            session.disableDialogs = true
-            if session.allTransactions().isEmpty {
-                _ = try await session.buyProduct(identifier: scenario.productID, options: [])
-            }
-            storeKitSession = session
-        }
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW"]
         let launchFile = directory.appendingPathComponent("launch.json")

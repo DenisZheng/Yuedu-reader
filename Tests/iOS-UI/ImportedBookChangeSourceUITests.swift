@@ -38,7 +38,6 @@ final class ImportedBookChangeSourceUITests: XCTestCase {
     /// the app on every launch, and the reader is never reached.
     @MainActor
     private func launch(sourceDirectory: URL? = nil) throws -> XCUIApplication {
-        _ = try StoreKitTestSessions.fresh(StoreKitTestSessions.yueduPro())
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",
                                "-yd_source_disclaimer_accepted", "YES",

@@ -37,9 +37,10 @@ enum DiagnosticRedactor {
 
     private static let rules: [Rule] = {
         let specs: [(String, String)] = [
-            // Everything after `?` in a URL. Tokens, session ids and invite codes all
-            // ride there in this app's book-source APIs.
-            (#"(https?://[^\s"'<>]+?)\?[^\s"'<>]*"#, "$1?<redacted>"),
+            // URL 身份信息、query 和 fragment 都可能携带登录凭据。
+            // 先去 query/fragment，再处理 userinfo；替换标记中的尖括号会终止 URL 匹配。
+            (#"(https?://[^\s"'<>?#]+)[?#][^\s"'<>]*"#, "$1?<redacted>"),
+            (#"(https?://)[^/\s"'<>?#]+@"#, "$1<redacted>@"),
             // `Bearer abc123`
             (#"(?i)\bBearer\s+[A-Za-z0-9._\-~+/=]+"#, "Bearer <redacted>"),
             // Quoted JSON values need their own rule. The generic key/value rules
@@ -48,15 +49,28 @@ enum DiagnosticRedactor {
             (#"(?i)"(cookie|set-cookie|authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|apikey|secret|password|passwd|pwd|session[_-]?id)"\s*:\s*"[^"]*""#,
              #""$1":"<redacted>""#),
             // Header-ish and JSON-ish `key: value` / `key=value` pairs.
-            (#"(?i)\b(cookie|set-cookie|authorization)\b\s*[:=]\s*[^\s,;}]+"#, "$1=<redacted>"),
+            // Cookie 可含分号和空格，不能只隐藏第一个值；整段头部保守隐藏。
+            (#"(?i)\b(cookie|set-cookie|authorization)\b\s*[:=][^\r\n]*"#, "$1=<redacted>"),
             (#"(?i)\b(access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|apikey|secret|password|passwd|pwd|session[_-]?id)\b"#
              + #"\s*["']?\s*[:=]\s*["']?[^\s,;}"']+"#, "$1=<redacted>"),
         ]
-        return specs.compactMap { pattern, template in
-            guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-            return Rule(regex: regex, template: template)
+        return specs.map { pattern, template in
+            do {
+                return Rule(regex: try NSRegularExpression(pattern: pattern), template: template)
+            } catch {
+                // 固定的开发期模式若失效，不允许悄悄跳过后导出未脱敏数据。
+                preconditionFailure("Invalid diagnostic redaction pattern")
+            }
         }
     }()
+
+    /// 结构化字段在展平前处理，整个 Cookie/密码值都隐藏，而不是只删第一段。
+    /// 未知普通字段的文本仍由 redact 处理；超长键一律保守隐藏。
+    static func redactField(_ value: String, key: String) -> String {
+        guard key.utf8.prefix(129).count <= 128 else { return "<redacted>" }
+        let sensitive = #"(?i)cookie|authorization|token|password|passwd|pwd|secret|api[_-]?key|session[_-]?id"#
+        return key.range(of: sensitive, options: .regularExpression) == nil ? value : "<redacted>"
+    }
 
     static func redact(_ text: String) -> String {
         var result = text
@@ -95,8 +109,7 @@ struct DiagnosticReportBundle: Transferable {
     /// device. The banner would go quiet over a report that does not contain them.
     var acknowledgesReport: Bool = true
 
-    /// What the person wrote and the device facts, when the log goes out with a report
-    /// from 回饋與改進 (its 在其他應用程式中開啟). Printed ahead of the log.
+    /// 可选的报告前言，置于日志正文之前；与正文一起脱敏后导出。
     var preface: String? = nil
 
     static let exportedContentType = UTType.yueduLogFile

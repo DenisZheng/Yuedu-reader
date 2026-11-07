@@ -13,7 +13,7 @@ struct BookProgress: Codable {
 
 // MARK: - App Group shared store
 
-private let appGroupID = "group.com.zhangruilin.yuedureader"
+private let appGroupID = "group.dev.denis.readerfork.dev"
 
 func loadLastBook() -> BookProgress? {
     guard let defaults = UserDefaults(suiteName: appGroupID),

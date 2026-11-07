@@ -17,7 +17,7 @@ struct ReaderTouchZoneEditorModelTests {
         model.set(.none, at: 0)
         #expect(saved == nil)
 
-        #expect(model.save(isProActive: true))
+        #expect(model.save())
         #expect(saved?.zones[0] == TouchAction.none)
         #expect(disabledGlobalPaging)
     }
@@ -52,8 +52,8 @@ struct ReaderTouchZoneEditorModelTests {
         #expect(model.draft == rtlDefault)
     }
 
-    @Test("lost Pro access refuses to save")
-    func refusesSaveWithoutPro() {
+    @Test("本地保存不检查会员，格式修复后可保存")
+    func savesWithoutMembership() {
         var didSave = false
         let model = ReaderTouchZoneEditorModel(
             initial: .default,
@@ -61,7 +61,7 @@ struct ReaderTouchZoneEditorModelTests {
             disableGlobalPaging: {}
         )
 
-        #expect(!model.save(isProActive: false))
-        #expect(!didSave)
+        #expect(model.save())
+        #expect(didSave)
     }
 }

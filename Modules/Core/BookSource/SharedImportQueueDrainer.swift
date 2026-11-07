@@ -19,7 +19,7 @@ import Foundation
 final class SharedImportQueueDrainer: ObservableObject {
     static let shared = SharedImportQueueDrainer()
 
-    nonisolated static let appGroupID = "group.com.zhangruilin.yuedureader"
+    nonisolated static let appGroupID = "group.dev.denis.readerfork.dev"
     nonisolated static let payloadQueueKey = "shared_import_items_queue"
     nonisolated static let payloadDirectoryName = "shared_import_payloads"
     nonisolated static let bookSourcesQueueKey = "shared_book_sources_queue"

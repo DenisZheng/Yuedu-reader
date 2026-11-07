@@ -143,7 +143,6 @@ struct ReaderModernBookCard: View {
     private struct ActionCell: Identifiable {
         let id: String
         let label: String
-        let isLocked: Bool
         /// The 自定義 entry whose imported icon replaces `fallbackIcon`, when there is one.
         let item: ReaderChromeActionItem?
         let fallbackIcon: String
@@ -155,7 +154,6 @@ struct ReaderModernBookCard: View {
             ActionCell(
                 id: "search",
                 label: localized("Search Book"),
-                isLocked: false,
                 item: .search,
                 fallbackIcon: ReaderChromeActionItem.search.defaultSystemImage,
                 action: onOpenSearch
@@ -165,7 +163,6 @@ struct ReaderModernBookCard: View {
             ActionCell(
                 id: action.id.rawValue,
                 label: action.label,
-                isLocked: action.isLocked,
                 item: ReaderChromeActionItem(action.id),
                 fallbackIcon: action.icon,
                 action: action.action
@@ -225,16 +222,6 @@ struct ReaderModernBookCard: View {
                         width: DSLayout.readerModernBookCardActionGlyphSize,
                         height: DSLayout.readerModernBookCardActionGlyphSize
                     )
-                    // Needs Pro: a lock on the icon, and the tap opens the paywall.
-                    .overlay(alignment: .topTrailing) {
-                        if cell.isLocked {
-                            Image(systemName: "lock.fill")
-                                .font(DSFont.caption2)
-                                .foregroundStyle(DSColor.accent)
-                                .offset(x: DSSpacing.xs, y: -DSSpacing.xs)
-                                .accessibilityHidden(true)
-                        }
-                    }
                 // Two lines rather than a shrunk one: at four across, a label such as
                 // 「ソースにサインイン」 does not fit on one line and wrapping keeps it legible.
                 Text(cell.label)
@@ -251,7 +238,6 @@ struct ReaderModernBookCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(cell.label)
-        .accessibilityValue(cell.isLocked ? localized("需要 Pro") : "")
     }
 
     /// An imported icon is drawn in its own colours — it is artwork the reader

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Drives 設定 → 回饋中心 → 診斷紀錄 on a real simulator and captures what it looks like.
+/// 驱动 设置 → 诊断记录，验证本地复制/导出入口与页面结构，不调用原版后台。
 ///
 /// This exists because the page's appearance is the part unit tests cannot reach:
 /// `themedAppSurface` and `interfaceSectionSurface` resolve against
@@ -21,34 +21,32 @@ final class DiagnosticsPageUITests: XCTestCase {
                                "-yd_source_disclaimer_accepted", "YES"]
         app.launch()
 
-        // The notification prompt can land on top of the shelf on a fresh install.
-        let notNow = app.buttons["Don’t Allow"]
-        if notNow.waitForExistence(timeout: 5) {
-            notNow.tap()
-        }
-
-        let settingsTab = app.tabBars.buttons["Settings"].firstMatch
+        // 同时兼容 iPhone 底栏和 iPad 顶部/侧栏，不依赖 tabBars 元素类型。
+        let settingsTab = app.buttons.matching(NSPredicate(format: "label == %@", "Settings")).firstMatch
         XCTAssertTrue(settingsTab.waitForExistence(timeout: 20), "settings tab should exist")
         settingsTab.tap()
 
-        let feedbackCenter = app.buttons["settings_feedback_center"].firstMatch
-        // SwiftUI does not expose a Form row to XCTest until it is near the
-        // viewport, so scroll before asserting that this bottom-row entry exists.
-        for _ in 0..<8 where !feedbackCenter.exists {
+        let diagnostics = app.buttons["settings_diagnostics"].firstMatch
+        for _ in 0..<8 where !diagnostics.exists {
             app.swipeUp()
         }
-        XCTAssertTrue(feedbackCenter.waitForExistence(timeout: 5), "the feedback center row should be reachable")
-        feedbackCenter.tap()
-
-        let target = app.buttons["Diagnostic Log"].firstMatch
-        XCTAssertTrue(target.waitForExistence(timeout: 10), "the diagnostics row should be in 回饋中心")
-        target.tap()
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 5), "本地诊断必须能从设置直接到达")
+        diagnostics.tap()
 
         let exportControl = app.descendants(matching: .any)["diagnostics_export_button"]
         XCTAssertTrue(
             exportControl.waitForExistence(timeout: 15),
             "export must be a directly presented control, not hidden behind a toolbar Menu"
         )
+
+        XCTAssertFalse(app.buttons["diagnostics_send_button"].exists, "不能保留云端上传入口")
+        app.buttons["diagnostics_more_actions"].tap()
+        let copy = app.buttons["diagnostics_copy_all"].firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        copy.tap()
+        let copied = app.alerts["Copied"]
+        XCTAssertTrue(copied.waitForExistence(timeout: 5), "复制应在本地完成，不等待上传回执")
+        copied.buttons.element(boundBy: 0).tap()
 
         // The filter section starts below the export row and might not be materialized
         // in the accessibility tree until the Form is scrolled.

@@ -1,124 +1,96 @@
 import Foundation
 import os
-import FirebaseCore
-import FirebaseCrashlytics
 
-/// Thin, thread-safe wrapper over Crashlytics **and `DiagnosticLog`** for
-/// breadcrumbs, persistent context
-/// keys, and non-fatals — so a crash report (or a MetricKit diagnostic, see
-/// `MetricKitDiagnosticReporter`) says *what the app was doing*, not just an
-/// anonymous stack. Crashlytics' own API is thread-safe, so these are safe to call
-/// from any actor/queue. Compiled into the main app target only (`Modules/` is not
-/// shared with the extensions, which don't link Crashlytics).
+/// 诊断的本地入口；不初始化 SDK、不创建网络请求。保留调用接口，避免改动阅读热路径。
+/// 上下文只存在内存中，错误和活动栈交给现有 DiagnosticLog 合并落盘。
 enum CrashContext {
-    private static let log = Logger(subsystem: "com.yuedu.app", category: "CrashContext")
+    private static let context = LocalDiagnosticContext(log: .shared)
 
-    /// Crashlytics may only be touched after `FirebaseApp.configure()` (in the app delegate's
-    /// `didFinishLaunching`). `App.init` and the stores it creates run before that, and since
-    /// long main-thread spans became breadcrumbs they can call in here that early. Those lines
-    /// still reach os_log and the diagnostic log; only the Crashlytics copy is skipped.
-    private static var crashlyticsReady: Bool { FirebaseApp.app() != nil }
+    static func breadcrumb(_ message: String) { context.breadcrumb(message) }
+    static func setKey(_ key: String, _ value: String) { context.setKey(key, value) }
+    static func setKey(_ key: String, _ value: Int) { context.setKey(key, String(value)) }
+    static func setKey(_ key: String, _ value: Bool) { context.setKey(key, String(value)) }
 
-    /// A random id for this install, kept across launches. It is the Crashlytics user id, so
-    /// every hang, crash and MetricKit report of one install can be listed together, and it
-    /// travels with a diagnostic report the user sends (`DiagnosticReportUploader`) — one
-    /// report number leads to everything else that install has reported. Not derived from
-    /// anything about the person or the device.
-    static var installID: String {
-        let key = "yd_diagnostics_install_id"
-        if let existing = UserDefaults.standard.string(forKey: key) { return existing }
-        let created = UUID().uuidString
-        UserDefaults.standard.set(created, forKey: key)
-        return created
+    static func recordNonFatal(domain: String, code: Int = 0, message: String, extra: [String: String] = [:]) {
+        context.recordNonFatal(domain: domain, code: code, message: message, extra: extra)
     }
 
-    /// Call once Firebase is configured.
-    static func identifyInstall() {
-        guard crashlyticsReady else { return }
-        Crashlytics.crashlytics().setUserID(installID)
+    static func recordActivityIssue(name: String, reason: String, activities: [String]) {
+        context.recordActivityIssue(name: name, reason: reason, activities: activities)
     }
+}
 
-    /// A timestamped breadcrumb that shows up in the next crash/non-fatal report's
-    /// log tab. Use for user actions and subsystem milestones.
-    static func breadcrumb(_ message: String) {
-        if crashlyticsReady { Crashlytics.crashlytics().log(message) }
-        log.debug("🍞 \(message, privacy: .public)")
-        DiagnosticLog.shared.record(severity: .info, category: .general, message: "🍞 \(message)")
-    }
+/// 实例仅用于隔离测试日志；生产只有 CrashContext 持有的一份，不建立第二套日志存储。
+/// 锁只保护有界内存上下文，格式化与日志写入均在锁外执行。
+final class LocalDiagnosticContext: @unchecked Sendable {
+    static let keyLimit = 64
+    static let valueLimit = 1024
+    private static let messageLimit = 4096
 
-    /// A persistent key/value attached to every subsequent report (overwrites the
-    /// previous value for the same key). Use for "current state" (open book,
-    /// reader mode, syncing…).
-    static func setKey(_ key: String, _ value: String) {
-        guard crashlyticsReady else { return }
-        Crashlytics.crashlytics().setCustomValue(value, forKey: key)
-    }
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+    private var omittedKeys = false
+    private let log: DiagnosticLog
+    private let systemLog = Logger(subsystem: "com.yuedu.app", category: "CrashContext")
 
-    static func setKey(_ key: String, _ value: Int) {
-        guard crashlyticsReady else { return }
-        Crashlytics.crashlytics().setCustomValue(value, forKey: key)
-    }
+    init(log: DiagnosticLog) { self.log = log }
 
-    static func setKey(_ key: String, _ value: Bool) {
-        guard crashlyticsReady else { return }
-        Crashlytics.crashlytics().setCustomValue(value, forKey: key)
-    }
-
-    /// Record a non-fatal error so it surfaces in Crashlytics without crashing the
-    /// app. `extra` becomes additional info on the report.
-    static func recordNonFatal(
-        domain: String,
-        code: Int = 0,
-        message: String,
-        extra: [String: String] = [:]
-    ) {
-        var info: [String: Any] = [NSLocalizedDescriptionKey: message]
-        for (key, value) in extra { info[key] = value }
-        if crashlyticsReady {
-            Crashlytics.crashlytics().record(error: NSError(domain: domain, code: code, userInfo: info))
+    func setKey(_ key: String, _ value: String) {
+        let safeKey = Self.sanitized(key, limit: 128)
+        let safeValue = Self.sanitized(DiagnosticRedactor.redactField(value, key: key), limit: Self.valueLimit)
+        lock.withLock {
+            guard values[safeKey] != nil || values.count < Self.keyLimit else {
+                omittedKeys = true
+                return
+            }
+            if values[safeKey] != safeValue { values[safeKey] = safeValue }
         }
-        log.error("⚠️ non-fatal [\(domain, privacy: .public)] \(message, privacy: .public)")
-        DiagnosticLog.shared.record(
-            severity: .error,
+    }
+
+    func snapshot() -> [String: String] { lock.withLock { values } }
+
+    func breadcrumb(_ message: String) {
+        let safe = Self.sanitized(message, limit: Self.messageLimit)
+        systemLog.debug("🍞 \(safe, privacy: .public)")
+        log.record(severity: .info, category: .general, message: "🍞 \(safe)")
+    }
+
+    func recordNonFatal(domain: String, code: Int = 0, message: String, extra: [String: String] = [:]) {
+        record(
+            message: "non-fatal [\(Self.sanitized(domain, limit: 128)):\(code)] \(Self.sanitized(message, limit: Self.messageLimit))",
             category: .general,
-            message: "⚠️ non-fatal [\(domain)] \(message)",
-            detail: extra.isEmpty ? nil : extra.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: "\n")
+            detail: extra.prefix(Self.keyLimit).map { key, value in
+                "\(Self.sanitized(key, limit: 128))=\(Self.sanitized(DiagnosticRedactor.redactField(value, key: key), limit: Self.valueLimit))"
+            }.sorted().joined(separator: "\n") + (extra.count > Self.keyLimit ? "\n[extra fields truncated]" : "")
         )
     }
 
-    /// Records a MetricKit diagnostic as an exception whose stack is the diagnostic's own
-    /// heaviest path. Frames whose binary is loaded in this process go as addresses, which
-    /// Crashlytics' backend symbolicates against the uploaded dSYM; the rest go as text.
-    /// `extra` becomes custom keys, which Crashlytics snapshots into the report.
-    static func recordMetricKitDiagnostic(
-        kind: String,
-        reason: String,
-        frames: [MetricKitCallStack.Frame],
-        extra: [String: String]
-    ) {
-        guard crashlyticsReady else { return }
-        let crashlytics = Crashlytics.crashlytics()
-        for (key, value) in extra { crashlytics.setCustomValue(value, forKey: "mk_\(key)") }
-        let model = ExceptionModel(name: "MetricKit.\(kind)", reason: reason)
-        model.stackTrace = frames.map { frame in
-            if let address = frame.loadedAddress {
-                return StackFrame(address: address)
-            }
-            return StackFrame(symbol: frame.readable, file: frame.binaryName ?? frame.binaryUUID, line: 0)
-        }
-        crashlytics.record(exceptionModel: model)
-        log.error("⚠️ MetricKit \(kind, privacy: .public) recorded: \(reason, privacy: .public)")
+    func recordActivityIssue(name: String, reason: String, activities: [String]) {
+        let stack = activities.isEmpty ? "(no instrumented span)" : activities.suffix(32).reversed()
+            .map { Self.sanitized($0, limit: Self.valueLimit) }.joined(separator: "\n")
+        record(
+            message: "\(Self.sanitized(name, limit: 128)): \(Self.sanitized(reason, limit: Self.messageLimit))",
+            category: .crash,
+            detail: "activities (innermost first):\n\(stack)" + (activities.count > 32 ? "\n[activities truncated]" : "")
+        )
     }
 
-    /// Records an issue whose "stack" is the app's own activity names (innermost first), so
-    /// Crashlytics groups it by what the app was doing — e.g. a main-thread stall during
-    /// `library.shelf.save` is one issue, during `library.chapters.read` another.
-    static func recordActivityIssue(name: String, reason: String, activities: [String]) {
-        guard crashlyticsReady else { return }
-        let model = ExceptionModel(name: name, reason: reason)
-        let frames = activities.isEmpty ? ["(no instrumented span)"] : Array(activities.reversed())
-        model.stackTrace = frames.map { StackFrame(symbol: $0, file: "activity", line: 0) }
-        Crashlytics.crashlytics().record(exceptionModel: model)
-        log.error("⚠️ \(name, privacy: .public): \(reason, privacy: .public)")
+    private func record(message: String, category: DiagnosticCategory, detail: String) {
+        let (current, truncated) = lock.withLock { (values, omittedKeys) }
+        var sections: [String] = []
+        if !current.isEmpty {
+            sections.append("context:\n" + current.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: "\n"))
+        }
+        if truncated { sections.append("[context keys truncated]") }
+        if !detail.isEmpty { sections.append(detail) }
+        systemLog.error("⚠️ \(message, privacy: .public)")
+        log.record(severity: .error, category: category, message: message, detail: sections.isEmpty ? nil : sections.joined(separator: "\n"))
+    }
+
+    private static func sanitized(_ value: String, limit: Int) -> String {
+        // 不截取原始凭据的前半段；超限整段省略，避免截断后破坏脱敏模式。
+        guard value.utf8.prefix(limit + 1).count <= limit else { return "<omitted: size limit>" }
+        let redacted = DiagnosticRedactor.redact(value)
+        return redacted.utf8.prefix(limit + 1).count <= limit ? redacted : "<omitted: size limit>"
     }
 }

@@ -318,8 +318,7 @@ struct ReaderModernBottomControlBar: View {
                             DismissalSequencedAction(
                                 route: MoreRoute.action(action.id),
                                 title: action.label,
-                                systemImage: action.icon,
-                                subtitle: action.isLocked ? localized("需要 Pro") : nil
+                                systemImage: action.icon
                             )
                         },
                         onSelect: { legacyMoreSequence.select($0) }
@@ -340,10 +339,6 @@ struct ReaderModernBottomControlBar: View {
                             Button(action: action.action) {
                                 Label {
                                     Text(action.label)
-                                    // Without Pro the tap opens the paywall; the menu says so.
-                                    if action.isLocked {
-                                        Text(localized("需要 Pro"))
-                                    }
                                 } icon: {
                                     moreActionIcon(action)
                                 }
@@ -467,8 +462,8 @@ private struct GlassGroup<Content: View>: View {
             onOpenBookmarks: {},
             onToggleBookmark: {},
             moreActions: [
-                ReaderSecondaryAction(id: .aiAssistant, icon: "sparkles", label: "AI 助手", isLocked: true, action: {}),
-                ReaderSecondaryAction(id: .translation, icon: "translate", label: "AI 翻譯", isLocked: true, action: {})
+                ReaderSecondaryAction(id: .aiAssistant, icon: "sparkles", label: "AI 助手", action: {}),
+                ReaderSecondaryAction(id: .translation, icon: "translate", label: "AI 翻譯", action: {})
             ],
             sourceActions: [
                 ReaderSecondaryAction(id: .copyChapterURL, icon: "link", label: "複製正文網址", action: {}),

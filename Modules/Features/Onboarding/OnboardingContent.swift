@@ -2,15 +2,12 @@ import Foundation
 
 /// What the tour says, worked out from the app in front of the reader: a tab they hid is not
 /// walked through or offered as a start, a storefront without the public libraries is not
-/// promised them, a home made without rankings is not said to have them, and a 閱讀Pro feature
-/// they do not have yet says so.
+/// promised them, and a home made without rankings is not said to have them.
 struct OnboardingContent: Equatable {
     /// A line of a page's list: a feature, by the name it has in the app, and its sentence.
     struct Row: Equatable, Identifiable {
         let titleKey: String
         let textKey: String
-        /// A 閱讀Pro feature this reader does not have yet: the title carries the Pro lock.
-        var isLocked = false
 
         var id: String { titleKey + textKey }
     }
@@ -47,9 +44,7 @@ struct OnboardingContent: Equatable {
     ///   - visibleTabs: The tabs the reader shows.
     ///   - librariesAvailable: Whether the storefront is known and offers the public libraries.
     ///   - languages: 中繼資料語言偏好推薦's languages, which choose a new home's rankings.
-    ///   - lockedFeatures: The 閱讀Pro features the reader does not have.
-    init(visibleTabs: [RootTabItem], librariesAvailable: Bool, languages: [String],
-         lockedFeatures: Set<PremiumFeature>) {
+    init(visibleTabs: [RootTabItem], librariesAvailable: Bool, languages: [String]) {
         if visibleTabs.contains(.explore) {
             // The rankings a new home is made with (`HomePageDefaults`): none yet for Korean, nor
             // for Japanese where なろう is hidden.
@@ -101,10 +96,8 @@ struct OnboardingContent: Equatable {
             Row(titleKey: "聽書", textKey: "把書念給你聽"),
             Row(titleKey: "自動閱讀", textKey: "自動往下讀，速度和翻頁方式都能調"),
             // By the names their rows have in 設定.
-            Row(titleKey: "外觀主題", textKey: "在設定裡自己調 App 與閱讀的配色，還有每一頁的背景",
-                isLocked: lockedFeatures.contains(.readerThemePacks)),
-            Row(titleKey: "底部 Tab", textKey: "在外觀主題裡選要顯示哪些分頁，還有大小和圖示",
-                isLocked: lockedFeatures.contains(.bottomBarCustomization)),
+            Row(titleKey: "外觀主題", textKey: "在設定裡自己調 App 與閱讀的配色，還有每一頁的背景"),
+            Row(titleKey: "底部 Tab", textKey: "在外觀主題裡選要顯示哪些分頁，還有大小和圖示"),
         ]
 
         starts = OnboardingStart.allCases.filter { visibleTabs.contains($0.tab) }

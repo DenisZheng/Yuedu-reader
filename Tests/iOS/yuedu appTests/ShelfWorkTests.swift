@@ -396,7 +396,7 @@ struct ShelfWorkTests {
                 newer.id.uuidString: SyncShadowEntry(updatedAt: synced, hash: "new", deleted: false),
             ]
             let remote = store.books.map {
-                FirestoreSyncRecord(id: $0.id.uuidString, value: $0, updatedAt: synced, deleted: false)
+                SyncRecord(id: $0.id.uuidString, value: $0, updatedAt: synced, deleted: false)
             }
 
             await ShelfWorkMerger(store: store, positionStore: positions).mergeDuplicates()

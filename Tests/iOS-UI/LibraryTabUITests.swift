@@ -1,4 +1,3 @@
-import StoreKitTest
 import XCTest
 
 /// 資源庫 (Phase 5 plan, decisions 30 and 31; 5h): the tab between 探索 and 設定, its card saying
@@ -6,7 +5,6 @@ import XCTest
 final class LibraryTabUITests: XCTestCase {
     /// iOS 17.5 asks for an Apple ID as the app reads StoreKit, over every page, unless a test
     /// session answers it (`StoreKitTestSessions`): the ••• is checked there too.
-    private var storeKitSession: SKTestSession?
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -39,7 +37,6 @@ final class LibraryTabUITests: XCTestCase {
 
     @MainActor
     private func launch(_ extra: [String] = []) throws -> XCUIApplication {
-        storeKitSession = try StoreKitTestSessions.fresh(StoreKitTestSessions.yueduPro())
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",
                                "-yd_source_disclaimer_accepted", "YES",

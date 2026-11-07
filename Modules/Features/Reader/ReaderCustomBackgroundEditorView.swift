@@ -14,10 +14,9 @@ struct ReaderCustomBackgroundEditorView: View {
     let original: ReaderCustomBackground?
     let onSave: (ReaderCustomBackground) -> Void
     let onDelete: () -> Void
-    let onRequestPaywall: (PremiumFeature) -> Void
 
     @Bindable private var settings = GlobalSettings.shared
-    @ObservedObject private var subscriptionStore = SubscriptionStore.shared
+
     @State private var name: String
     @State private var kind: Kind
     @State private var color: Color
@@ -33,13 +32,11 @@ struct ReaderCustomBackgroundEditorView: View {
     init(
         original: ReaderCustomBackground?,
         onSave: @escaping (ReaderCustomBackground) -> Void,
-        onDelete: @escaping () -> Void,
-        onRequestPaywall: @escaping (PremiumFeature) -> Void
+        onDelete: @escaping () -> Void
     ) {
         self.original = original
         self.onSave = onSave
         self.onDelete = onDelete
-        self.onRequestPaywall = onRequestPaywall
         _name = State(initialValue: original?.name ?? "")
         _kind = State(initialValue: original?.isImage == true ? .picture : .color)
         _color = State(initialValue: Color(uiColor: AppearanceThemePreset.hex(original?.colorHex ?? 0xF4F5F7)))
@@ -199,18 +196,13 @@ struct ReaderCustomBackgroundEditorView: View {
 
     @ViewBuilder
     private var pictureRow: some View {
-        if ReaderPremiumVisibilityPolicy(isProActive: subscriptionStore.isProActive).showsBackgroundImageImport {
-            ImageSourcePickerButton(
-                accessibilityTitle: localized("導入圖片背景"),
-                onPick: importPicture
-            ) {
-                SettingsRowLabel(localized("導入圖片背景"), systemImage: "photo", role: .action)
-            }
-        } else {
-            SettingsLockedRow(title: localized("導入圖片背景"), systemImage: "photo") {
-                onRequestPaywall(.readerBackgroundImport)
-            }
+        ImageSourcePickerButton(
+            accessibilityTitle: localized("導入圖片背景"),
+            onPick: importPicture
+        ) {
+            SettingsRowLabel(localized("導入圖片背景"), systemImage: "photo", role: .action)
         }
+
     }
 
     // MARK: - State
@@ -292,8 +284,7 @@ struct ReaderCustomBackgroundEditorView: View {
         ReaderCustomBackgroundEditorView(
             original: nil,
             onSave: { _ in },
-            onDelete: {},
-            onRequestPaywall: { _ in }
+            onDelete: {}
         )
     }
 }

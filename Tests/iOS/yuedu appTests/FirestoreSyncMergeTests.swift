@@ -3,7 +3,7 @@ import Testing
 @testable import yuedu_app
 
 @Suite("Firestore sync merge", .serialized)
-struct FirestoreSyncMergeTests {
+struct SyncMergeTests {
     private struct Item: Codable, Equatable {
         var id: String
         var value: String
@@ -15,9 +15,9 @@ struct FirestoreSyncMergeTests {
 
     @Test("remote value wins when newer")
     func remoteValueWinsWhenNewer() {
-        let result = FirestoreSyncMerge.merge(
+        let result = SyncMerge.merge(
             local: [Item(id: "same", value: "local")],
-            remote: [FirestoreSyncRecord(id: "same", value: Item(id: "same", value: "remote"), updatedAt: Date(timeIntervalSince1970: 200), deleted: false)],
+            remote: [SyncRecord(id: "same", value: Item(id: "same", value: "remote"), updatedAt: Date(timeIntervalSince1970: 200), deleted: false)],
             shadow: ["same": shadow(100, hash: "local")],
             id: { $0.id },
             hash: { $0.value },
@@ -31,9 +31,9 @@ struct FirestoreSyncMergeTests {
 
     @Test("local value is retained when newer")
     func localValueIsRetainedWhenNewer() {
-        let result = FirestoreSyncMerge.merge(
+        let result = SyncMerge.merge(
             local: [Item(id: "same", value: "local")],
-            remote: [FirestoreSyncRecord(id: "same", value: Item(id: "same", value: "remote"), updatedAt: Date(timeIntervalSince1970: 200), deleted: false)],
+            remote: [SyncRecord(id: "same", value: Item(id: "same", value: "remote"), updatedAt: Date(timeIntervalSince1970: 200), deleted: false)],
             shadow: ["same": shadow(300, hash: "local")],
             id: { $0.id },
             hash: { $0.value },
@@ -46,9 +46,9 @@ struct FirestoreSyncMergeTests {
 
     @Test("new remote and new local entities are both retained")
     func newRemoteAndNewLocalEntitiesAreBothRetained() {
-        let result = FirestoreSyncMerge.merge(
+        let result = SyncMerge.merge(
             local: [Item(id: "local-only", value: "local")],
-            remote: [FirestoreSyncRecord(id: "remote-only", value: Item(id: "remote-only", value: "remote"), updatedAt: Date(timeIntervalSince1970: 200), deleted: false)],
+            remote: [SyncRecord(id: "remote-only", value: Item(id: "remote-only", value: "remote"), updatedAt: Date(timeIntervalSince1970: 200), deleted: false)],
             shadow: [:],
             id: { $0.id },
             hash: { $0.value },
@@ -64,9 +64,9 @@ struct FirestoreSyncMergeTests {
 
     @Test("remote tombstone deletes a local item")
     func remoteTombstoneDeletesLocalItem() {
-        let result = FirestoreSyncMerge.merge(
+        let result = SyncMerge.merge(
             local: [Item(id: "gone", value: "local")],
-            remote: [FirestoreSyncRecord<Item>(id: "gone", value: nil, updatedAt: Date(timeIntervalSince1970: 200), deleted: true)],
+            remote: [SyncRecord<Item>(id: "gone", value: nil, updatedAt: Date(timeIntervalSince1970: 200), deleted: true)],
             shadow: ["gone": shadow(100, hash: "local")],
             id: { $0.id },
             hash: { $0.value },
@@ -79,9 +79,9 @@ struct FirestoreSyncMergeTests {
 
     @Test("local edit newer than remote tombstone is retained")
     func localEditNewerThanTombstoneIsRetained() {
-        let result = FirestoreSyncMerge.merge(
+        let result = SyncMerge.merge(
             local: [Item(id: "kept", value: "local")],
-            remote: [FirestoreSyncRecord<Item>(id: "kept", value: nil, updatedAt: Date(timeIntervalSince1970: 200), deleted: true)],
+            remote: [SyncRecord<Item>(id: "kept", value: nil, updatedAt: Date(timeIntervalSince1970: 200), deleted: true)],
             shadow: ["kept": shadow(300, hash: "local")],
             id: { $0.id },
             hash: { $0.value },
@@ -96,9 +96,9 @@ struct FirestoreSyncMergeTests {
     func localDeletionPreventsResurrection() {
         // The item was deleted locally (tombstone in shadow, absent from local),
         // but the remote still has an older live copy. It must stay deleted.
-        let result = FirestoreSyncMerge.merge(
+        let result = SyncMerge.merge(
             local: [],
-            remote: [FirestoreSyncRecord(id: "deleted-here", value: Item(id: "deleted-here", value: "remote"), updatedAt: Date(timeIntervalSince1970: 150), deleted: false)],
+            remote: [SyncRecord(id: "deleted-here", value: Item(id: "deleted-here", value: "remote"), updatedAt: Date(timeIntervalSince1970: 150), deleted: false)],
             shadow: ["deleted-here": shadow(200, hash: "", deleted: true)],
             id: { $0.id },
             hash: { $0.value },
@@ -137,10 +137,10 @@ struct FirestoreSyncMergeTests {
 
     private func selectionMerge(
         local: [ReaderCommentBubbleSyncSelection],
-        remote: [FirestoreSyncRecord<ReaderCommentBubbleSyncSelection>],
+        remote: [SyncRecord<ReaderCommentBubbleSyncSelection>],
         shadow: [String: SyncShadowEntry]
     ) -> (values: [ReaderCommentBubbleSyncSelection], shadow: [String: SyncShadowEntry]) {
-        FirestoreSyncMerge.merge(
+        SyncMerge.merge(
             local: local,
             remote: remote,
             shadow: shadow,
@@ -163,7 +163,7 @@ struct FirestoreSyncMergeTests {
 
         let result = selectionMerge(
             local: [older],
-            remote: [FirestoreSyncRecord(
+            remote: [SyncRecord(
                 id: Self.bubbleSelectionID,
                 value: newer,
                 updatedAt: Date(timeIntervalSince1970: 300),
@@ -185,7 +185,7 @@ struct FirestoreSyncMergeTests {
 
         let result = selectionMerge(
             local: [],
-            remote: [FirestoreSyncRecord(
+            remote: [SyncRecord(
                 id: Self.bubbleSelectionID,
                 value: remote,
                 updatedAt: Date(timeIntervalSince1970: 200),
@@ -213,7 +213,7 @@ struct FirestoreSyncMergeTests {
 
         let result = selectionMerge(
             local: [cleared],
-            remote: [FirestoreSyncRecord(
+            remote: [SyncRecord(
                 id: Self.bubbleSelectionID,
                 value: newerRemotePick,
                 updatedAt: Date(timeIntervalSince1970: 300),
@@ -235,7 +235,7 @@ struct FirestoreSyncMergeTests {
 
         let cleared = selectionMerge(
             local: [staleLocalPick],
-            remote: [FirestoreSyncRecord<ReaderCommentBubbleSyncSelection>(
+            remote: [SyncRecord<ReaderCommentBubbleSyncSelection>(
                 id: Self.bubbleSelectionID,
                 value: nil,
                 updatedAt: Date(timeIntervalSince1970: 200),
@@ -295,9 +295,9 @@ struct FirestoreSyncMergeTests {
             now: Date(timeIntervalSince1970: 5_000)
         )
 
-        let result = FirestoreSyncMerge.merge(
+        let result = SyncMerge.merge(
             local: [edited],
-            remote: [FirestoreSyncRecord(id: "book", value: synced, updatedAt: lastOpened, deleted: false)],
+            remote: [SyncRecord(id: "book", value: synced, updatedAt: lastOpened, deleted: false)],
             shadow: shadowStore,
             id: { $0.id },
             hash: { $0.value },

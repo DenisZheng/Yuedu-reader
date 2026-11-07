@@ -89,7 +89,7 @@ final class ReaderFontImportUITests: XCTestCase {
     @MainActor
     private func openReaderSettings() throws -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-debug-force-pro",
+        app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES",
                                "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",
                                "-yd_source_disclaimer_accepted", "YES",
                                "-book-source-store-dir", directory.path]

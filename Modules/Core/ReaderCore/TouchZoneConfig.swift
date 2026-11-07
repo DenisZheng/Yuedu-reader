@@ -103,20 +103,18 @@ struct TouchZoneConfig: Codable, Equatable {
         loadSaved(isRTL: isRTL) ?? defaultForReadingDirection(isRTL: isRTL)
     }
 
-    static func effective(isProActive: Bool, isRTL: Bool) -> TouchZoneConfig {
+    static func effective(isRTL: Bool) -> TouchZoneConfig {
         effective(
             saved: loadSaved(isRTL: isRTL),
-            isProActive: isProActive,
             isRTL: isRTL
         )
     }
 
     static func effective(
         saved: TouchZoneConfig?,
-        isProActive: Bool,
         isRTL: Bool
     ) -> TouchZoneConfig {
-        guard isProActive, let saved, saved.zones.count == 9 else {
+        guard let saved, saved.zones.count == 9 else {
             return defaultForReadingDirection(isRTL: isRTL)
         }
         return saved

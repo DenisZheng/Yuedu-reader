@@ -3,10 +3,9 @@ import SwiftUI
 /// 整章翻譯 in the reader: what to translate, and laying chapters out again as their
 /// translations arrive.
 extension ReaderView {
-    /// What the reader lays out: the book's 整章翻譯 setting, or nothing without Pro. The
-    /// setting itself is kept for when Pro returns (`ReaderPremiumVisibilityPolicy.allowsAI`).
+    /// 直接使用书籍自己的翻译设置；外部服务配置由翻译服务验证。
     var effectiveReaderTranslation: ReaderTranslationPresentation {
-        readerPremiumVisibility.allowsAI ? readerTranslation : .off
+        readerTranslation
     }
 
     /// The chapter on screen and where in it the reader is, in the chapter's own text.
@@ -74,16 +73,6 @@ extension ReaderView {
             Task { @MainActor in _ = await renderer.refresh(request) }
         }
         translateVisibleChapterIfNeeded()
-    }
-
-    /// Pro started or lapsed. The layout follows by itself (`effectiveReaderTranslation` is
-    /// part of the render settings); runs have to be stopped or asked for.
-    func aiAccessDidChange() {
-        if readerPremiumVisibility.allowsAI {
-            translateVisibleChapterIfNeeded()
-        } else {
-            AIChapterTranslationService.shared.cancel(book: bookId)
-        }
     }
 
     /// The book's setting changed in the sheet: keep it, and stop paying for a language or

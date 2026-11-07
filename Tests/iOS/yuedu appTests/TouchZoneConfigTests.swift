@@ -38,12 +38,12 @@ struct TouchZoneConfigTests {
         #expect(malformed.action(at: CGPoint(x: -20, y: 500), in: CGSize(width: 300, height: 300)) == .none)
     }
 
-    @Test("free readers use defaults while Pro readers use their saved grid")
-    func entitlementResolution() {
+    @Test("保存的有效网格无需会员即可使用")
+    func savedGridResolution() {
         let saved = TouchZoneConfig(zones: Array(repeating: .none, count: 9))
 
-        #expect(TouchZoneConfig.effective(saved: saved, isProActive: false, isRTL: false) == .default)
-        #expect(TouchZoneConfig.effective(saved: saved, isProActive: true, isRTL: true) == saved)
+        #expect(TouchZoneConfig.effective(saved: saved, isRTL: false) == saved)
+        #expect(TouchZoneConfig.effective(saved: saved, isRTL: true) == saved)
     }
 
     @Test("left-opening books mirror the unsaved default grid")
@@ -59,14 +59,14 @@ struct TouchZoneConfigTests {
         ])
     }
 
-    @Test("left-opening defaults apply until a Pro reader saves a custom grid")
+    @Test("没有有效配置时仍按阅读方向使用默认网格")
     func directionalDefaultPrecedesCustomization() {
         let saved = TouchZoneConfig(zones: Array(repeating: .none, count: 9))
         let rtlDefault = TouchZoneConfig.defaultForReadingDirection(isRTL: true)
 
-        #expect(TouchZoneConfig.effective(saved: nil, isProActive: true, isRTL: true) == rtlDefault)
-        #expect(TouchZoneConfig.effective(saved: saved, isProActive: false, isRTL: true) == rtlDefault)
-        #expect(TouchZoneConfig.effective(saved: saved, isProActive: true, isRTL: true) == saved)
+        #expect(TouchZoneConfig.effective(saved: nil, isRTL: true) == rtlDefault)
+        #expect(TouchZoneConfig.effective(saved: TouchZoneConfig(zones: []), isRTL: true) == rtlDefault)
+        #expect(TouchZoneConfig.effective(saved: saved, isRTL: true) == saved)
     }
 
     @Test("left-opening and right-opening grids persist independently")

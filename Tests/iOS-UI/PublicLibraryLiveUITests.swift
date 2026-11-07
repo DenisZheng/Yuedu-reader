@@ -15,7 +15,6 @@ final class PublicLibraryLiveUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",
             "-yd_source_disclaimer_accepted", "YES", "-book-source-store-dir", "/tmp/YueduPublicLibraries-manual-empty"]
-        if pro { app.launchArguments += ["-debug-force-pro"] }
         app.launchEnvironment["CFNETWORK_DIAGNOSTICS"] = "3"
         app.launch()
         // The storefront's search and shelves went with its page (2026-10-22): the libraries'

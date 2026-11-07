@@ -27,7 +27,7 @@ struct CloudSyncRecord<T: Codable>: Codable {
 }
 
 private struct CloudSyncDownload<T: Codable> {
-    let records: [FirestoreSyncRecord<T>]
+    let records: [SyncRecord<T>]
     let payloadHash: String?
 }
 
@@ -117,7 +117,7 @@ enum ICloudSignInSyncAction: Equatable {
 @MainActor
 final class ICloudSyncManager: ObservableObject {
     static let shared = ICloudSyncManager()
-    nonisolated static let containerIdentifier = "iCloud.com.zhangruilin.yuedureader"
+    nonisolated static let containerIdentifier = "iCloud.dev.denis.readerfork.dev"
 
     @Published private(set) var isSyncing = false
     @Published private(set) var accountStatus: CKAccountStatus = .couldNotDetermine
@@ -288,7 +288,7 @@ final class ICloudSyncManager: ObservableObject {
     // MARK: - Auto + smart-merge sync
 
     /// Seamless, mergeable iCloud sync. Pulls the cloud copy, merges it with this
-    /// device (last-write-wins per item + tombstones, reusing `FirestoreSyncMerge`),
+    /// device (last-write-wins per item + tombstones, reusing `SyncMerge`),
     /// writes the result back locally and to the cloud, then syncs the book files
     /// (EPUB/cover). Safe to call automatically (launch/foreground/background) and
     /// manually; concurrent calls are coalesced (`joinOrStartSync`). Unlike the old
@@ -974,7 +974,7 @@ final class ICloudSyncManager: ObservableObject {
     /// from the network so it can be tested.
     nonisolated static func resolveMerge<T>(
         local: [T],
-        remote: [FirestoreSyncRecord<T>],
+        remote: [SyncRecord<T>],
         shadow loadedShadow: [String: SyncShadowEntry],
         id: (T) -> String,
         hash: (T) -> String,
@@ -1008,7 +1008,7 @@ final class ICloudSyncManager: ObservableObject {
             ) else { continue }
             shadow[key] = updated
         }
-        let result = FirestoreSyncMerge.merge(
+        let result = SyncMerge.merge(
             local: local, remote: remote, shadow: shadow,
             id: id, hash: hash, fallbackUpdatedAt: fallbackUpdatedAt
         )
@@ -1057,7 +1057,7 @@ final class ICloudSyncManager: ObservableObject {
         recordName: String,
         id: (T) -> String,
         fallbackUpdatedAt: (T) -> Date
-    ) throws -> (records: [FirestoreSyncRecord<T>], payloadHash: String?) {
+    ) throws -> (records: [SyncRecord<T>], payloadHash: String?) {
         let decoder = JSONDecoder()
         let records: [CloudSyncRecord<T>]
         do {
@@ -1066,7 +1066,7 @@ final class ICloudSyncManager: ObservableObject {
             do {
                 let plain = try decoder.decode([T].self, from: data)
                 return (plain.map {
-                    FirestoreSyncRecord(id: id($0), value: $0, updatedAt: fallbackUpdatedAt($0), deleted: false)
+                    SyncRecord(id: id($0), value: $0, updatedAt: fallbackUpdatedAt($0), deleted: false)
                 }, nil)
             } catch {
                 AppLogger.sync(
@@ -1077,7 +1077,7 @@ final class ICloudSyncManager: ObservableObject {
             }
         }
         return (records.map {
-            FirestoreSyncRecord(id: $0.id, value: $0.value, updatedAt: $0.updatedAt, deleted: $0.deleted)
+            SyncRecord(id: $0.id, value: $0.value, updatedAt: $0.updatedAt, deleted: $0.deleted)
         }, try Self.cloudSyncPayloadHash(records))
     }
 
@@ -1429,15 +1429,19 @@ final class ICloudSyncManager: ObservableObject {
 
         try await downloadMissingBookFiles()
 
-        // Reload the in-memory stores from the just-restored files so the bookshelf
-        // and sources update live. This also keeps Firestore (account sync) from
-        // re-deleting the restored data via stale tombstones on the next launch.
-        await FirestoreSyncManager.shared.adoptRestoredLocalData()
+        // 恢复后由 iCloud 自己刷新本地 owner，不再经过已移除的账号同步服务。
+        await reloadRestoredLocalData()
 
         await MainActor.run {
             lastSyncDate = Date()
             statusMessage = localized("iCloud 還原成功")
         }
+    }
+
+    private func reloadRestoredLocalData() async {
+        await boundBookStore?.reloadFromDisk()
+        BookSourceStore.shared.reloadFromDisk()
+        ReplaceRuleStore.shared.reloadFromDisk()
     }
 
     nonisolated private func ensureAccountAvailable() async throws {

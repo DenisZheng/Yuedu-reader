@@ -136,7 +136,7 @@ final class ModuleLibraryUITests: XCTestCase {
     /// offers 產生推薦.
     @MainActor
     func testOfficialModuleIsListed() {
-        let app = launch(extra: ["-debug-force-pro"])
+        let app = launch(extra: [])
         let official = scrolledTo(app.buttons["library.module.official.aiRecommendations"].firstMatch, in: app)
         XCTAssertTrue(official.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertEqual(official.label, "AI 推薦")

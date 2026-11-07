@@ -3,7 +3,7 @@ import UIKit
 
 struct SettingsView: View {
     @EnvironmentObject var store: BookStore
-    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     @Bindable private var gs = GlobalSettings.shared
@@ -21,27 +21,11 @@ struct SettingsView: View {
     @State private var showTTSSettings = false
     @State private var showNetworkSettings = false
     @State private var showAISettings = false
-    @State private var showAIPaywall = false
     #if DEBUG
-    @State private var autoOpenDiagnostics = false
-    @State private var autoOpenFeedbackCenter = false
+    @State private var didAutoOpenDiagnostics = false
     #endif
-    private let feedbackEmail = "r3212239269@gmail.com"
-    private let officialQQGroupID = "1107613783"
-    private let telegramGroupURL = URL(string: "https://t.me/+ZWmmgMwwJ3JiN2Rl")
-    private let privacyPolicyURL = URL(string: "https://yuedureader.com/privacy")
-    private let userAgreementURL = URL(string: "https://yuedureader.com/terms")
-    private let paidTermsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")
-    private let sourceCodeURL = URL(string: "https://github.com/CHANG-JUI-LIN/Yuedu-reader/releases")
-
-    private var feedbackMailURL: URL? {
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = feedbackEmail
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: localized("yuedu app 反饋"))
-        ]
-        return components.url
+    private enum LocalRoute: Hashable {
+        case diagnostics, rssNotifications
     }
 
     private var appLanguageFooter: String {
@@ -57,24 +41,13 @@ struct SettingsView: View {
 
     private var appearanceThemeName: String {
         gs.appearanceTheme(
-            for: colorScheme,
-            isProActive: subscriptionStore.hasAccess(.readerThemePacks)
+            for: colorScheme
         ).localizedName
     }
 
     var body: some View {
         NavigationStack(path: $path) {
                 Form {
-                    Section {
-                        NavigationLink(destination: UserDetailView()) {
-                            AccountRowContent()
-                        }
-                        .accessibilityIdentifier("settings_account_row")
-                        // The first row measures the form's scroll for the title's fade.
-                        .rootTabTitleScrollAnchor()
-                    }
-                    .interfaceSectionSurface()
-
                     // Grouped by what each is for (maintainer, 2026-10-27): 一般, 資源, 閱讀, 資料, 支援.
 
                     // ── 一般 ──
@@ -93,6 +66,7 @@ struct SettingsView: View {
                                     .foregroundColor(DSColor.textSecondary)
                             }
                         }
+                        .rootTabTitleScrollAnchor()
 
                         DSSettingsRow(
                             icon: "globe",
@@ -103,6 +77,12 @@ struct SettingsView: View {
                                 }
                             }
                         )
+                        NavigationLink(value: LocalRoute.rssNotifications) {
+                            Label(localized("訂閱通知"), systemImage: "bell")
+                                .foregroundColor(DSColor.textPrimary)
+                                .labelStyle(IconConsistentLabelStyle())
+                        }
+                        .accessibilityIdentifier("settings_rss_notifications")
                     } header: {
                         Text(localized("設定分組：一般"))
                             .foregroundStyle(DSColor.textSecondary)
@@ -175,10 +155,10 @@ struct SettingsView: View {
                             // Named for what it is — the reader's panel is also called
                             // 「AI 助手」, and someone looking for 人物卡 went here first.
                             title: localized("AI 助手設定"),
-                            detail: isAILocked ? localized("需要 Pro") : aiAssistantDetail,
-                            isLocked: isAILocked,
+                            detail: aiAssistantDetail,
+                            isLocked: false,
                             action: {
-                                if isAILocked { showAIPaywall = true } else { showAISettings = true }
+                                showAISettings = true
                             }
                         )
 
@@ -239,32 +219,18 @@ struct SettingsView: View {
 
                     // ── 支援 ──
                     Section {
-                        // 回饋中心 replaced 診斷與回報 (2026-10-15): reports, replies, and the
-                        // diagnostic log viewer as its 診斷紀錄 row.
-                        NavigationLink {
-                            FeedbackCenterView()
-                        } label: {
-                            Label(localized("回饋中心"), systemImage: "exclamationmark.bubble")
+                        NavigationLink(value: LocalRoute.diagnostics) {
+                            Label(localized("診斷紀錄"), systemImage: "doc.text.magnifyingglass")
                                 .foregroundColor(DSColor.textPrimary)
                                 .labelStyle(IconConsistentLabelStyle())
                         }
-                        .accessibilityIdentifier("settings_feedback_center")
+                        .accessibilityIdentifier("settings_diagnostics")
 
                         NavigationLink {
-                            AboutSupportView(
-                                appVersion: appVersion,
-                                feedbackEmail: feedbackEmail,
-                                officialQQGroupID: officialQQGroupID,
-                                feedbackMailURL: feedbackMailURL,
-                                telegramGroupURL: telegramGroupURL,
-                                privacyPolicyURL: privacyPolicyURL,
-                                userAgreementURL: userAgreementURL,
-                                paidTermsURL: paidTermsURL,
-                                sourceCodeURL: sourceCodeURL
-                            )
+                            AboutSupportView(appVersion: appVersion)
                         } label: {
                             HStack {
-                                Label(localized("關於 Yuedu Reader"), systemImage: "info.circle.fill")
+                                Label(localized("關於"), systemImage: "info.circle.fill")
                                     .foregroundColor(DSColor.textPrimary)
                                     .labelStyle(IconConsistentLabelStyle())
                                 Spacer(minLength: 12)
@@ -288,24 +254,18 @@ struct SettingsView: View {
             // pages (官方模組, 匯入的模組, a repository, a module). None of them opens a source's
             // page, the one route that goes out to the browser, so this stack has no browser to open.
             .exploreRouteDestinations(openBrowser: { _ in })
+            .navigationDestination(for: LocalRoute.self) { route in
+                switch route {
+                case .diagnostics: DiagnosticsView()
+                case .rssNotifications: RSSNotificationSettingsView()
+                }
+            }
             #if DEBUG
-            // Screenshot/driver hooks: `-open-diagnostics` pushes 診斷紀錄 and
-            // `-open-feedback-center` pushes 回饋中心 straight from launch, so their
-            // appearance can be inspected without driving the tab bar. Same shape as the
-            // `-browser-overlay` launch flags in `yuedu_appApp.init()`, and compiled out
-            // of Release.
-            .navigationDestination(isPresented: $autoOpenDiagnostics) {
-                DiagnosticsView()
-            }
-            .navigationDestination(isPresented: $autoOpenFeedbackCenter) {
-                FeedbackCenterView()
-            }
+            // 调试启动可直达本地诊断页；Release 不包含该入口。
             .onAppear {
-                let arguments = ProcessInfo.processInfo.arguments
-                if arguments.contains("-open-diagnostics") {
-                    autoOpenDiagnostics = true
-                } else if arguments.contains("-open-feedback-center") {
-                    autoOpenFeedbackCenter = true
+                if !didAutoOpenDiagnostics, ProcessInfo.processInfo.arguments.contains("-open-diagnostics") {
+                    didAutoOpenDiagnostics = true
+                    path.append(LocalRoute.diagnostics)
                 }
             }
             #endif
@@ -318,10 +278,6 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showAISettings) {
                 AISettingsView()
-            }
-            .sheet(isPresented: $showAIPaywall) {
-                PaywallView(highlightedFeature: .aiReading)
-                    .environmentObject(subscriptionStore)
             }
             .sheet(isPresented: $showReplaceRules) {
                 ReplaceRuleListView()
@@ -348,266 +304,57 @@ struct SettingsView: View {
         store.books.filter { $0.isOnline && $0.offlineDownloadState == .available }.count
     }
 
-    /// AI is Pro, its settings included (`ReaderPremiumVisibilityPolicy.allowsAI`).
-    private var isAILocked: Bool {
-        !ReaderPremiumVisibilityPolicy(isProActive: subscriptionStore.isProActive).allowsAI
-    }
-
     /// Says whether AI is usable at a glance. A reader who has not set it up should not have
     /// to open the screen to find that out.
     private var aiAssistantDetail: String {
         AIProviderStore.shared.hasConfiguredProfile ? localized("已啟用") : localized("未設定")
     }
 
-    @ViewBuilder func AccountRowContent() -> some View {
-        HStack(spacing: 15) {
-            AccountAvatarView(size: 50)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(gs.isLoggedIn ? (gs.accountDisplayName.isEmpty ? localized("已登入") : gs.accountDisplayName) : localized("尚未登入"))
-                    .font(DSFont.headline)
-                    .foregroundStyle(DSColor.textPrimary)
-                Text(gs.accountSubtitle)
-                    .font(DSFont.caption).foregroundStyle(DSColor.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer()
-        }
-    }
 
 }
 
 private struct AboutSupportView: View {
-    @EnvironmentObject private var subscriptionStore: SubscriptionStore
-    @Environment(\.openURL) private var openURL
     @Environment(OnboardingState.self) private var onboarding: OnboardingState?
-    @Bindable private var gs = GlobalSettings.shared
-    @State private var showCopiedQQGroup = false
     let appVersion: String
-    let feedbackEmail: String
-    let officialQQGroupID: String
-    let feedbackMailURL: URL?
-    let telegramGroupURL: URL?
-    let privacyPolicyURL: URL?
-    let userAgreementURL: URL?
-    let paidTermsURL: URL?
-    let sourceCodeURL: URL?
 
     var body: some View {
         List {
             Section {
-                VStack(spacing: 12) {
-                    Image("YueduLogo")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 82, height: 82)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 4)
-
-                    Text(localized("閱讀"))
-                        .font(DSFont.title3.weight(.semibold))
-                        .foregroundStyle(DSColor.textPrimary)
-
-                    Text(localized("聯絡方式、版本資訊與政策協議"))
-                        .font(DSFont.footnote)
-                        .foregroundColor(DSColor.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-            }
-            .interfaceSectionSurface()
-
-            Section(header: Text(localized("版本資訊")).foregroundStyle(DSColor.textSecondary)) {
-                HStack {
-                    Label(localized("版本"), systemImage: "number")
-                        .foregroundColor(DSColor.textPrimary)
-                        .labelStyle(IconConsistentLabelStyle())
-                    Spacer(minLength: 12)
-                    Text(appVersion)
-                        .font(DSFont.caption)
-                        .foregroundColor(DSColor.textSecondary)
-                }
-
+                ThemedLabeledContent(localized("版本"), value: appVersion)
                 if let onboarding {
-                    actionRow(
-                        icon: "hand.wave",
-                        title: localized("新手導覽"),
-                        detail: localized("再看一次 App 介紹和基本操作"),
-                        trailingIcon: "chevron.right"
-                    ) {
+                    Button {
                         withAnimation(DSAnimation.standard) { onboarding.replay() }
+                    } label: {
+                        SettingsRowLabel(localized("新手導覽"), systemImage: "hand.wave", role: .action)
                     }
                     .accessibilityIdentifier("about.onboarding")
                 }
-            }
-            .interfaceSectionSurface()
-
-            if gs.isLoggedIn && subscriptionStore.accountIsProActive {
-                Section(header: Text(localized("加入測試")).foregroundStyle(DSColor.textSecondary)) {
-                    NavigationLink {
-                        TestFlightApplyView()
-                    } label: {
-                        HStack {
-                            Label(localized("加入 TestFlight 測試版"), systemImage: "testtube.2")
-                                .foregroundColor(DSColor.textPrimary)
-                                .labelStyle(IconConsistentLabelStyle())
-                            Spacer(minLength: 12)
-                            Text(localized("測試版"))
-                                .font(DSFont.caption)
-                                .foregroundColor(DSColor.textSecondary)
-                        }
-                    }
-                }
-                .interfaceSectionSurface()
-            }
-
-            Section(header: Text(localized("開放原始碼")).foregroundStyle(DSColor.textSecondary)) {
-                actionRow(
-                    icon: "chevron.left.forwardslash.chevron.right",
-                    title: localized("原始碼與開源授權"),
-                    detail: localized("取得本版本對應原始碼與 MPL-2.0 授權"),
-                    trailingIcon: "arrow.up.right"
-                ) {
-                    if let url = sourceCodeURL {
-                        openURL(url)
-                    }
-                }
-            }
-            .interfaceSectionSurface()
-
-            Section(header: Text(localized("聯絡方式")).foregroundStyle(DSColor.textSecondary)) {
-                actionRow(
-                    icon: "envelope.fill",
-                    title: localized("電子郵件"),
-                    detail: feedbackEmail,
-                    trailingIcon: "arrow.up.right"
-                ) {
-                    if let url = feedbackMailURL {
-                        openURL(url)
-                    }
-                }
-
-                actionRow(
-                    icon: "number.circle.fill",
-                    title: localized("官方 QQ 群"),
-                    detail: officialQQGroupID,
-                    trailingIcon: "doc.on.doc"
-                ) {
-                    UIPasteboard.general.string = officialQQGroupID
-                    showCopiedQQGroup = true
-                }
-
-                actionRow(
-                    icon: "paperplane.fill",
-                    title: localized("Telegram 群"),
-                    detail: "t.me",
-                    trailingIcon: "arrow.up.right"
-                ) {
-                    if let url = telegramGroupURL {
-                        openURL(url)
-                    }
-                }
+            } footer: {
+                Text(localized("本機功能不收費；AI 等外部服務需自行設定。"))
+                    .dsSectionFooter()
             }
             .interfaceSectionSurface()
 
             Section {
-                actionRow(
-                    icon: "hand.raised.fill",
-                    title: localized("隱私權政策"),
-                    detail: localized("本機資料、同步與第三方來源說明"),
-                    trailingIcon: "arrow.up.right"
-                ) {
-                    if let url = privacyPolicyURL {
-                        openURL(url)
+                if let url = URL(string: "https://github.com/CHANG-JUI-LIN/Yuedu-reader") {
+                    Link(destination: url) {
+                        SettingsRowLabel(localized("上游專案與授權"), systemImage: "chevron.left.forwardslash.chevron.right", role: .action)
                     }
                 }
-
-                actionRow(
-                    icon: "doc.text.fill",
-                    title: localized("使用者協議"),
-                    detail: localized("使用規則、第三方內容與責任邊界"),
-                    trailingIcon: "arrow.up.right"
-                ) {
-                    if let url = userAgreementURL {
-                        openURL(url)
-                    }
-                }
-
-                actionRow(
-                    icon: "creditcard.fill",
-                    title: localized("付費服務條款"),
-                    detail: localized("未來付費功能、訂閱、退款與 Apple 付款規則"),
-                    trailingIcon: "arrow.up.right"
-                ) {
-                    if let url = paidTermsURL {
-                        openURL(url)
-                    }
-                }
-            } header: {
-                Text(localized("政策與協議"))
-                    .foregroundStyle(DSColor.textSecondary)
             } footer: {
-                Text(localized("使用來源配置、第三方服務與未來付費功能前，請先閱讀相關條款。"))
+                Text(localized("本 App 是獨立 Fork，不使用上游帳號、會員或聯絡管道。"))
                     .dsSectionFooter()
             }
             .interfaceSectionSurface()
         }
-        .softScrollEdges()
-        .navigationTitle(localized("關於 Yuedu Reader"))
+        .navigationTitle(localized("關於"))
         .toolbarTitleDisplayMode(.inline)
         .themedAppSurface(for: .settings)
-        .alert(localized("已複製"), isPresented: $showCopiedQQGroup) {
-            Button(localized("好"), role: .cancel) {}
-        } message: {
-            Text(String(format: localized("已複製 QQ 群號：%@"), officialQQGroupID))
-        }
-    }
-
-    private func actionRow(
-        icon: String,
-        title: String,
-        detail: String,
-        trailingIcon: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                // Decorative, as the trailing one: VoiceOver reads the row's title and detail,
-                // not the symbols' names.
-                Image(systemName: icon)
-                    .font(DSFont.fixed(size: 18, weight: .medium))
-                    .frame(width: 28, height: 28)
-                    .foregroundColor(DSColor.textPrimary)
-                    .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .foregroundColor(DSColor.textPrimary)
-                    Text(detail)
-                        .font(DSFont.caption)
-                        .foregroundColor(DSColor.textSecondary)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: 12)
-
-                Image(systemName: trailingIcon)
-                    .font(DSFont.caption)
-                    .foregroundColor(DSColor.textSecondary)
-                    .accessibilityHidden(true)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 
 #Preview {
     SettingsView()
         .environmentObject(BookStore())
-        .environmentObject(SubscriptionStore.shared)
+
 }

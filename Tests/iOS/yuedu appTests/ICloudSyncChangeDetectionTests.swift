@@ -51,7 +51,7 @@ struct ICloudSyncChangeDetectionTests {
         let key = local.id.uuidString
         return ICloudSyncManager.resolveMerge(
             local: [local],
-            remote: [FirestoreSyncRecord(id: key, value: remote, updatedAt: remoteUpdatedAt ?? synced, deleted: false)],
+            remote: [SyncRecord(id: key, value: remote, updatedAt: remoteUpdatedAt ?? synced, deleted: false)],
             shadow: [key: SyncShadowEntry(updatedAt: synced, hash: shadowHash, deleted: false)],
             id: { $0.id.uuidString },
             hash: hash,
@@ -150,7 +150,7 @@ struct ICloudSyncChangeDetectionTests {
         read.lastOpenedDate = synced.addingTimeInterval(3_600)
         let iPhone = ICloudSyncManager.resolveMerge(
             local: [read],
-            remote: [FirestoreSyncRecord(id: key, value: iPadUpload, updatedAt: iPadStamp, deleted: false)],
+            remote: [SyncRecord(id: key, value: iPadUpload, updatedAt: iPadStamp, deleted: false)],
             shadow: [key: SyncShadowEntry(updatedAt: synced, hash: shadowHash, deleted: false)],
             id: { $0.id.uuidString },
             hash: hash,

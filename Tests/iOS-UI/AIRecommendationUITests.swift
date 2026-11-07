@@ -60,7 +60,7 @@ final class AIRecommendationUITests: XCTestCase {
     func testGenerateOpenAndRegenerate() {
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",
-                               "-debug-force-pro", "-debug-ai-endpoint", "http://localhost:18767",
+                               "-debug-ai-endpoint", "http://localhost:18767",
                                "-reset-explore-home", "-reset-ai-recommendations",
                                "-book-source-store-dir", folder.appendingPathComponent("sources").path,
                                "-auto-import-epub", folder.appendingPathComponent("\(title).txt").path,

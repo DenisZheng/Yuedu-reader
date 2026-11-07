@@ -1,4 +1,3 @@
-import StoreKitTest
 import XCTest
 
 // TEMPORARY (SDF crash investigation, 2026-10-29): opens the fixture book from 書架 and closes it
@@ -8,7 +7,6 @@ final class ScratchReaderCloseLoopUITests: XCTestCase {
     private static let fixture = "http://localhost:18771"
     private static let sourceName = "Chrome Source"
     private var directory: URL!
-    private var storeKitSession: SKTestSession?
     private let token = String(Int.random(in: 1000...9999))
     private var title: String { "Chrome Fixture \(token)" }
 
@@ -42,7 +40,6 @@ final class ScratchReaderCloseLoopUITests: XCTestCase {
     func testShelfReaderCloseLoop() throws {
         // A fresh simulator has no StoreKit configuration; AppTransaction.shared then keeps
         // presenting the Apple Account sign-in sheet over the app.
-        storeKitSession = try StoreKitTestSessions.fresh(StoreKitTestSessions.yueduPro())
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-AppleLanguages", "(zh-Hant)",
                                "-AppleLocale", "zh_TW", "-yd_source_disclaimer_accepted", "YES",

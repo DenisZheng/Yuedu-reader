@@ -19,8 +19,7 @@ struct AIRecommendationRow: View {
     @EnvironmentObject private var shelf: BookStore
     @ObservedObject private var recommendations: AIRecommendationStore
     @ObservedObject private var service: AIRecommendationService
-    @ObservedObject private var subscription = SubscriptionStore.shared
-    @State private var showsPaywall = false
+
     @State private var showsMoreChooser = false
     @State private var moreSequence = DismissalSequencedPresentation<MoreAction>()
     @Environment(\.homeRowIsCarousel) private var isCarousel
@@ -49,9 +48,6 @@ struct AIRecommendationRow: View {
         case hide, settings, delete
     }
 
-    private var allowsAI: Bool {
-        ReaderPremiumVisibilityPolicy(isProActive: subscription.isProActive).allowsAI
-    }
 
     private var list: AIRecommendationList? { recommendations.list }
 
@@ -70,9 +66,9 @@ struct AIRecommendationRow: View {
     /// The line the reader wrote, then where the works came from and when (AI 推薦 plan: marked
     /// 「AI 產生」), which the reader's line never replaces.
     private var subtitle: String? {
-        let generated = allowsAI ? list.map {
+        let generated = list.map {
             String(format: localized("AI 產生 · %@ · %@"), $0.service, $0.generatedAt.formatted(date: .abbreviated, time: .omitted))
-        } : nil
+        }
         let lines = [section.subtitle.isEmpty ? nil : section.subtitle, generated].compactMap { $0 }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
@@ -80,18 +76,18 @@ struct AIRecommendationRow: View {
     /// The list whose missing covers are filled once the row shows (feedback #10); none in the
     /// editor's preview, or without Pro, where no card is drawn.
     private var coverFillList: Date? {
-        canGenerate && allowsAI ? list?.generatedAt : nil
+        canGenerate ? list?.generatedAt : nil
     }
 
     private var canRegenerate: Bool {
-        canGenerate && allowsAI && list != nil && !service.state.isRunning
+        canGenerate && list != nil && !service.state.isRunning
     }
 
     /// As the 頂部輪播圖 it draws its band under the header and the list while the list shows
     /// alone; a status (產生中, a failure) draws the row without it, so its text keeps the page's
     /// colours.
     private var drawsBand: Bool {
-        guard isCarousel, allowsAI, !cards.isEmpty, case .idle = service.state else { return false }
+        guard isCarousel, !cards.isEmpty, case .idle = service.state else { return false }
         return true
     }
 
@@ -99,16 +95,12 @@ struct AIRecommendationRow: View {
         VStack(alignment: .leading, spacing: drawsBand ? DSSpacing.lg : DSSpacing.md) {
             header.homeRowControl()
             status.homeRowControl()
-            if allowsAI, !cards.isEmpty {
+            if !cards.isEmpty {
                 HomeSectionCards(layout: section.layout, cards: cards, rowID: rowID, hasShowAll: false, open: open,
                                  bandCover: drawsBand ? $bandCover : nil)
             }
         }
         .modifier(HomeBandGround(cover: bandCover, isActive: drawsBand))
-        .sheet(isPresented: $showsPaywall) {
-            PaywallView(highlightedFeature: .aiReading)
-                .environmentObject(subscription)
-        }
         .task(id: coverFillList) {
             // A list saved before its covers were filled; the service asks each work once.
             guard coverFillList != nil else { return }
@@ -145,7 +137,7 @@ struct AIRecommendationRow: View {
     /// The ••• and the name's long press offer the same.
     @ViewBuilder
     private var menuItems: some View {
-        if canGenerate, allowsAI, list != nil {
+        if canGenerate, list != nil {
             Button(localized("重新產生"), systemImage: "arrow.clockwise", action: generate)
                 .disabled(!canRegenerate)
         }
@@ -189,7 +181,7 @@ struct AIRecommendationRow: View {
 
     private var moreChoices: [DismissalSequencedAction<MoreAction>] {
         var choices: [DismissalSequencedAction<MoreAction>] = []
-        if canGenerate, allowsAI, list != nil {
+        if canGenerate, list != nil {
             choices.append(DismissalSequencedAction(route: .regenerate, title: localized("重新產生"),
                                                     systemImage: "arrow.clockwise", isEnabled: canRegenerate))
         }
@@ -228,33 +220,26 @@ struct AIRecommendationRow: View {
 
     @ViewBuilder
     private var status: some View {
-        if !allowsAI {
-            message(localized("需要 Pro"), systemImage: "lock.fill") {
-                Button(localized("升級")) { showsPaywall = true }
-                    .buttonStyle(.onAccentProminent)
-                    .accessibilityIdentifier("home.ai.upgrade")
-            }
-        } else {
-            switch service.state {
-            case .generating:
-                progress(localized("正在產生推薦…"))
-            case .resolving(let completed, let total):
-                progress(String(format: localized("正在查詢封面與簡介（%d/%d）"), completed, total))
-            case .failed(let reason):
-                message(reason, systemImage: "exclamationmark.triangle") {
-                    if case .failure = service.service() {
-                        settingsLink
-                    } else {
-                        Button(localized("重試"), action: generate)
-                            .buttonStyle(.bordered)
-                            .disabled(!canGenerate)
-                            .accessibilityIdentifier("home.ai.retry")
-                    }
+        switch service.state {
+        case .generating:
+            progress(localized("正在產生推薦…"))
+        case .resolving(let completed, let total):
+            progress(String(format: localized("正在查詢封面與簡介（%d/%d）"), completed, total))
+        case .failed(let reason):
+            message(reason, systemImage: "exclamationmark.triangle") {
+                if case .failure = service.service() {
+                    settingsLink
+                } else {
+                    Button(localized("重試"), action: generate)
+                        .buttonStyle(.bordered)
+                        .disabled(!canGenerate)
+                        .accessibilityIdentifier("home.ai.retry")
                 }
-            case .idle:
-                if list == nil { start }
             }
+        case .idle:
+            if list == nil { start }
         }
+
     }
 
     @ViewBuilder

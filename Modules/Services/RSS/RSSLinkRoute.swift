@@ -35,7 +35,7 @@ enum RSSLinkRoute: Hashable, Sendable {
     /// http(s): the in-app Safari sheet.
     case inApp(InAppWebURL)
     /// Any other scheme an app may own — `mailto:`, `tel:`, `itms-apps:`, and our own
-    /// `legado://` / `yuedu://`, which come back through the app's `.onOpenURL`.
+    /// 可识别的旧导入链接改投 Fork 的 scheme，不争用原版 App 的注册。
     case system(URL)
     /// Nothing can open it: script/inline/local schemes, a relative path with no web
     /// base, or text that is not a URL. Callers hide the action (maintainer, 2026-10-20).
@@ -84,6 +84,13 @@ enum RSSLinkRoute: Hashable, Sendable {
         guard let scheme = url.scheme?.lowercased(), !scheme.isEmpty else { return .unopenable }
         if scheme == "http" || scheme == "https" {
             return InAppWebURL(url).map(RSSLinkRoute.inApp) ?? .unopenable
+        }
+        if (scheme == "legado" || scheme == "yuedu"),
+           BookSourceImportDeepLink.target(from: url) != nil {
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return .unopenable }
+            components.scheme = BookSourceImportDeepLink.appScheme
+            guard let forkURL = components.url else { return .unopenable }
+            return .system(forkURL)
         }
         return unopenableSchemes.contains(scheme) ? .unopenable : .system(url)
     }

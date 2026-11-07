@@ -26,9 +26,7 @@ struct AppearanceThemePresetTests {
     @Test("free users get classic plus six built-in appearance themes")
     func freeThemeCount() {
         #expect(AppearanceThemePreset.freeSolidPresets.count == 6)
-        #expect(AppearanceThemePreset.freeSolidPresets.allSatisfy { !$0.requiresPro })
         #expect(AppearanceThemePreset.classic.isClassic)
-        #expect(!AppearanceThemePreset.classic.requiresPro)
         #expect(AppearanceThemePreset.allDefaultPresets.first?.id == AppearanceThemePreset.classicID)
     }
 
@@ -118,7 +116,7 @@ struct AppearanceThemePresetTests {
         var colors = ocean.customCopy(name: ocean.localizedName)
         colors.accentHex = 0xFF0000
         gs.appearanceBuiltInThemeColors = [ocean.id: colors]
-        let edited = try #require(gs.appearancePreset(id: ocean.id, isProActive: true))
+        let edited = try #require(gs.appearancePreset(id: ocean.id))
         #expect(edited.accent.rgbHex == 0xFF0000)
         #expect(edited.id == ocean.id)
         #expect(!edited.isCustom)
@@ -128,7 +126,7 @@ struct AppearanceThemePresetTests {
         var classicColors = AppearanceThemePreset.classic.customCopy(name: "默認")
         classicColors.accentHex = 0x00AA00
         gs.appearanceBuiltInThemeColors[AppearanceThemePreset.classicID] = classicColors
-        let classic = try #require(gs.appearancePreset(id: AppearanceThemePreset.classicID, isProActive: true))
+        let classic = try #require(gs.appearancePreset(id: AppearanceThemePreset.classicID))
         #expect(!classic.isClassic)
         #expect(!classic.palette(for: .dark).isClassic)
         #expect(AppearanceThemePreset.classic.isClassic)
@@ -136,9 +134,9 @@ struct AppearanceThemePresetTests {
 
     /// 配色 on a built-in theme is Pro, like a theme of the user's own: without Pro the
     /// theme wears the colours it ships with, and the edits come back with Pro.
-    @Test("a built-in theme's edited colours need Pro")
+    @Test("内置主题的本地编辑始终生效")
     @MainActor
-    func builtInColourEditsNeedPro() throws {
+    func builtInColourEditsRemainActive() throws {
         let gs = GlobalSettings.shared
         let savedColors = gs.appearanceBuiltInThemeColors
         let savedLight = gs.appearanceThemeID
@@ -153,19 +151,19 @@ struct AppearanceThemePresetTests {
         gs.appearanceBuiltInThemeColors = [ocean.id: colors]
         gs.appearanceThemeID = ocean.id
 
-        #expect(gs.appearanceBaseTheme(for: .light, isProActive: true).accent.rgbHex == 0xFF0000)
-        let withoutPro = gs.appearanceBaseTheme(for: .light, isProActive: false)
-        #expect(withoutPro.id == ocean.id)
-        #expect(withoutPro.accent.rgbHex == ocean.accent.rgbHex)
-        #expect(gs.builtInThemePreset(ocean, isProActive: false).accent.rgbHex == ocean.accent.rgbHex)
+        #expect(gs.appearanceBaseTheme(for: .light).accent.rgbHex == 0xFF0000)
+        let selected = gs.appearanceBaseTheme(for: .light)
+        #expect(selected.id == ocean.id)
+        #expect(selected.accent.rgbHex == 0xFF0000)
+        #expect(gs.builtInThemePreset(ocean).accent.rgbHex == 0xFF0000)
         #expect(gs.appearanceBuiltInThemeColors[ocean.id] != nil)
     }
 
     /// Until launch has read the entitlement, the Pro look is worn optimistically; after
     /// that, no Pro means no Pro — a theme of the user's own falls back to 默認.
-    @Test("the Pro look is optimistic only until the entitlement is read")
+    @Test("本地主题选择不等待授权，删除后恢复默认主题")
     @MainActor
-    func proLookIsOptimisticOnlyUntilResolved() throws {
+    func customThemeIsUsedUntilDeleted() throws {
         let gs = GlobalSettings.shared
         let savedThemes = gs.customAppearanceThemes
         let savedLight = gs.appearanceThemeID
@@ -177,10 +175,9 @@ struct AppearanceThemePresetTests {
         }
 
         let custom = gs.saveCurrentAppearanceAsTheme(named: "Optimistic", basedOn: AppearanceThemePreset.freeSolidPresets[0])
-        #expect(gs.appThemeOnScreen(for: .light, isProActive: false, hasResolvedEntitlements: false)?.id == custom.id)
-        #expect(gs.appThemeOnScreen(for: .light, isProActive: true, hasResolvedEntitlements: true)?.id == custom.id)
-        #expect(gs.appThemeOnScreen(for: .light, isProActive: false, hasResolvedEntitlements: true) == nil)
+        #expect(gs.appThemeOnScreen(for: .light)?.id == custom.id)
         gs.deleteCustomAppearanceTheme(id: custom.id)
+        #expect(gs.appThemeOnScreen(for: .light) == nil)
     }
 
     /// 重新命名 from a tile's long press.

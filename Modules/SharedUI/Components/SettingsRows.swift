@@ -182,33 +182,6 @@ struct SettingsSliderRow<Value: BinaryFloatingPoint>: View where Value.Stride: B
     }
 }
 
-/// A Pro control seen without Pro: its name, 需要 Pro and a lock, opening the paywall.
-/// In view rather than hidden — a reader has to see a feature where it would be used
-/// to want it (2026-09-27).
-struct SettingsLockedRow: View {
-    let title: String
-    let systemImage: String
-    let onOpenPaywall: () -> Void
-
-    var body: some View {
-        Button(action: onOpenPaywall) {
-            LabeledContent {
-                HStack(spacing: DSSpacing.xs) {
-                    Text(localized("需要 Pro"))
-                    Image(systemName: "lock.fill")
-                        .font(DSFont.caption)
-                }
-                .foregroundStyle(DSColor.textSecondary)
-                // Spoken once, as the row's value below.
-                .accessibilityHidden(true)
-            } label: {
-                SettingsRowLabel(title, systemImage: systemImage)
-            }
-        }
-        .accessibilityValue(localized("需要 Pro"))
-    }
-}
-
 #Preview {
     Form {
         Section {
@@ -229,7 +202,6 @@ struct SettingsLockedRow: View {
             Button {} label: {
                 SettingsRowLabel("重設排版", systemImage: "arrow.counterclockwise", role: .action)
             }
-            SettingsLockedRow(title: "正則高亮", systemImage: "text.magnifyingglass") {}
         }
     }
 }

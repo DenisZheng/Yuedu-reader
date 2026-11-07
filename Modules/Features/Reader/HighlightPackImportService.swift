@@ -13,11 +13,10 @@ enum HighlightPackImportService {
         fallbackName: String?
     ) async throws -> ReaderSettingsImportPlan {
         let settings = GlobalSettings.shared
-        let wearsPro = SubscriptionStore.shared.hasAccess(.readerThemePacks)
         // Reeden's `{primaryColor}` is its reading scheme's accent; ours is the theme's.
         let context = HighlightPackImporter.Context(
-            lightPrimaryHex: settings.appearanceTheme(for: .light, isProActive: wearsPro).accent.rgbHex,
-            darkPrimaryHex: settings.appearanceTheme(for: .dark, isProActive: wearsPro).accent.rgbHex,
+            lightPrimaryHex: settings.appearanceTheme(for: .light).accent.rgbHex,
+            darkPrimaryHex: settings.appearanceTheme(for: .dark).accent.rgbHex,
             bodySize: Double(ReaderConfig.shared.fontSize)
         )
         let pack = try await HighlightPackImporter.parse(

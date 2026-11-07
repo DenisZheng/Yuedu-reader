@@ -11,7 +11,6 @@ struct OnboardingPresentation: ViewModifier {
     @Bindable private var gs = GlobalSettings.shared
     @ObservedObject private var availability = PublicLibraryAvailability.shared
     @ObservedObject private var aggregation = AggregationSettingsStore.shared
-    @EnvironmentObject private var subscriptionStore: SubscriptionStore
 
     func body(content: Content) -> some View {
         content
@@ -34,8 +33,7 @@ struct OnboardingPresentation: ViewModifier {
             // the public libraries are named once it is known not to be.
             librariesAvailable: availability.countryCode != nil && availability.isAvailable,
             // The languages 探索 makes a new home for (`ExploreHome.defaultsContext`).
-            languages: aggregation.readingLanguages.languages,
-            lockedFeatures: Set(PremiumFeature.allCases.filter { !subscriptionStore.hasAccess($0) })
+            languages: aggregation.readingLanguages.languages
         )
     }
 
@@ -249,8 +247,7 @@ private extension View {
         content: OnboardingContent(
             visibleTabs: RootTabItem.tabs,
             librariesAvailable: true,
-            languages: ["zh"],
-            lockedFeatures: Set(PremiumFeature.allCases)
+            languages: ["zh"]
         ),
         finish: { _ in }
     )
@@ -261,8 +258,7 @@ private extension View {
         content: OnboardingContent(
             visibleTabs: [.settings, .search],
             librariesAvailable: false,
-            languages: ["ko"],
-            lockedFeatures: []
+            languages: ["ko"]
         ),
         finish: { _ in }
     )

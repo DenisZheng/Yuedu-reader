@@ -281,9 +281,6 @@ struct FixedPageReaderControlsOverlay: View {
     var onOpenTouchZoneEditor: () -> Void
     @State private var showSettings = false
     @State private var pendingTouchZoneEditor = false
-    /// iOS 17: the paywall a locked setting asked for, presented once settings is gone.
-    @State private var pendingPaywall: PremiumFeature?
-    @State private var paywallFeature: PremiumFeature?
 
     var body: some View {
         GeometryReader { geometry in
@@ -330,10 +327,6 @@ struct FixedPageReaderControlsOverlay: View {
                 pendingTouchZoneEditor = false
                 onOpenTouchZoneEditor()
             }
-            if let feature = pendingPaywall {
-                pendingPaywall = nil
-                paywallFeature = feature
-            }
         }) {
             FixedPageReaderSettingsView(
                 state: state,
@@ -341,18 +334,8 @@ struct FixedPageReaderControlsOverlay: View {
                 onOpenTouchZoneEditor: {
                     pendingTouchZoneEditor = true
                     showSettings = false
-                },
-                onOpenPaywall: ReaderSettingsPresentationPolicy.requiresFirstLevelImporter
-                    ? { feature in
-                        pendingPaywall = feature
-                        showSettings = false
-                    }
-                    : nil
+                }
             )
-        }
-        .sheet(item: $paywallFeature) { feature in
-            PaywallView(highlightedFeature: feature)
-                .environmentObject(SubscriptionStore.shared)
         }
     }
 
@@ -437,13 +420,8 @@ struct FixedPageReaderSettingsView: View {
     /// `Technotes/iOS17ReaderNavigationWatchdog.md`.
     var onClose: () -> Void
     var onOpenTouchZoneEditor: () -> Void
-    /// iOS 17: hands the paywall to the controls overlay, which presents it once this
-    /// sheet is gone — a sheet asked for from inside this one can be dropped there
-    /// (`ReaderSettingsPresentationPolicy`). Nil where this view presents it itself.
-    var onOpenPaywall: ((PremiumFeature) -> Void)? = nil
-    @ObservedObject private var subscriptionStore = SubscriptionStore.shared
+
     @Bindable private var globalSettings = GlobalSettings.shared
-    @State private var paywallFeature: PremiumFeature?
 
     private var configuration: FixedPageReaderConfiguration { state.fixedPageReaderConfiguration }
 
@@ -516,28 +494,10 @@ struct FixedPageReaderSettingsView: View {
                 }
                 if configuration.layout == .paged {
                     Section {
-                        if ReaderPremiumVisibilityPolicy(isProActive: subscriptionStore.isProActive).showsTouchZoneEditor {
-                            Button(action: onOpenTouchZoneEditor) {
-                                Label(localized("翻頁區塊編輯"), systemImage: "hand.tap")
-                            }
-                        } else {
-                            // Seen without Pro too, locked (2026-09-27): the paywall, not the editor.
-                            Button {
-                                requestPaywall(.touchZoneEditor)
-                            } label: {
-                                HStack {
-                                    Label(localized("翻頁區塊編輯"), systemImage: "hand.tap")
-                                        .foregroundStyle(DSColor.textPrimary)
-                                    Spacer(minLength: DSSpacing.md)
-                                    Text(localized("需要 Pro"))
-                                        .foregroundStyle(DSColor.textSecondary)
-                                    Image(systemName: "lock.fill")
-                                        .font(DSFont.caption)
-                                        .foregroundStyle(DSColor.textSecondary)
-                                        .accessibilityHidden(true)
-                                }
-                            }
+                        Button(action: onOpenTouchZoneEditor) {
+                            Label(localized("翻頁區塊編輯"), systemImage: "hand.tap")
                         }
+
                     }
                 }
             }
@@ -551,24 +511,10 @@ struct FixedPageReaderSettingsView: View {
                     }
                 }
             }
-            .sheet(item: $paywallFeature) { feature in
-                PaywallView(highlightedFeature: feature)
-                    .environmentObject(subscriptionStore)
-            }
         }
         // Search/detail and shelf readers have different navigation hosts. This
         // sheet owns its control tint rather than inheriting the reader bar's white.
         .tint(DSColor.accent)
-    }
-
-    /// A locked control's paywall: from this sheet on iOS 18, from the controls overlay on
-    /// iOS 17 (`onOpenPaywall`) — the same split as the flowing reader's settings.
-    private func requestPaywall(_ feature: PremiumFeature) {
-        if let onOpenPaywall {
-            onOpenPaywall(feature)
-        } else {
-            paywallFeature = feature
-        }
     }
 
     /// Switches this book to `mode`, keeping the toggles it has.
@@ -698,9 +644,8 @@ struct FixedPageChapterListView: View {
 }
 
 #Preview("Settings") {
-    // Paged by default, so 翻頁區塊編輯 shows — locked unless Pro is active.
     FixedPageReaderSettingsView(state: FixedPageReaderState(), onClose: {}, onOpenTouchZoneEditor: {})
-        .environmentObject(SubscriptionStore.shared)
+
 }
 
 #Preview("Settings — manga") {
@@ -709,5 +654,5 @@ struct FixedPageChapterListView: View {
     state.isManga = true
     state.followsMangaDefault = true
     return FixedPageReaderSettingsView(state: state, onClose: {}, onOpenTouchZoneEditor: {})
-        .environmentObject(SubscriptionStore.shared)
+
 }

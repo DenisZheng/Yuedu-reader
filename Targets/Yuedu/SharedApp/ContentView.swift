@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: BookStore
-    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -48,28 +48,13 @@ struct ContentView: View {
         gs.appearanceWindowColorScheme
     }
 
-    /// The theme on screen, nil for 默認: the surfaces and the tint wear the same one.
-    /// (The tint used to skip the launch-time optimism the surfaces had, so a Pro
-    /// theme's colours came up under 默認's accent until StoreKit answered.)
     private var appearanceTheme: AppearanceThemePreset? {
         resolvedAppTheme(for: effectiveColorScheme)
     }
 
-    /// The theme whose surface colors should retint the whole app, or nil for
-    /// system colors. Both appearances retint: `appearanceTheme(for:)` hands back
-    /// the theme's light palette in light mode and its derived dark palette in
-    /// dark mode, so dark mode is the theme's dark version rather than plain
-    /// system black. Classic = no override.
-    ///
-    /// On cold launch the entitlement is still being read, and a Pro user's theme is
-    /// worn optimistically until it is — see `GlobalSettings.appThemeOnScreen`. The
-    /// optimism used to last as long as `hasAccess` was false, so a user without Pro
-    /// kept a Pro theme for good (2026-09-29).
     private func resolvedAppTheme(for scheme: ColorScheme) -> AppearanceThemePreset? {
         gs.appThemeOnScreen(
-            for: scheme,
-            isProActive: subscriptionStore.hasAccess(.readerThemePacks),
-            hasResolvedEntitlements: subscriptionStore.hasResolvedEntitlements
+            for: scheme
         )
     }
 
@@ -131,7 +116,6 @@ struct ContentView: View {
             ImportedBookPresentation(
                 request: importDrainer.lastOutcome == nil ? importDrainer.readerRequest : nil,
                 store: store,
-                subscriptionStore: subscriptionStore,
                 didPresent: importDrainer.didPresentReader(requestID:),
                 customizationRequest: importDrainer.lastOutcome == nil ? importDrainer.customizationRequest : nil,
                 didPresentCustomization: importDrainer.didPresentCustomization(requestID:),
@@ -217,12 +201,10 @@ struct ContentView: View {
         }
         .onAppear {
             selectedRootTab = gs.fallbackRootTab(for: selectedRootTab)
-            FeedbackScreenshotPrompt.shared.start()
             #if DEBUG
-            // Pairs with `-open-diagnostics` / `-open-feedback-center` in `SettingsView`:
-            // land on 設定 so the pushed page can be screenshotted straight from launch.
+            // 配合 SettingsView 的本地诊断调试入口。
             let arguments = ProcessInfo.processInfo.arguments
-            if arguments.contains("-open-diagnostics") || arguments.contains("-open-feedback-center") {
+            if arguments.contains("-open-diagnostics") {
                 selectedRootTab = .settings
             }
             #endif
@@ -275,7 +257,7 @@ struct ContentView: View {
         }
         // What plays on with no reader on screen: the bar over the tabs, and the audiobook player
         // that grows out of it. Around everything above, since it re-hosts what it wraps.
-        .modifier(NowPlayingPopupHost(store: store, subscriptionStore: subscriptionStore, tabBar: rootTabBar))
+        .modifier(NowPlayingPopupHost(store: store, tabBar: rootTabBar))
         // Outermost, so the sheets and overlays above resolve their colours from it too:
         // `DSColor`'s themed colours read the themes from here when they draw
         // (`AppThemesTrait`), and follow a switch without their views being rebuilt.
@@ -333,8 +315,7 @@ struct ContentView: View {
             ForEach(gs.visibleRootTabs) { tab in
                 rootTabContent(for: tab)
                     .modifier(ThemedSurfaceBackground(
-                        scope: AppearancePageBackgroundScope(rawValue: tab.rawValue) ?? .global,
-                        isProActive: subscriptionStore.hasAccess(.readerThemePacks)
+                        scope: AppearancePageBackgroundScope(rawValue: tab.rawValue) ?? .global
                     ))
                     .background { RootTabBarHider(visibility: rootTabBar) }
                     .tag(tab)
@@ -435,18 +416,6 @@ struct ContentView: View {
     }
 }
 
-/// Retints scrollable Form/List surfaces to the active app theme by hiding the
-/// system background and painting the themed page color behind — plus, when the
-/// user configured a page background (Pro), the per-scope gradient/image layer.
-/// The default palette resolves to the system grouped background, so default users
-/// keep the same appearance while the view structure stays stable across updates.
-/// The book a closed reader is still narrating, reopened full screen from the app root's
-/// now-playing bar. An audiobook's player opens out of the bar itself (`NowPlayingPopupHost`).
-///
-/// Its own view, observing `NowPlayingHub`, so the root does not: the hub publishes on every
-/// spoken sentence (`currentSegmentIndex`), and the root observing it re-ran `ContentView.body`
-/// — the RSS unread count, every tab's icon — once per sentence for as long as TTS played.
-/// Re-running this modifier's body does not re-run `content`.
 private struct AudiobookPlayerPresentation: ViewModifier {
     @ObservedObject private var hub = NowPlayingHub.shared
     let store: BookStore
@@ -484,14 +453,10 @@ struct NowPlayingArtworkDestinationView: View {
 
 private struct ThemedSurfaceBackground: ViewModifier {
     let scope: AppearancePageBackgroundScope
-    let isProActive: Bool
     @Bindable private var gs = GlobalSettings.shared
     @Environment(\.colorScheme) private var colorScheme
 
-    /// Custom page background for this tab, with global fallback. Inactive when
-    /// the Pro entitlement lapses so backgrounds degrade like themes do.
     private var pageBackgroundSlice: AppearancePageBackgroundSlice? {
-        guard isProActive else { return nil }
         return gs.resolvedPageBackgroundSlice(for: scope, colorScheme: colorScheme)
     }
 

@@ -52,8 +52,9 @@ Pods/
 # Claude Code skills (local dev only)
 .claude/
 
-# Agent instructions (local dev only)
+# 根目录项目指南纳入版本管理；其他目录的本地指南仍忽略
 AGENTS.md
+!/AGENTS.md
 
 # Local SPM package forks (local dev only)
 LocalPackages/

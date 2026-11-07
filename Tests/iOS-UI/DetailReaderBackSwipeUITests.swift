@@ -1,5 +1,4 @@
 import XCTest
-import StoreKitTest
 
 /// Prepare with scripts/navigation_swipe_fixture.py and serve localhost:18765. Run `clean` then
 /// `prepare` before each run of the suite: its manga tests add the fixture's manga to the shelf
@@ -12,12 +11,6 @@ import StoreKitTest
 /// the reader wears them over `-yd_scroll_mode` / `-yd_page_turn_style`, and a scroll-mode
 /// test had left scroll mode there, so every paged test after it opened a scrolling reader.
 final class DetailReaderBackSwipeUITests: XCTestCase {
-    private var storeKitSession: SKTestSession?
-
-    @MainActor
-    private func configureStoreKit() throws {
-        storeKitSession = try StoreKitTestSessions.fresh(StoreKitTestSessions.yueduPro())
-    }
 
     /// Each fixture source's one discover category (scripts/navigation_swipe_fixture.py).
     private static let categories = ["Navigation Swipe Fixture": "Navigation Test", "Navigation Manga Fixture": "Manga Test",
@@ -127,7 +120,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testGenreLinkAndRelatedWorksOpenTheSourcesCategory() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings, search)"]
@@ -171,7 +163,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testRelatedWorksCategoryMenu() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings, search)",
@@ -214,7 +205,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testAudiobookGenreLinkOpensTheSourcesCategory() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings, search)"]
@@ -251,11 +241,9 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     private func exerciseBareBook(pro: Bool) throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(zh-Hant)",
                                "-AppleLocale", "zh_TW", "-yd_root_tab_visible_ids", "(explore, settings)"]
-        if pro { app.launchArguments.append("-debug-force-pro") }
         app.launch()
         // A theme pack brings its own tab bar, which can open on 書架.
         let explore = app.tabBars.buttons["探索"].firstMatch
@@ -279,7 +267,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testReadButtonCarriesTheResumeChapter() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(zh-Hant)",
                                "-AppleLocale", "zh_TW", "-yd_root_tab_visible_ids", "(explore, settings)",
@@ -331,7 +318,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     private func exerciseNativeEntry(fromSearch: Bool) throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings, search)",
@@ -377,7 +363,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testAuthorSearchReaderFillsTheWindow() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings, search)",
@@ -449,7 +434,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     private func exerciseMangaEntry(fromSearch: Bool) throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings, search)"]
@@ -503,7 +487,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testSearchTabMangaResultOpensEveryTime() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
                                "-yd_root_tab_visible_ids", "(bookshelf, explore, settings, search)"]
@@ -591,7 +574,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testSearchMangaDetailTakesTouchesAfterReadingModeChanges() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
                                "-yd_root_tab_visible_ids", "(bookshelf, explore, settings, search)"]
@@ -665,7 +647,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testSearchTabWorkPushesAndPopsTenTimes() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
                                "-yd_root_tab_visible_ids", "(bookshelf, explore, settings, search)"]
@@ -702,7 +683,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testShelfMangaOpensOnThePage() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)",
@@ -905,7 +885,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     private func openMangaFromExplore(extraArguments: [String] = [],
                                       addingToLibrary: Bool = false) throws -> XCUIApplication {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)",
@@ -1024,7 +1003,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testTapWithMenuUpOnlyPutsMenuAway() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)",
@@ -1072,7 +1050,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     private func exerciseMenuHidesOnPageTurn(style: String, scroll: Bool = false) throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)",
@@ -1114,7 +1091,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testReaderControlsFromExploreAreAccessible() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)",
@@ -1145,7 +1121,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testShelfOnlineBookOpensWorkDetail() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)"]
@@ -1216,7 +1191,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testWorkDetailShowsTheShelfCopysEditedTitle() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)"]
@@ -1344,7 +1318,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testReaderOpensWorkDetailAndReturnsToIt() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)",
@@ -1418,7 +1391,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testShelfListExposesOneBookButtonAndOpensReader() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)",
@@ -1461,7 +1433,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     func testListeningStartsCapsuleAndRolePanelRemainsAvailable() throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)",
@@ -1521,7 +1492,6 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     @MainActor
     private func exerciseReader(style: String, scroll: Bool = false) throws {
         continueAfterFailure = false
-        try configureStoreKit()
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-yd_root_tab_visible_ids", "(explore, settings)",

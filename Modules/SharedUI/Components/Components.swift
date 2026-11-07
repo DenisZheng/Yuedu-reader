@@ -105,14 +105,13 @@ struct IconConsistentLabelStyle: LabelStyle {
 struct PageBackgroundView: View {
     let scope: AppearancePageBackgroundScope
     @Bindable private var gs = GlobalSettings.shared
-    @ObservedObject private var subscriptionStore = SubscriptionStore.shared
+
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
             DSColor.groupedBackground
-            if let slice = Self.slice(for: scope, colorScheme: colorScheme, settings: gs,
-                                      subscriptions: subscriptionStore) {
+            if let slice = Self.slice(for: scope, colorScheme: colorScheme, settings: gs) {
                 AppearancePageBackgroundLayerView(slice: slice)
             }
         }
@@ -123,9 +122,8 @@ struct PageBackgroundView: View {
     @MainActor
     static func slice(
         for scope: AppearancePageBackgroundScope, colorScheme: ColorScheme,
-        settings: GlobalSettings, subscriptions: SubscriptionStore
+        settings: GlobalSettings
     ) -> AppearancePageBackgroundSlice? {
-        guard subscriptions.hasAccess(.readerThemePacks) else { return nil }
         return settings.resolvedPageBackgroundSlice(for: scope, colorScheme: colorScheme)
     }
 }
@@ -133,11 +131,10 @@ struct PageBackgroundView: View {
 private struct ThemedAppSurfaceModifier: ViewModifier {
     let scope: AppearancePageBackgroundScope
     @Bindable private var gs = GlobalSettings.shared
-    @ObservedObject private var subscriptionStore = SubscriptionStore.shared
+
     @Environment(\.colorScheme) private var colorScheme
 
     private var slice: AppearancePageBackgroundSlice? {
-        guard subscriptionStore.hasAccess(.readerThemePacks) else { return nil }
         return gs.resolvedPageBackgroundSlice(for: scope, colorScheme: colorScheme)
     }
 
@@ -169,15 +166,14 @@ private struct ThemedAppSurfaceModifier: ViewModifier {
 private struct PageBackgroundToolbarModifier: ViewModifier {
     let scope: AppearancePageBackgroundScope
     @Bindable private var gs = GlobalSettings.shared
-    @ObservedObject private var subscriptionStore = SubscriptionStore.shared
+
     @Environment(\.colorScheme) private var colorScheme
     /// The themes from the environment rather than `AppearanceThemePreset.activeAppThemes`,
     /// which SwiftUI cannot observe: this modifier redraws only for what it reads.
     @Environment(\.appThemes) private var appThemes
 
     private var hasBackground: Bool {
-        if subscriptionStore.hasAccess(.readerThemePacks),
-           gs.resolvedPageBackgroundSlice(for: scope, colorScheme: colorScheme) != nil {
+        if gs.resolvedPageBackgroundSlice(for: scope, colorScheme: colorScheme) != nil {
             return true
         }
         // 默認 with its 背景 as shipped keeps the system's page, and the bar that goes with it.

@@ -17,7 +17,7 @@ struct ReaderNoteEditorRoute: Identifiable {
     let date: Date
     let style: AnnotationStyle
     let color: AnnotationColor
-    /// Pro 過期又已經有筆記時為 false：內容讀得到，但不能改。
+    /// 编辑器的只读/编辑模式；正常本地笔记允许编辑。
     let isEditable: Bool
 }
 
@@ -34,7 +34,6 @@ struct ReaderNoteDeleteRoute: Identifiable {
 /// 所以一律等它真的 dismiss（見 Technotes/iOS17MenuModalPresentation.md）。
 enum ReaderNoteEditorFollowUp {
     case confirmDelete(ReaderNoteDeleteRoute)
-    case paywall
 }
 
 extension ReaderView {
@@ -46,31 +45,15 @@ extension ReaderView {
     private static let defaultNoteAnnotationStyle = AnnotationStyle.highlight
     private static let defaultNoteAnnotationColor = AnnotationColor.yellow
 
-    var readerPremiumVisibility: ReaderPremiumVisibilityPolicy {
-        ReaderPremiumVisibilityPolicy(isProActive: subscriptionStore.isProActive)
-    }
-
     /// 開啟筆記編輯頁。選取範圍上還沒有標註時先補一條預設標註——「有筆記的段落一定有標註」
     /// 是圓圈標記能畫出來的前提。
-    ///
-    /// Pro 的分流全部收在這裡（引擎層只送請求）：沒訂閱時**新增**筆記直接導向付費牆，
-    /// 已經寫過的筆記則照常打開、只是唯讀。
     func openNoteEditor(_ request: CoreTextNoteEditRequest) {
         let position = request.position
         guard spineChapters.indices.contains(position.spineIndex), request.length > 0 else { return }
 
-        let canEdit = readerPremiumVisibility.allowsParagraphNoteEditing
-        let hasExistingNote = !request.existingNote
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty
-        guard canEdit || hasExistingNote else {
-            paywallFeature = .paragraphNote
-            return
-        }
-
         let range = NSRange(location: position.charOffset, length: request.length)
 
-        if canEdit, store.textAnnotationBookmark(
+        if store.textAnnotationBookmark(
             bookId: bookId,
             spineIndex: position.spineIndex,
             range: range
@@ -107,7 +90,7 @@ extension ReaderView {
             date: bookmark.note.isEmpty ? Date() : bookmark.date,
             style: bookmark.annotationStyle ?? Self.defaultNoteAnnotationStyle,
             color: bookmark.annotationColor ?? Self.defaultNoteAnnotationColor,
-            isEditable: canEdit
+            isEditable: true
         )
     }
 

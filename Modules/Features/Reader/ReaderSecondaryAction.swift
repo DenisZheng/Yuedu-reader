@@ -30,16 +30,12 @@ struct ReaderSecondaryAction: Identifiable {
     let id: ID
     let icon: String
     let label: String
-    /// Needs Yuedu Pro the reader does not have (AI 助手, 翻譯): shown marked, and `action`
-    /// opens the paywall instead.
-    let isLocked: Bool
     let action: () -> Void
 
-    init(id: ID, icon: String, label: String, isLocked: Bool = false, action: @escaping () -> Void) {
+    init(id: ID, icon: String, label: String, action: @escaping () -> Void) {
         self.id = id
         self.icon = icon
         self.label = label
-        self.isLocked = isLocked
         self.action = action
     }
 }
@@ -62,12 +58,10 @@ enum ReaderModernBookCardRoute: Hashable {
 
 /// What the reader quick panel asked to open after it closes.
 ///
-/// Both destinations are sheets, and iOS drops a sheet requested while the sheet
+/// Settings is a sheet, and iOS drops a sheet requested while the sheet
 /// it came from is still dismissing. Recording the request and running it from the
 /// panel's real `onDismiss` is the contract in
 /// `Technotes/iOS17MenuModalPresentation.md`.
 enum ReaderQuickPanelRoute: Hashable {
     case settings
-    /// A locked control in the panel (導入圖片背景 without Pro).
-    case paywall(PremiumFeature)
 }

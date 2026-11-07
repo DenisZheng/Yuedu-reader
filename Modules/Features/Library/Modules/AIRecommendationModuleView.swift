@@ -6,9 +6,8 @@ struct AIRecommendationModuleView: View {
     @EnvironmentObject private var shelf: BookStore
     @ObservedObject private var service: AIRecommendationService
     @ObservedObject private var recommendations: AIRecommendationStore
-    @ObservedObject private var subscription = SubscriptionStore.shared
+
     @ObservedObject private var pageStore = HomePageStore.shared
-    @State private var showsPaywall = false
 
     /// - Parameter service: the shared one; a preview passes its own, with its own store.
     init(service: AIRecommendationService? = nil) {
@@ -17,37 +16,17 @@ struct AIRecommendationModuleView: View {
         _recommendations = ObservedObject(wrappedValue: service.store)
     }
 
-    private var allowsAI: Bool {
-        ReaderPremiumVisibilityPolicy(isProActive: subscription.isProActive).allowsAI
-    }
 
     var body: some View {
         Form {
-            if allowsAI {
-                serviceSection
-                lastRunSection
-                actionsSection
-            } else {
-                ContentUnavailableView {
-                    UnavailableLabel(localized("需要 Pro"), systemImage: "lock.fill")
-                } description: {
-                    Text(localized("依你最近讀的書推薦作品")).font(DSFont.unavailableDescription).foregroundStyle(DSColor.textSecondary)
-                } actions: {
-                    UnavailableActions {
-                        Button(localized("升級")) { showsPaywall = true }
-                            .buttonStyle(.onAccentProminent)
-                    }
-                }
-                .listRowBackground(Color.clear)
-            }
+            serviceSection
+            lastRunSection
+            actionsSection
+
         }
         .navigationTitle(localized("AI 推薦"))
         .toolbarTitleDisplayMode(.inline)
         .themedAppSurface(for: .settings)
-        .sheet(isPresented: $showsPaywall) {
-            PaywallView(highlightedFeature: .aiReading)
-                .environmentObject(subscription)
-        }
     }
 
     // MARK: Sections

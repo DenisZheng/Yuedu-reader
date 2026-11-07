@@ -86,15 +86,14 @@ struct OnboardingVoiceOverTests {
         }
     }
 
-    /// A 閱讀Pro row is one stop that says once it needs Pro, after the feature's name.
-    @Test func aLockedRowSaysProOnce() async throws {
-        let content = OnboardingContent(visibleTabs: RootTabItem.tabs, librariesAvailable: true, languages: ["zh"],
-                                        lockedFeatures: Set(PremiumFeature.allCases))
+    /// 本地功能导览不再朗读会员锁提示。
+    @Test func aFeatureRowHasNoMembershipLock() async throws {
+        let content = OnboardingContent(visibleTabs: RootTabItem.tabs, librariesAvailable: true, languages: ["zh"])
         let theme = localized("外觀主題")
         try await hosting(ReadingPage(rows: content.reading)) { window in
             let read = try await reading(window) { $0.labels.contains { $0.hasPrefix(theme) } }
             let row = try #require(read.labels.first { $0.hasPrefix(theme) })
-            #expect(row.components(separatedBy: localized("需要 Pro")).count == 2, "\(read.described)")
+            #expect(!row.contains(localized("需要 Pro")), "\(read.described)")
             #expect(row.contains(localized("在設定裡自己調 App 與閱讀的配色，還有每一頁的背景")), "\(row)")
         }
     }
@@ -130,7 +129,7 @@ struct OnboardingVoiceOverTests {
         setAutomationEnabled(true)
         defer { setAutomationEnabled(wasEnabled) }
 
-        let root = UIHostingController(rootView: view.environmentObject(SubscriptionStore(observeTransactions: false)))
+        let root = UIHostingController(rootView: view)
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         window.rootViewController = root

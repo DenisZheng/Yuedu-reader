@@ -1,4 +1,3 @@
-import FirebaseCore
 import UIKit
 import UserNotifications
 import os
@@ -31,13 +30,7 @@ final class RSSNotificationManager: Sendable {
         guard !alreadyStarted else { return }
 
         registerCategories()
-        UNUserNotificationCenter.current().requestAuthorization(options: [.badge, .sound, .alert]) { granted, _ in
-            if granted {
-                DispatchQueue.main.async {
-                    UIApplication.shared.registerForRemoteNotifications()
-                }
-            }
-        }
+        // 本地通知不注册 APNs；系统权限只在「订阅通知」的用户操作中请求。
         updateBadge(unreadCount: store.totalUnreadCount())
     }
 
@@ -189,12 +182,8 @@ final class RSSAppNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        FirebaseApp.configure()
-        // Crash/diagnostics context must come up right after Firebase is configured,
-        // so launch-time crashes and MetricKit payloads carry breadcrumbs.
+        // 本地诊断不依赖 Firebase 配置；保留 MetricKit 与上次启动的卡顿记录。
         MetricKitDiagnosticReporter.shared.start()
-        CrashContext.identifyInstall()
-        // After Firebase: it reports a stall the previous run died in through Crashlytics.
         MainThreadMonitor.shared.start()
         CrashContext.breadcrumb("app launch (build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))")
         UNUserNotificationCenter.current().delegate = self
@@ -212,24 +201,6 @@ final class RSSAppNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
         ReaderOrientationController.shared.supportedMask(for: window?.traitCollection.userInterfaceIdiom ?? .phone)
     }
 
-    // MARK: - Remote notifications (回饋中心)
-
-    // These two arrive only because Info.plist turns `FirebaseAppDelegateProxyEnabled` off.
-    // With it on, FirebaseAuth (started at launch by `FirebaseAuthManager`) has
-    // GoogleUtilities isa-swizzle SwiftUI's AppDelegate, which hands the token on only to an
-    // implementation on that class — and SwiftUI forwards it to this adaptor dynamically,
-    // so neither callback ever came here and no device registered for push (10-19 to 10-25;
-    // `FeedbackPushRegistrationTests` holds it). Nothing here needs the proxy: sign-in is
-    // Apple, Google and email. Phone-number or web OAuth sign-in would need these forwarded
-    // to Auth by hand (`setAPNSToken`, `canHandleNotification`, `canHandle(_:)`).
-    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        FeedbackPushRegistration.shared.didRegister(deviceToken: deviceToken)
-    }
-
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        AppLogger.network("APNs registration failed", error: error)
-    }
-
     // MARK: - UNUserNotificationCenterDelegate
 
     nonisolated func userNotificationCenter(
@@ -237,10 +208,6 @@ final class RSSAppNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        if notification.request.content.userInfo[FeedbackNotificationPresenter.threadKey] is String {
-            // An open 我的回饋 or conversation shows the news now, not at its next poll.
-            Task { @MainActor in FeedbackService.shared.refreshOpenStreams() }
-        }
         completionHandler([.list, .banner, .badge, .sound])
     }
 
@@ -248,10 +215,6 @@ final class RSSAppNotificationDelegate: NSObject, UIApplicationDelegate, UNUserN
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
-        if let threadID = response.notification.request.content.userInfo[FeedbackNotificationPresenter.threadKey] as? String {
-            await MainActor.run { FeedbackNotificationPresenter.open(threadID: threadID) }
-            return
-        }
         let action = RSSNotificationManager.articleAction(from: response)
         await MainActor.run {
             RSSNotificationManager.shared.handleNotificationAction(

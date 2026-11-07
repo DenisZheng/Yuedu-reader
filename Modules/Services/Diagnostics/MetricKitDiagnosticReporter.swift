@@ -2,13 +2,8 @@ import Foundation
 import MetricKit
 import os
 
-/// Subscribes to MetricKit and routes **diagnostics** — crash, hang, CPU-exception,
-/// disk-write-exception — to os_log + Crashlytics (as non-fatals with the call
-/// stack attached). iOS delivers these to the app on the next launch after the
-/// event, so a user hitting the exact "cpu_resource" / "diskwrites_resource"
-/// reports we've been chasing no longer has to manually export an `.ips` from
-/// Settings: it lands in Crashlytics automatically, and (with the dSYM-upload build
-/// phase) symbolicated.
+/// 接收 MetricKit 崩溃、卡顿、CPU 和写盘诊断，保留完整调用树到本地 DiagnosticLog。
+/// iOS 通常在后续启动交付；由用户查看或导出，不连接云端符号化/上报服务。
 ///
 /// Register once at launch via `MetricKitDiagnosticReporter.shared.start()` —
 /// currently from `RSSAppNotificationDelegate.application(_:didFinishLaunchingWithOptions:)`,
@@ -17,9 +12,7 @@ import os
 /// / 15 floors of every MetricKit diagnostic API used here, so no availability
 /// checks are needed. No mutable state → safe as an `@unchecked Sendable` singleton.
 ///
-/// Payloads also land in `DiagnosticLog` so 設定 → 診斷與回報 can show a crash or
-/// hang to the person who hit it. Crashlytics is the developer's copy; that is the
-/// user's.
+/// DiagnosticLog 是设备上的诊断副本；模拟器注入只能测试展示，不代替真机交付验证。
 final class MetricKitDiagnosticReporter: NSObject, MXMetricManagerSubscriber, @unchecked Sendable {
     static let shared = MetricKitDiagnosticReporter()
 
@@ -102,7 +95,6 @@ final class MetricKitDiagnosticReporter: NSObject, MXMetricManagerSubscriber, @u
         let treeData = callStack.jsonRepresentation()
         let stackJSON = String(data: treeData, encoding: .utf8) ?? "<unavailable>"
         let metaJSON = String(data: meta.jsonRepresentation(), encoding: .utf8) ?? "{}"
-        let buildNote = "build=\(meta.applicationBuildVersion)"
 
         let path: MetricKitCallStack?
         do {
@@ -125,15 +117,5 @@ final class MetricKitDiagnosticReporter: NSObject, MXMetricManagerSubscriber, @u
         )
 
         CrashContext.breadcrumb("MetricKit \(kind): \(summary)")
-        // Recorded as an exception model with the heaviest path as its stack: Crashlytics
-        // symbolicates the addresses against the uploaded dSYM and groups each culprit into
-        // its own issue. (As one `NSError` domain, all 49 hangs of a month were one issue
-        // whose stack was the reporter itself.)
-        CrashContext.recordMetricKitDiagnostic(
-            kind: kind,
-            reason: "\(summary) \(buildNote)",
-            frames: path?.frames ?? [],
-            extra: ["meta": String(metaJSON.prefix(900)), "heaviestPath": String(readablePath.prefix(1000))]
-        )
     }
 }

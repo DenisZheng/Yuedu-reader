@@ -2181,6 +2181,23 @@
 "章節位置無故跳動" = "Chapter position jumped unexpectedly";
 "導航要求沒有抵達目的地" = "Navigation request didn't reach its destination";
 "診斷紀錄" = "Diagnostic Log";
+"關於" = "About";
+"上游專案與授權" = "Upstream Project and Licenses";
+"本機功能不收費；AI 等外部服務需自行設定。" = "Local features are free. Configure your own external services, such as AI.";
+"本 App 是獨立 Fork，不使用上游帳號、會員或聯絡管道。" = "This app is an independent fork and does not use upstream accounts, memberships, or support channels.";
+
+// Fork 本地诊断与通知权限
+"此頁只在本機查看紀錄；匯出可能包含書名與來源網址，不受下方篩選影響。" = "This page displays logs locally. Exports may include book titles and source URLs and are not limited by the filters below.";
+"訂閱通知" = "RSS Notifications";
+"通知權限" = "Notification Permission";
+"允許訂閱通知" = "Allow RSS Notifications";
+"訂閱更新使用本機通知，不需要帳號或遠端推送。" = "Subscription updates use local notifications and do not require an account or remote push.";
+"通知已允許" = "Notifications Allowed";
+"通知已關閉" = "Notifications Off";
+"通知尚未允許" = "Notifications Not Yet Allowed";
+"通知狀態未知" = "Notification Status Unknown";
+"無法取得通知權限，請稍後重試。" = "Unable to request notification permission. Please try again later.";
+"無法開啟系統設定。" = "Unable to open Settings.";
 "清除診斷紀錄" = "Clear Diagnostic Log";
 
 /* 來源配置除錯大師 */

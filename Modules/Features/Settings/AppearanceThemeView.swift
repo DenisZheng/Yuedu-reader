@@ -12,12 +12,10 @@ struct ThemeScreenAlert: Identifiable {
 
 struct AppearanceThemeView: View {
     @Bindable private var settings = GlobalSettings.shared
-    @EnvironmentObject private var subscriptionStore: SubscriptionStore
+
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// The paywall, opened on the feature the locked control belongs to.
-    @State private var paywallFeature: PremiumFeature?
 
     /// 新建's name prompt, and the name typed into it.
     @State private var showNewThemeAlert = false
@@ -45,25 +43,19 @@ struct AppearanceThemeView: View {
         return settings.appearanceSlotOnTab(windowColorScheme: colorScheme)
     }
 
-    private var isProActive: Bool {
-        subscriptionStore.hasAccess(.readerThemePacks)
-    }
-
     /// Theme selected in the edited slot, as its *identity* — the grid compares
     /// ids and the 新建 / 保存 actions copy from it, so it must not be swapped for
     /// a derived dark palette here.
     private var selectedTheme: AppearanceThemePreset {
         settings.appearanceBaseTheme(
-            for: editingScheme,
-            isProActive: subscriptionStore.hasAccess(.readerThemePacks)
+            for: editingScheme
         )
     }
 
     /// Theme painting the app right now. Drives this screen's own tint.
     private var activeTheme: AppearanceThemePreset {
         settings.appearanceTheme(
-            for: colorScheme,
-            isProActive: subscriptionStore.hasAccess(.readerThemePacks)
+            for: colorScheme
         )
     }
 
@@ -102,10 +94,6 @@ struct AppearanceThemeView: View {
         .navigationTitle(localized("外觀主題"))
         .toolbarTitleDisplayMode(.inline)
         .tint(activeTheme.isClassic ? nil : activeTheme.accentColor)
-        .sheet(item: $paywallFeature) { feature in
-            PaywallView(highlightedFeature: feature)
-                .environmentObject(subscriptionStore)
-        }
         .sheet(item: $importProgress) { progress in
             CustomizationImportOverviewView(progress: progress) {
                 importProgress = nil
@@ -133,17 +121,9 @@ struct AppearanceThemeView: View {
     private var themeSelectionSection: some View {
         Section {
             themeSelectionCard
-            if !subscriptionStore.hasAccess(.readerThemePacks) {
-                customizationRow
-            }
         } header: {
             Text(localized("主題"))
                 .foregroundStyle(DSColor.textSecondary)
-        } footer: {
-            if !subscriptionStore.hasAccess(.readerThemePacks) {
-                Text(localized("自訂應用配色、閱讀配色與頁面背景需開通會員。"))
-                    .dsSectionFooter()
-            }
         }
         .interfaceSectionSurface()
     }
@@ -210,7 +190,6 @@ struct AppearanceThemeView: View {
             } label: {
                 SettingsRowLabel(localized("閱讀界面"), systemImage: "menubar.rectangle")
             }
-            // In view without Pro too, locked (2026-09-27).
             rootTabRow
             Picker(selection: $settings.bookshelfGridColumnCount) {
                 ForEach(GlobalSettings.bookshelfGridColumnCountOptions, id: \.self) { columnCount in
@@ -247,17 +226,12 @@ struct AppearanceThemeView: View {
                     value: settings.globalFontDisplayName
                 )
             }
-            if subscriptionStore.hasAccess(.readerThemePacks) {
-                NavigationLink {
-                    AppearancePageBackgroundView()
-                } label: {
-                    SettingsRowLabel(localized("頁面背景"), systemImage: "photo.on.rectangle")
-                }
-            } else {
-                SettingsLockedRow(title: localized("頁面背景"), systemImage: "photo.on.rectangle") {
-                    paywallFeature = .readerThemePacks
-                }
+            NavigationLink {
+                AppearancePageBackgroundView()
+            } label: {
+                SettingsRowLabel(localized("頁面背景"), systemImage: "photo.on.rectangle")
             }
+
             NavigationLink {
                 AppearanceInterfaceEffectsView()
             } label: {
@@ -270,13 +244,6 @@ struct AppearanceThemeView: View {
         .interfaceSectionSurface()
     }
 
-    // Deliberately outside the Pro gate. An appearance pack — ours or a QiReader
-    // `.qitheme` — mostly carries things that are not Pro features at all: page
-    // backgrounds, tab icons, default covers, the bundled font, interface effects,
-    // reader layout, chapter title and comment bubble. Hiding the importer meant a
-    // non-Pro user handed a pack had no way to open it, and no explanation either.
-    // The custom theme a pack carries still needs Pro to take effect; `ContentView`'s
-    // `resolvedAppTheme` already downgrades it on its own, so nothing here has to.
     private var themeManagementSection: some View {
         Section {
             themeActionRows
@@ -298,9 +265,9 @@ struct AppearanceThemeView: View {
             LazyVGrid(columns: gridColumns, spacing: DSSpacing.lg) {
                 // As coloured in 顏色與字體, not as shipped: the tile's dot and the ring
                 // round the selected one are 強調色, so an edited accent shows here too.
-                themeOption(settings.builtInThemePreset(AppearanceThemePreset.classic, isProActive: isProActive))
+                themeOption(settings.builtInThemePreset(AppearanceThemePreset.classic))
                 ForEach(AppearanceThemePreset.freeSolidPresets) { preset in
-                    themeOption(settings.builtInThemePreset(preset, isProActive: isProActive))
+                    themeOption(settings.builtInThemePreset(preset))
                 }
                 newThemeButton
             }
@@ -411,19 +378,14 @@ struct AppearanceThemeView: View {
     }
 
     private func themeOption(_ preset: AppearanceThemePreset) -> some View {
-        let locked = preset.requiresPro && !subscriptionStore.hasAccess(.readerThemePacks)
         // Ring marks the theme actually in effect (not a stored-but-locked pick).
         let selected = selectedTheme.id == preset.id
         // Only the user's own themes can be renamed or deleted.
-        let editable = preset.isCustom && !locked
+        let editable = preset.isCustom
         // Preview in the appearance being edited: the dark slot shows this
         // theme's dark palette, which is what selecting it will apply.
         let displayed = preset.palette(for: editingScheme)
         return Button {
-            guard !locked else {
-                paywallFeature = .readerThemePacks
-                return
-            }
             settings.setAppearanceTheme(
                 preset,
                 for: editingScheme,
@@ -437,12 +399,11 @@ struct AppearanceThemeView: View {
                 ThemePreviewTile(
                     preset: displayed,
                     isSelected: selected,
-                    isLocked: locked,
                     colorScheme: editingScheme
                 )
                 Text(preset.localizedName)
                     .font(DSFont.caption)
-                    .foregroundStyle(locked ? DSColor.textDisabled : DSColor.textPrimary)
+                    .foregroundStyle(DSColor.textPrimary)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.72)
@@ -471,10 +432,6 @@ struct AppearanceThemeView: View {
 
     private var newThemeButton: some View {
         Button {
-            guard subscriptionStore.hasAccess(.readerThemePacks) else {
-                paywallFeature = .readerThemePacks
-                return
-            }
             newThemeName = ""
             showNewThemeAlert = true
         } label: {
@@ -482,7 +439,7 @@ struct AppearanceThemeView: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: DSRadius.lg, style: .continuous)
                         .fill(DSColor.textSecondary.opacity(0.2))
-                    Image(systemName: subscriptionStore.hasAccess(.readerThemePacks) ? "plus" : "lock.fill")
+                    Image(systemName: "plus")
                         .font(DSFont.fixed(size: 24, weight: .semibold))
                         .foregroundStyle(selectedTheme.palette(for: editingScheme).accentColor)
                 }
@@ -490,7 +447,7 @@ struct AppearanceThemeView: View {
                 .frame(height: 58)
                 Text(localized("新建"))
                     .font(DSFont.caption)
-                    .foregroundStyle(subscriptionStore.hasAccess(.readerThemePacks) ? DSColor.textPrimary : DSColor.textDisabled)
+                    .foregroundStyle(DSColor.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.76)
                     .frame(minHeight: 32, alignment: .top)
@@ -560,39 +517,28 @@ struct AppearanceThemeView: View {
         return parts.formatted(.list(type: .and, width: .narrow))
     }
 
-    /// Pro pushes the settings page; without Pro the row is the paywall.
     @ViewBuilder
     private var launchImageRow: some View {
-        if subscriptionStore.hasAccess(.launchScreen) {
-            NavigationLink {
-                LaunchImageSettingsView()
-            } label: {
-                SettingsValueLabel(
-                    title: localized("啟動圖"),
-                    systemImage: "iphone",
-                    value: localized(settings.launchImageEnabled ? "已開啟" : "已關閉")
-                )
-            }
-        } else {
-            SettingsLockedRow(title: localized("啟動圖"), systemImage: "iphone") {
-                paywallFeature = .launchScreen
-            }
+        NavigationLink {
+            LaunchImageSettingsView()
+        } label: {
+            SettingsValueLabel(
+                title: localized("啟動圖"),
+                systemImage: "iphone",
+                value: localized(settings.launchImageEnabled ? "已開啟" : "已關閉")
+            )
         }
+
     }
 
     @ViewBuilder
     private var rootTabRow: some View {
-        if ReaderPremiumVisibilityPolicy(isProActive: subscriptionStore.isProActive).showsBottomTabCustomization {
-            NavigationLink {
-                RootTabCustomizationView()
-            } label: {
-                SettingsRowLabel(localized("底部 Tab"), systemImage: "square.grid.2x2")
-            }
-        } else {
-            SettingsLockedRow(title: localized("底部 Tab"), systemImage: "square.grid.2x2") {
-                paywallFeature = .bottomBarCustomization
-            }
+        NavigationLink {
+            RootTabCustomizationView()
+        } label: {
+            SettingsRowLabel(localized("底部 Tab"), systemImage: "square.grid.2x2")
         }
+
     }
 
     // MARK: - Theme actions (save / export / import / reset)
@@ -753,31 +699,11 @@ struct AppearanceThemeView: View {
         screenAlert = ThemeScreenAlert(title: localized("匯入失敗"), message: message)
     }
 
-    /// Free-user upsell row; hidden entirely once Pro is active.
-    private var customizationRow: some View {
-        Button {
-            paywallFeature = .readerThemePacks
-        } label: {
-            HStack(spacing: DSSpacing.md) {
-                // Pro is marked with the app's own icon, as on the 閱讀Pro row and page.
-                AppIconImage(size: DSLayout.settingsRowIconSize)
-                Text(localized("主題自定義"))
-                    .font(DSFont.body)
-                    .foregroundStyle(DSColor.textPrimary)
-                Spacer(minLength: 0)
-                Image(systemName: "lock.fill")
-                    .foregroundStyle(DSColor.textSecondary)
-                    .accessibilityHidden(true)
-            }
-        }
-        .buttonStyle(.plain)
-    }
 }
 
 private struct ThemePreviewTile: View {
     let preset: AppearanceThemePreset
     let isSelected: Bool
-    let isLocked: Bool
     let colorScheme: ColorScheme
 
     private let tileHeight: CGFloat = 58
@@ -792,17 +718,6 @@ private struct ThemePreviewTile: View {
             .overlay(alignment: .topLeading) {
                 if !preset.isImagePreset {
                     swatchContent
-                }
-            }
-            .overlay {
-                if isLocked {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: DSRadius.lg, style: .continuous)
-                            .fill(Color.black.opacity(0.16))
-                        Image(systemName: "lock.fill")
-                            .font(DSFont.fixed(size: 22, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
                 }
             }
             .overlay(
@@ -1098,7 +1013,7 @@ private struct ThemeTileButtonBody: View {
 #Preview {
     NavigationStack {
         AppearanceThemeView()
-            .environmentObject(SubscriptionStore.shared)
+
     }
 }
 

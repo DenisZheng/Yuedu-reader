@@ -1,0 +1,94 @@
+[
+  {
+    "sourceName": "S1-single-mixed",
+    "sourceUrl": "https://fixture.invalid/entry",
+    "type": 0,
+    "singleUrl": true,
+    "sortUrl": "@js:'https://fixture.invalid/start'",
+    "ruleArticles": "class.item",
+    "ruleTitle": "a@text",
+    "ruleLink": "a@href"
+  },
+  {
+    "sourceName": "S1-start-html",
+    "sourceUrl": "https://fixture.invalid/start-source",
+    "type": 0,
+    "singleUrl": false,
+    "startHtml": "<main id='start'>Synthetic start page</main>",
+    "startStyle": "main{color:navy}",
+    "startJs": "document.getElementById('start').dataset.ready='yes'"
+  },
+  {
+    "sourceName": "S1-interactive-description",
+    "sourceUrl": "https://fixture.invalid/list",
+    "type": 0,
+    "ruleArticles": "class.item",
+    "ruleTitle": "a@text",
+    "ruleLink": "a@href",
+    "ruleDescription": "class.description@html",
+    "ruleContent": "class.body@html",
+    "enableJs": true
+  },
+  {
+    "sourceName": "S1-images",
+    "sourceUrl": "https://fixture.invalid/images",
+    "type": 1,
+    "ruleArticles": "class.item",
+    "ruleTitle": "a@text",
+    "ruleLink": "a@href",
+    "ruleContent": "img@src",
+    "nextContentUrl": "a.next@href",
+    "coverDecodeJs": "result"
+  },
+  {
+    "sourceName": "S1-video",
+    "sourceUrl": "https://fixture.invalid/videos",
+    "type": 2,
+    "ruleArticles": "class.item",
+    "ruleTitle": "a@text",
+    "ruleLink": "a@href",
+    "ruleContent": "video@src",
+    "nextContentUrl": "a.next@href",
+    "header": "{\"Referer\":\"https://fixture.invalid/player\"}"
+  },
+  {
+    "sourceName": "S1-search-pages",
+    "sourceUrl": "https://fixture.invalid/search-source",
+    "type": 0,
+    "sortUrl": "First::https://fixture.invalid/list/one&&Second::https://fixture.invalid/list/two",
+    "searchUrl": "https://fixture.invalid/search?q={{key}}&page={{page}}",
+    "ruleArticles": "class.item",
+    "ruleTitle": "a@text",
+    "ruleLink": "a@href",
+    "ruleNextPage": "PAGE",
+    "nextContentUrl": "a.next@href"
+  },
+  {
+    "sourceName": "S1-identity-runtime",
+    "sourceUrl": "https://fixture.invalid/list?q={{key}}#source-A,{\"method\":\"POST\",\"body\":\"page={{page}}\"}",
+    "type": 0,
+    "jsLib": "function fixtureSuffix(){return '/one'}",
+    "sortUrl": "@js:'One::https://fixture.invalid'+fixtureSuffix()",
+    "ruleArticles": "class.item",
+    "ruleTitle": "a@text",
+    "ruleLink": "a@href",
+    "variable": "{\"category\":\"synthetic\"}",
+    "futureField": {"nested": [true, 7, "synthetic"]}
+  },
+  {
+    "sourceName": "S1-web-controls",
+    "sourceUrl": "https://fixture.invalid/web",
+    "type": 0,
+    "singleUrl": true,
+    "enableJs": true,
+    "enabledCookieJar": false,
+    "loadWithBaseUrl": true,
+    "cacheFirst": false,
+    "showWebLog": true,
+    "preloadJs": "window.fixtureOrder=['preload']",
+    "injectJs": "window.fixtureOrder.push('finished')",
+    "shouldOverrideUrlLoading": "url.endsWith('/intercept')",
+    "contentWhitelist": "https://fixture.invalid/allowed",
+    "contentBlacklist": "https://fixture.invalid/blocked"
+  }
+]

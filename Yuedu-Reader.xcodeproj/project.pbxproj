@@ -11,42 +11,17 @@
 		1E90D290C84CF7DFB61183AB /* yuedu_app_Widget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4E4E1DDA4EE35F67778097F0 /* yuedu_app_Widget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2EE60C00FD763A43CFCAC2A0 /* yuedu_app_ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 81F92752186D8D0E971A17B9 /* yuedu_app_ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		3021769152B9F41FC1F2CBA5 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = 489E6E08B47AA3AC9F140CAD /* SwiftSoup */; };
-		3B275A36815844CE9EBD5086 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E661223F57364063B509666C /* GoogleService-Info.plist */; };
 		460274852F710D7500486947 /* ReadiumAdapterLCPSQLite in Frameworks */ = {isa = PBXBuildFile; productRef = 460274842F710D7500486947 /* ReadiumAdapterLCPSQLite */; };
-		463C854D2FA4F48E008F9AD7 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 463C854C2FA4F48E008F9AD7 /* GoogleSignIn */; };
-		463C854F2FA4F493008F9AD7 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 463C854E2FA4F493008F9AD7 /* GoogleSignInSwift */; };
-		46A6AB632FCD4ED60071B397 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB622FCD4ED60071B397 /* FirebaseAnalytics */; };
-		46A6AB652FCD4ED60071B397 /* FirebaseAnalyticsCore in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB642FCD4ED60071B397 /* FirebaseAnalyticsCore */; };
-		46A6AB672FCD4ED60071B397 /* FirebaseAnalyticsIdentitySupport in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB662FCD4ED60071B397 /* FirebaseAnalyticsIdentitySupport */; };
-		46A6AB692FCD4ED60071B397 /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB682FCD4ED60071B397 /* FirebaseAppCheck */; };
-		46A6AB6B2FCD4ED60071B397 /* FirebaseAppDistribution-Beta in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB6A2FCD4ED60071B397 /* FirebaseAppDistribution-Beta */; };
-		46A6AB6D2FCD4ED60071B397 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB6C2FCD4ED60071B397 /* FirebaseAuth */; };
-		46A6AB6F2FCD4ED60071B397 /* FirebaseAuthCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB6E2FCD4ED60071B397 /* FirebaseAuthCombine-Community */; };
-		46A6AB712FCD4ED60071B397 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB702FCD4ED60071B397 /* FirebaseCore */; };
-		46A6AB732FCD4ED60071B397 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB722FCD4ED60071B397 /* FirebaseCrashlytics */; };
-		46A6AB752FCD4ED60071B397 /* FirebaseDatabase in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB742FCD4ED60071B397 /* FirebaseDatabase */; };
-		46A6AB772FCD4ED60071B397 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB762FCD4ED60071B397 /* FirebaseFirestore */; };
-		46A6AB792FCD4ED60071B397 /* FirebaseFirestoreCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB782FCD4ED60071B397 /* FirebaseFirestoreCombine-Community */; };
-		46A6AB7B2FCD4ED60071B397 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB7A2FCD4ED60071B397 /* FirebaseFunctions */; };
-		46A6AB7D2FCD4ED60071B397 /* FirebaseFunctionsCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB7C2FCD4ED60071B397 /* FirebaseFunctionsCombine-Community */; };
-		46A6AB812FCD4ED60071B397 /* FirebaseInstallations in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB802FCD4ED60071B397 /* FirebaseInstallations */; };
-		46A6AB892FCD4ED60071B397 /* FirebaseRemoteConfig in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB882FCD4ED60071B397 /* FirebaseRemoteConfig */; };
-		46A6AB8B2FCD4ED60071B397 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB8A2FCD4ED60071B397 /* FirebaseStorage */; };
-		46A6AB8D2FCD4ED60071B397 /* FirebaseStorageCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 46A6AB8C2FCD4ED60071B397 /* FirebaseStorageCombine-Community */; };
 		54FF42D0FA99075B5C91D59B /* ReadiumZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 7F41A49C749809CDAB632913 /* ReadiumZIPFoundation */; };
 		54FF42D1FA99075B5C91D59B /* ReadiumShared in Frameworks */ = {isa = PBXBuildFile; productRef = 54FF42D2FA99075B5C91D59B /* ReadiumShared */; };
 		54FF42D3FA99075B5C91D59B /* ReadiumStreamer in Frameworks */ = {isa = PBXBuildFile; productRef = 54FF42D4FA99075B5C91D59B /* ReadiumStreamer */; };
-		59196CD4E2AC41958E276886 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E661223F57364063B509666C /* GoogleService-Info.plist */; };
 		605CA89FF5C9882A68E236F3 /* YueduCoreText in Frameworks */ = {isa = PBXBuildFile; productRef = FF544FB3AA8924E26745E485 /* YueduCoreText */; };
 		6B865095660449D830AF13C4 /* iosMath in Frameworks */ = {isa = PBXBuildFile; productRef = 3F2758F4003B483DCE6CFC1C /* iosMath */; };
 		6E860399818D270C801E7519 /* CLexbor in Frameworks */ = {isa = PBXBuildFile; productRef = EC30E8EE1B7F4DA83ADB8821 /* CLexbor */; };
 		8A11B0E32F9A1C7300A1B001 /* ReadiumFuzi in Frameworks */ = {isa = PBXBuildFile; productRef = 8A11B0E22F9A1C7300A1B001 /* ReadiumFuzi */; };
-		9345BAE6E7C14A44A078A749 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E661223F57364063B509666C /* GoogleService-Info.plist */; };
 		AAAA1111AAAA1111AAAA0001 /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = AAAA1111AAAA1111AAAA0002 /* Nuke */; };
 		BA0DC69BDD8FFF2AE7B103A0 /* YueduCoreTextTypography in Frameworks */ = {isa = PBXBuildFile; productRef = 3D3ACA9A6DDE978E3B91280C /* YueduCoreTextTypography */; };
 		BBBB2222BBBB2222BBBB0001 /* LNPopupUI-Static in Frameworks */ = {isa = PBXBuildFile; productRef = BBBB2222BBBB2222BBBB0002 /* LNPopupUI-Static */; };
-		D4C329B2F01E414A88BD6077 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E661223F57364063B509666C /* GoogleService-Info.plist */; };
-		D698BFBD3CA24E3C9A05AD4B /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E661223F57364063B509666C /* GoogleService-Info.plist */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -100,10 +75,8 @@
 		460D36592F51C5B8006E774C /* YueduReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = YueduReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		460D36662F51C5B9006E774C /* yuedu appTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "yuedu appTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		460D36702F51C5B9006E774C /* yuedu appUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "yuedu appUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
-		4639A10E2FFD2ACF008040BE /* YueduPro.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; name = YueduPro.storekit; path = Configuration/YueduPro.storekit; sourceTree = "<group>"; };
 		4E4E1DDA4EE35F67778097F0 /* yuedu_app_Widget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = yuedu_app_Widget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		81F92752186D8D0E971A17B9 /* yuedu_app_ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = yuedu_app_ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		E661223F57364063B509666C /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -173,33 +146,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				8A11B0E32F9A1C7300A1B001 /* ReadiumFuzi in Frameworks */,
-				46A6AB6F2FCD4ED60071B397 /* FirebaseAuthCombine-Community in Frameworks */,
 				460274852F710D7500486947 /* ReadiumAdapterLCPSQLite in Frameworks */,
-				46A6AB812FCD4ED60071B397 /* FirebaseInstallations in Frameworks */,
-				46A6AB8B2FCD4ED60071B397 /* FirebaseStorage in Frameworks */,
-				46A6AB7B2FCD4ED60071B397 /* FirebaseFunctions in Frameworks */,
-				46A6AB6D2FCD4ED60071B397 /* FirebaseAuth in Frameworks */,
-				46A6AB632FCD4ED60071B397 /* FirebaseAnalytics in Frameworks */,
 				54FF42D1FA99075B5C91D59B /* ReadiumShared in Frameworks */,
-				46A6AB712FCD4ED60071B397 /* FirebaseCore in Frameworks */,
-				463C854F2FA4F493008F9AD7 /* GoogleSignInSwift in Frameworks */,
-				46A6AB892FCD4ED60071B397 /* FirebaseRemoteConfig in Frameworks */,
-				46A6AB772FCD4ED60071B397 /* FirebaseFirestore in Frameworks */,
-				46A6AB652FCD4ED60071B397 /* FirebaseAnalyticsCore in Frameworks */,
-				46A6AB6B2FCD4ED60071B397 /* FirebaseAppDistribution-Beta in Frameworks */,
-				46A6AB7D2FCD4ED60071B397 /* FirebaseFunctionsCombine-Community in Frameworks */,
 				54FF42D3FA99075B5C91D59B /* ReadiumStreamer in Frameworks */,
-				46A6AB752FCD4ED60071B397 /* FirebaseDatabase in Frameworks */,
-				46A6AB792FCD4ED60071B397 /* FirebaseFirestoreCombine-Community in Frameworks */,
-				46A6AB8D2FCD4ED60071B397 /* FirebaseStorageCombine-Community in Frameworks */,
 				54FF42D0FA99075B5C91D59B /* ReadiumZIPFoundation in Frameworks */,
-				46A6AB672FCD4ED60071B397 /* FirebaseAnalyticsIdentitySupport in Frameworks */,
 				3021769152B9F41FC1F2CBA5 /* SwiftSoup in Frameworks */,
 				AAAA1111AAAA1111AAAA0001 /* Nuke in Frameworks */,
 				BBBB2222BBBB2222BBBB0001 /* LNPopupUI-Static in Frameworks */,
-				46A6AB732FCD4ED60071B397 /* FirebaseCrashlytics in Frameworks */,
-				46A6AB692FCD4ED60071B397 /* FirebaseAppCheck in Frameworks */,
-				463C854D2FA4F48E008F9AD7 /* GoogleSignIn in Frameworks */,
 				6B865095660449D830AF13C4 /* iosMath in Frameworks */,
 				BA0DC69BDD8FFF2AE7B103A0 /* YueduCoreTextTypography in Frameworks */,
 				605CA89FF5C9882A68E236F3 /* YueduCoreText in Frameworks */,
@@ -250,8 +203,6 @@
 		460D36502F51C5B8006E774C = {
 			isa = PBXGroup;
 			children = (
-				4639A10E2FFD2ACF008040BE /* YueduPro.storekit */,
-				E661223F57364063B509666C /* GoogleService-Info.plist */,
 				A10000000000000000000001 /* Targets/Yuedu */,
 				A10000000000000000000002 /* Modules */,
 				460D365B2F51C5B8006E774C /* Resources */,
@@ -315,7 +266,6 @@
 				460D36562F51C5B8006E774C /* Frameworks */,
 				460D36572F51C5B8006E774C /* Resources */,
 				5FFE0D9ED24A85A7ACED161A /* Embed Foundation Extensions */,
-				46C7A511D5F0480000000001 /* Crashlytics Upload Symbols */,
 				46C7A512D5F0480000000002 /* Inject Git Commit SHA */,
 			);
 			buildRules = (
@@ -339,26 +289,6 @@
 				460274842F710D7500486947 /* ReadiumAdapterLCPSQLite */,
 				54FF42D2FA99075B5C91D59B /* ReadiumShared */,
 				54FF42D4FA99075B5C91D59B /* ReadiumStreamer */,
-				463C854C2FA4F48E008F9AD7 /* GoogleSignIn */,
-				463C854E2FA4F493008F9AD7 /* GoogleSignInSwift */,
-				46A6AB622FCD4ED60071B397 /* FirebaseAnalytics */,
-				46A6AB642FCD4ED60071B397 /* FirebaseAnalyticsCore */,
-				46A6AB662FCD4ED60071B397 /* FirebaseAnalyticsIdentitySupport */,
-				46A6AB682FCD4ED60071B397 /* FirebaseAppCheck */,
-				46A6AB6A2FCD4ED60071B397 /* FirebaseAppDistribution-Beta */,
-				46A6AB6C2FCD4ED60071B397 /* FirebaseAuth */,
-				46A6AB6E2FCD4ED60071B397 /* FirebaseAuthCombine-Community */,
-				46A6AB702FCD4ED60071B397 /* FirebaseCore */,
-				46A6AB722FCD4ED60071B397 /* FirebaseCrashlytics */,
-				46A6AB742FCD4ED60071B397 /* FirebaseDatabase */,
-				46A6AB762FCD4ED60071B397 /* FirebaseFirestore */,
-				46A6AB782FCD4ED60071B397 /* FirebaseFirestoreCombine-Community */,
-				46A6AB7A2FCD4ED60071B397 /* FirebaseFunctions */,
-				46A6AB7C2FCD4ED60071B397 /* FirebaseFunctionsCombine-Community */,
-				46A6AB802FCD4ED60071B397 /* FirebaseInstallations */,
-				46A6AB882FCD4ED60071B397 /* FirebaseRemoteConfig */,
-				46A6AB8A2FCD4ED60071B397 /* FirebaseStorage */,
-				46A6AB8C2FCD4ED60071B397 /* FirebaseStorageCombine-Community */,
 				3F2758F4003B483DCE6CFC1C /* iosMath */,
 				3D3ACA9A6DDE978E3B91280C /* YueduCoreTextTypography */,
 				FF544FB3AA8924E26745E485 /* YueduCoreText */,
@@ -481,8 +411,6 @@
 				AAAA1111AAAA1111AAAA0003 /* XCRemoteSwiftPackageReference "Nuke" */,
 				8A11B0E12F9A1C7300A1B001 /* XCRemoteSwiftPackageReference "Fuzi" */,
 				460274812F710D7500486947 /* XCRemoteSwiftPackageReference "swift-toolkit" */,
-				463C854A2FA4F38E008F9AD7 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
-				46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				4F766A6C466F0B91C61C6FB1 /* XCRemoteSwiftPackageReference "iosMath" */,
 				4503FB56A177080D0D9E31E4 /* XCRemoteSwiftPackageReference "YueduCoreText" */,
 				D8654E038B484E472D6D37EA /* XCLocalSwiftPackageReference "Packages/CLexbor" */,
@@ -508,7 +436,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				3B275A36815844CE9EBD5086 /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -516,7 +443,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D4C329B2F01E414A88BD6077 /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -524,7 +450,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				59196CD4E2AC41958E276886 /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -532,7 +457,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				9345BAE6E7C14A44A078A749 /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -540,33 +464,12 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D698BFBD3CA24E3C9A05AD4B /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		46C7A511D5F0480000000001 /* Crashlytics Upload Symbols */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}",
-				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${PRODUCT_NAME}",
-				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Info.plist",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info.plist",
-				"$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)",
-			);
-			name = "Crashlytics Upload Symbols";
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "if [ \"${CONFIGURATION}\" != \"Debug\" ]; then\n  \"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run\"\nfi\n";
-		};
 		46C7A512D5F0480000000002 /* Inject Git Commit SHA */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -652,7 +555,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = "Widget/Yuedu-Reader-Widget.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 65DHH783G3;
+				DEVELOPMENT_TEAM = "";
 				EXECUTABLE_NAME = yuedu_app_Widget;
 				INFOPLIST_FILE = Widget/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -662,7 +565,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhangruilin.yuedureader.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev.widget;
 				PRODUCT_NAME = yuedu_app_Widget;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -713,7 +616,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 65DHH783G3;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -781,7 +684,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 65DHH783G3;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -815,13 +718,13 @@
 				CLANG_ENABLE_OBJC_WEAK = YES;
 				CODE_SIGN_ENTITLEMENTS = "Resources/Yuedu-Reader.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 65DHH783G3;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_APPINTENTS_DEPLOYMENT_AWARE_PROCESSING = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "閱讀";
+				INFOPLIST_KEY_CFBundleDisplayName = "Reader Fork Dev";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.books";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -845,7 +748,7 @@
 					"$(inherited)",
 					"-liconv",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhangruilin.yuedureader;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev;
 				PRODUCT_MODULE_NAME = yuedu_app;
 				PRODUCT_NAME = YueduReader;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -880,13 +783,13 @@
 				CLANG_ENABLE_OBJC_WEAK = YES;
 				CODE_SIGN_ENTITLEMENTS = "Resources/Yuedu-Reader.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 65DHH783G3;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_APPINTENTS_DEPLOYMENT_AWARE_PROCESSING = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "閱讀";
+				INFOPLIST_KEY_CFBundleDisplayName = "Reader Fork Dev";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.books";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -910,7 +813,7 @@
 					"$(inherited)",
 					"-liconv",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhangruilin.yuedureader;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev;
 				PRODUCT_MODULE_NAME = yuedu_app;
 				PRODUCT_NAME = YueduReader;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -945,7 +848,7 @@
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhangruilin.yuedureader.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -968,7 +871,7 @@
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhangruilin.yuedureader.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -989,7 +892,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhangruilin.yuedureader.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1014,7 +917,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhangruilin.yuedureader.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1037,7 +940,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = "ShareExtension/Yuedu-Reader-ShareExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 65DHH783G3;
+				DEVELOPMENT_TEAM = "";
 				EXECUTABLE_NAME = yuedu_app_ShareExtension;
 				INFOPLIST_FILE = ShareExtension/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -1047,7 +950,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhangruilin.yuedureader.shareextension;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev.shareextension;
 				PRODUCT_NAME = yuedu_app_ShareExtension;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -1067,7 +970,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = "ShareExtension/Yuedu-Reader-ShareExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 65DHH783G3;
+				DEVELOPMENT_TEAM = "";
 				EXECUTABLE_NAME = yuedu_app_ShareExtension;
 				INFOPLIST_FILE = ShareExtension/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -1077,7 +980,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhangruilin.yuedureader.shareextension;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev.shareextension;
 				PRODUCT_NAME = yuedu_app_ShareExtension;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -1096,7 +999,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = "Widget/Yuedu-Reader-Widget.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 65DHH783G3;
+				DEVELOPMENT_TEAM = "";
 				EXECUTABLE_NAME = yuedu_app_Widget;
 				INFOPLIST_FILE = Widget/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -1106,7 +1009,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhangruilin.yuedureader.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev.widget;
 				PRODUCT_NAME = yuedu_app_Widget;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -1210,28 +1113,12 @@
 				minimumVersion = 3.8.0;
 			};
 		};
-		463C854A2FA4F38E008F9AD7 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 10.0.0;
-			};
-		};
 		46935AA62F52E48600662F9D /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/readium/ZIPFoundation.git";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 3.0.1;
-			};
-		};
-		46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 12.14.0;
 			};
 		};
 		4F766A6C466F0B91C61C6FB1 /* XCRemoteSwiftPackageReference "iosMath" */ = {
@@ -1275,106 +1162,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 460274812F710D7500486947 /* XCRemoteSwiftPackageReference "swift-toolkit" */;
 			productName = ReadiumAdapterLCPSQLite;
-		};
-		463C854C2FA4F48E008F9AD7 /* GoogleSignIn */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 463C854A2FA4F38E008F9AD7 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
-			productName = GoogleSignIn;
-		};
-		463C854E2FA4F493008F9AD7 /* GoogleSignInSwift */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 463C854A2FA4F38E008F9AD7 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
-			productName = GoogleSignInSwift;
-		};
-		46A6AB622FCD4ED60071B397 /* FirebaseAnalytics */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAnalytics;
-		};
-		46A6AB642FCD4ED60071B397 /* FirebaseAnalyticsCore */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAnalyticsCore;
-		};
-		46A6AB662FCD4ED60071B397 /* FirebaseAnalyticsIdentitySupport */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAnalyticsIdentitySupport;
-		};
-		46A6AB682FCD4ED60071B397 /* FirebaseAppCheck */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAppCheck;
-		};
-		46A6AB6A2FCD4ED60071B397 /* FirebaseAppDistribution-Beta */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = "FirebaseAppDistribution-Beta";
-		};
-		46A6AB6C2FCD4ED60071B397 /* FirebaseAuth */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAuth;
-		};
-		46A6AB6E2FCD4ED60071B397 /* FirebaseAuthCombine-Community */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = "FirebaseAuthCombine-Community";
-		};
-		46A6AB702FCD4ED60071B397 /* FirebaseCore */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseCore;
-		};
-		46A6AB722FCD4ED60071B397 /* FirebaseCrashlytics */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseCrashlytics;
-		};
-		46A6AB742FCD4ED60071B397 /* FirebaseDatabase */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseDatabase;
-		};
-		46A6AB762FCD4ED60071B397 /* FirebaseFirestore */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseFirestore;
-		};
-		46A6AB782FCD4ED60071B397 /* FirebaseFirestoreCombine-Community */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = "FirebaseFirestoreCombine-Community";
-		};
-		46A6AB7A2FCD4ED60071B397 /* FirebaseFunctions */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseFunctions;
-		};
-		46A6AB7C2FCD4ED60071B397 /* FirebaseFunctionsCombine-Community */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = "FirebaseFunctionsCombine-Community";
-		};
-		46A6AB802FCD4ED60071B397 /* FirebaseInstallations */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseInstallations;
-		};
-		46A6AB882FCD4ED60071B397 /* FirebaseRemoteConfig */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseRemoteConfig;
-		};
-		46A6AB8A2FCD4ED60071B397 /* FirebaseStorage */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseStorage;
-		};
-		46A6AB8C2FCD4ED60071B397 /* FirebaseStorageCombine-Community */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 46A6AB5D2FCD4ED60071B397 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = "FirebaseStorageCombine-Community";
 		};
 		489E6E08B47AA3AC9F140CAD /* SwiftSoup */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -61,7 +61,7 @@ struct BookSyncDeviceLocalStateTests {
         let key = local.id.uuidString
         return ICloudSyncManager.resolveMerge(
             local: [local],
-            remote: [FirestoreSyncRecord(id: key, value: remote, updatedAt: remoteUpdatedAt, deleted: false)],
+            remote: [SyncRecord(id: key, value: remote, updatedAt: remoteUpdatedAt, deleted: false)],
             shadow: [key: SyncShadowEntry(updatedAt: lastSync, hash: shadowHash, deleted: false)],
             id: { $0.id.uuidString },
             hash: hash,
@@ -97,7 +97,7 @@ struct BookSyncDeviceLocalStateTests {
         let key = book.id.uuidString
         let before = ICloudSyncManager.resolveMerge(
             local: [iPad],
-            remote: [FirestoreSyncRecord(id: key, value: iPhone, updatedAt: readAt, deleted: false)],
+            remote: [SyncRecord(id: key, value: iPhone, updatedAt: readAt, deleted: false)],
             shadow: [key: SyncShadowEntry(updatedAt: lastSync, hash: oldHash(book), deleted: false)],
             id: { $0.id.uuidString },
             hash: oldHash,
@@ -226,7 +226,7 @@ struct BookSyncDeviceLocalStateTests {
         iPhone.lastOpenedDate = readAt
         let result = ICloudSyncManager.resolveMerge(
             local: [iPad.strippedForSync()],
-            remote: [FirestoreSyncRecord(id: key, value: iPhone.strippedForSync(), updatedAt: readAt, deleted: false)],
+            remote: [SyncRecord(id: key, value: iPhone.strippedForSync(), updatedAt: readAt, deleted: false)],
             shadow: migrated.shadow,
             id: { $0.id.uuidString },
             hash: hash,

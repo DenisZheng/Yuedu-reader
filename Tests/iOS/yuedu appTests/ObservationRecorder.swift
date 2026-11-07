@@ -13,6 +13,8 @@ final class ObservationRecorder<Value>: @unchecked Sendable {
     private(set) var changeCount = 0
     private(set) var values: [Value] = []
     private(set) var changedOffMain = false
+    /// 在新值真正采样后通知测试；比运行一个已到期的 RunLoop 更明确。
+    var onRecord: ((Value) -> Void)?
     private let read: () -> Value
     private var isActive = true
 
@@ -32,8 +34,10 @@ final class ObservationRecorder<Value>: @unchecked Sendable {
             if !Thread.isMainThread { self.changedOffMain = true }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.isActive else { return }
-                self.values.append(self.read())
+                let value = self.read()
+                self.values.append(value)
                 self.arm()
+                self.onRecord?(value)
             }
         }
     }

@@ -16,8 +16,8 @@ struct HomeDesignFixture: View {
     private var themes: ActiveAppThemes {
         let settings = GlobalSettings.shared
         return ActiveAppThemes(
-            light: settings.appThemeOnScreen(for: .light, isProActive: true, hasResolvedEntitlements: true),
-            dark: settings.appThemeOnScreen(for: .dark, isProActive: true, hasResolvedEntitlements: true))
+            light: settings.appThemeOnScreen(for: .light),
+            dark: settings.appThemeOnScreen(for: .dark))
     }
 
     var body: some View {

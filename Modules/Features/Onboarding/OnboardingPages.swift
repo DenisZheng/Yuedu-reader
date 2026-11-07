@@ -211,10 +211,6 @@ private struct OnboardingRowList: View {
                         Text(localized(row.titleKey))
                             .font(DSFont.headline)
                             .foregroundStyle(DSColor.textPrimary)
-                        // The lock settings shows on the same feature's row.
-                        if row.isLocked {
-                            ProLockBadge()
-                        }
                     }
                     Text(localized(row.textKey))
                         .font(DSFont.subheadline)
@@ -291,8 +287,7 @@ private struct OnboardingPagePreview<Page: View>: View {
 private let previewContent = OnboardingContent(
     visibleTabs: RootTabItem.tabs,
     librariesAvailable: true,
-    languages: ["zh"],
-    lockedFeatures: Set(PremiumFeature.allCases)
+    languages: ["zh"]
 )
 
 #Preview("歡迎") {

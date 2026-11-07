@@ -54,7 +54,6 @@ struct ReaderQuickThemePanelView: View {
     let onCustomize: () -> Void
     /// A locked control asked for the paywall. The reader closes this sheet and presents
     /// it from its own `onDismiss`, as it does for 自訂 — never a sheet on top of this one.
-    var onOpenPaywall: ((PremiumFeature) -> Void)? = nil
 
     @Bindable private var settings = GlobalSettings.shared
     @Environment(\.colorScheme) private var colorScheme
@@ -127,8 +126,7 @@ struct ReaderQuickThemePanelView: View {
                         }
                         backgroundEditor = nil
                     },
-                    onDelete: { backgroundEditor = nil },
-                    onRequestPaywall: { onOpenPaywall?($0) }
+                    onDelete: { backgroundEditor = nil }
                 )
             }
         }

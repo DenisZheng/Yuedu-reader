@@ -33,7 +33,6 @@ final class ReaderChapterSliderUITests: XCTestCase {
     @MainActor
     func testReleasingTheSliderLandsOnAChapterAndEndsTheScrub() throws {
         // iOS 17.5 otherwise puts a system Apple ID sign-in over the app at launch.
-        _ = try StoreKitTestSessions.fresh(StoreKitTestSessions.yueduPro())
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES",
                                "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",

@@ -250,7 +250,7 @@ final class SwipeActionAccentContrastUITests: XCTestCase {
         ]
         let themes = try JSONSerialization.data(withJSONObject: [theme])
         let app = XCUIApplication()
-        app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-debug-force-pro",
+        app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES",
                                "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",
                                "-yd_source_disclaimer_accepted", "YES",
                                "-yd_custom_appearance_themes", "<data>\(themes.base64EncodedString())</data>",

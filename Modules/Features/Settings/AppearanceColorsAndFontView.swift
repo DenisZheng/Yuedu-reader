@@ -16,23 +16,14 @@ import UIKit
 /// apart (`appearanceBuiltInThemeColors`) and 重置為默認 puts them back.
 struct AppearanceColorsAndFontView: View {
     @Bindable private var settings = GlobalSettings.shared
-    @ObservedObject private var subscriptionStore = SubscriptionStore.shared
-    @State private var paywallFeature: PremiumFeature?
+
 
     var body: some View {
         Form {
-            if subscriptionStore.hasAccess(.readerThemePacks) {
-                accentSection
-                textColorSection
-                backgroundSection
-            } else {
-                Section {
-                    SettingsLockedRow(title: localized("配色"), systemImage: "paintpalette") {
-                        paywallFeature = .readerThemePacks
-                    }
-                }
-                .interfaceSectionSurface()
-            }
+            accentSection
+            textColorSection
+            backgroundSection
+
             fontSection
         }
         .softScrollEdges()
@@ -40,10 +31,6 @@ struct AppearanceColorsAndFontView: View {
         .navigationTitle(localized("顏色與字體"))
         .toolbarTitleDisplayMode(.inline)
         .themedAppSurface(for: .settings)
-        .sheet(item: $paywallFeature) { feature in
-            PaywallView(highlightedFeature: feature)
-                .environmentObject(subscriptionStore)
-        }
     }
 
     // MARK: - Sections
@@ -171,11 +158,11 @@ struct AppearanceColorsAndFontView: View {
     // MARK: - The themes edited
 
     private var lightTheme: AppearanceThemePreset {
-        settings.appearanceBaseTheme(for: .light, isProActive: subscriptionStore.hasAccess(.readerThemePacks))
+        settings.appearanceBaseTheme(for: .light)
     }
 
     private var darkTheme: AppearanceThemePreset {
-        settings.appearanceBaseTheme(for: .dark, isProActive: subscriptionStore.hasAccess(.readerThemePacks))
+        settings.appearanceBaseTheme(for: .dark)
     }
 
     /// A theme's colours, read and written by id: one of the user's own in its own

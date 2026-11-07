@@ -7,7 +7,6 @@ import UIKit
 struct ImportedBookPresentation: UIViewControllerRepresentable {
     let request: SharedImportQueueDrainer.ReaderRequest?
     let store: BookStore
-    let subscriptionStore: SubscriptionStore
     let didPresent: (UUID) -> Void
     var customizationRequest: SharedCustomizationDocument? = nil
     var didPresentCustomization: (UUID) -> Void = { _ in }
@@ -45,7 +44,7 @@ struct ImportedBookPresentation: UIViewControllerRepresentable {
                 BookReaderView(bookId: request.bookID)
                     .id(request.bookID)
                     .environmentObject(store)
-                    .environmentObject(subscriptionStore)
+
                     .environment(\.appDependencies, .live)
                     .followsScenePhase(of: scene)
             )
@@ -165,5 +164,5 @@ final class ImportedBookPresentationController: UIViewController {
 
 #Preview {
     ImportedBookPresentation(request: nil, store: BookStore(),
-                             subscriptionStore: .shared, didPresent: { _ in })
+                             didPresent: { _ in })
 }

@@ -74,7 +74,6 @@ struct ReaderTextColorOverrideTests {
                 previewBackground: AppearanceThemePreset.hex(0xFFFFFF),
                 relativePreviewImagePath: nil,
                 imagePaths: [],
-                requiresPro: false,
                 isImagePreset: false,
                 isCustom: true
             )

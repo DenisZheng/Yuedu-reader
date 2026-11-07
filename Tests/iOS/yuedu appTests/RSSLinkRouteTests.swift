@@ -49,6 +49,21 @@ struct RSSLinkRouteTests {
         #expect(systemString(.route("feed://example.com/rss", relativeTo: base)) == "feed://example.com/rss")
     }
 
+    @Test("旧导入链接投向独立 Fork，目标和参数保持不变")
+    func legacyImportsUseForkScheme() throws {
+        for scheme in ["yuedu", "legado"] {
+            var components = URLComponents()
+            components.scheme = scheme
+            components.host = "import"
+            components.path = "/rssSource"
+            components.queryItems = [URLQueryItem(name: "src", value: "https://example.invalid/rules.json?a=1#fragment")]
+            let legacy = try #require(components.url)
+            let routed = try #require(RSSLinkRoute.route(legacy).url)
+            #expect(routed.scheme == BookSourceImportDeepLink.appScheme)
+            #expect(BookSourceImportDeepLink.target(from: routed) == BookSourceImportDeepLink.target(from: legacy))
+        }
+    }
+
     @Test("script, inline and local schemes are unopenable")
     func unopenableSchemes() {
         #expect(RSSLinkRoute.route("javascript:void(0)", relativeTo: base) == .unopenable)

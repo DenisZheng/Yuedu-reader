@@ -2,6 +2,9 @@ import Combine
 import Foundation
 import StoreKit
 
+// 仅保留 Storefront 的地区可用性查询；不读取交易、商品、收据或会员权益。
+// 移除收费体系不改变既有公共书库的地区支持策略。
+
 /// Mainland China uses source discovery only. Unknown storefronts are available;
 /// a transient nil StoreKit answer preserves a previously known country, so a
 /// cold launch in CHN cannot flash the libraries before StoreKit responds.

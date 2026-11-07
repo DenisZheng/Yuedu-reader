@@ -111,14 +111,9 @@ struct OnboardingTests {
         #expect(content.pages == [.welcome, .works, .sources, .reading])
     }
 
-    @Test func proFeaturesCarryTheLockUntilBought() {
-        let free = makeContent(lockedFeatures: Set(PremiumFeature.allCases)).reading
-        #expect(free.map(\.titleKey) == ["劃線與書籤", "聽書", "自動閱讀", "外觀主題", "底部 Tab"])
-        #expect(free.map(\.isLocked) == [false, false, false, true, true])
-
-        let pro = makeContent(lockedFeatures: []).reading
-        #expect(pro.map(\.titleKey) == free.map(\.titleKey))
-        #expect(pro.map(\.isLocked) == [false, false, false, false, false])
+    @Test func localFeaturesRemainInTheTour() {
+        let reading = makeContent().reading
+        #expect(reading.map(\.titleKey) == ["劃線與書籤", "聽書", "自動閱讀", "外觀主題", "底部 Tab"])
     }
 
     @Test func theShelfFindsEveryCover() {
@@ -131,14 +126,12 @@ struct OnboardingTests {
     private func makeContent(
         visibleTabs: [RootTabItem] = RootTabItem.tabs,
         librariesAvailable: Bool = true,
-        languages: [String] = ["zh"],
-        lockedFeatures: Set<PremiumFeature> = Set(PremiumFeature.allCases)
+        languages: [String] = ["zh"]
     ) -> OnboardingContent {
         OnboardingContent(
             visibleTabs: visibleTabs,
             librariesAvailable: librariesAvailable,
-            languages: languages,
-            lockedFeatures: lockedFeatures
+            languages: languages
         )
     }
 }

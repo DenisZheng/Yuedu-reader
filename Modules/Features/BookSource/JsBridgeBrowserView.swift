@@ -698,7 +698,7 @@ struct JsBridgeBrowserRepresentable: UIViewRepresentable {
                 return
             }
             let scheme = url.scheme?.lowercased()
-            let isImportDeepLink = scheme == "yuedu"
+            let isImportDeepLink = scheme == BookSourceImportDeepLink.appScheme || scheme == "yuedu"
                 || (scheme == "legado" && url.host?.lowercased() == "import")
             guard isImportDeepLink else {
                 decisionHandler(.allow)

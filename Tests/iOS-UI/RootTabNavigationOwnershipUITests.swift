@@ -57,10 +57,9 @@ final class RootTabNavigationOwnershipUITests: XCTestCase {
     /// the app on every launch.
     @MainActor
     private static func launch() throws -> XCUIApplication {
-        _ = try StoreKitTestSessions.fresh(StoreKitTestSessions.yueduPro())
         let app = XCUIApplication()
         // Pro: 底部标签栏 is a Pro setting.
-        app.launchArguments = ["-onboarding.completed", "YES", "-debug-force-pro",
+        app.launchArguments = ["-onboarding.completed", "YES",
                                "-yd_root_tab_visible_ids", Self.allTabs,
                                "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()

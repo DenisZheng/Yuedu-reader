@@ -35,7 +35,7 @@ struct ReadingPositionSyncTests {
     private func hash(_ item: ReadingPositionSyncItem) -> String { ICloudSyncManager.stableHash(item) }
 
     /// One device's sync against the cloud's records, as `mergeReadingPositions` runs it.
-    private func sync(_ device: Device, cloud: inout [FirestoreSyncRecord<ReadingPositionSyncItem>], now: Date)
+    private func sync(_ device: Device, cloud: inout [SyncRecord<ReadingPositionSyncItem>], now: Date)
         -> (written: Int, shouldApply: Bool) {
         let saved = device.store.syncItems()
         let savedAt = Dictionary(saved.map { ($0.item.bookId, $0.savedAt) }, uniquingKeysWith: { max($0, $1) })
@@ -51,7 +51,7 @@ struct ReadingPositionSyncTests {
         let written = result.shouldApplyLocally ? device.store.applySyncItems(result.values) : 0
         device.shadow = result.shadow
         cloud = ICloudSyncManager.cloudSyncRecords(values: result.values, shadow: result.shadow, id: { $0.bookId })
-            .map { FirestoreSyncRecord(id: $0.id, value: $0.value, updatedAt: $0.updatedAt, deleted: $0.deleted) }
+            .map { SyncRecord(id: $0.id, value: $0.value, updatedAt: $0.updatedAt, deleted: $0.deleted) }
         return (written, result.shouldApplyLocally)
     }
 
@@ -63,7 +63,7 @@ struct ReadingPositionSyncTests {
         let fifteenPercent = CoreTextReadingPosition(spineIndex: 7, charOffset: 1_204)
         try await iPhone.read(bookId, to: fifteenPercent, at: lastSync.addingTimeInterval(3_600))
 
-        var cloud: [FirestoreSyncRecord<ReadingPositionSyncItem>] = []
+        var cloud: [SyncRecord<ReadingPositionSyncItem>] = []
         _ = sync(iPad, cloud: &cloud, now: lastSync.addingTimeInterval(60))
         _ = sync(iPhone, cloud: &cloud, now: lastSync.addingTimeInterval(4_000))
         let iPadBack = sync(iPad, cloud: &cloud, now: lastSync.addingTimeInterval(8_000))
@@ -84,7 +84,7 @@ struct ReadingPositionSyncTests {
         let bookId = UUID().uuidString
         try await iPhone.read(bookId, to: CoreTextReadingPosition(spineIndex: 7, charOffset: 1_204),
                               at: lastSync.addingTimeInterval(3_600))
-        var cloud: [FirestoreSyncRecord<ReadingPositionSyncItem>] = []
+        var cloud: [SyncRecord<ReadingPositionSyncItem>] = []
         _ = sync(iPhone, cloud: &cloud, now: lastSync.addingTimeInterval(3_700))
         _ = sync(iPad, cloud: &cloud, now: lastSync.addingTimeInterval(3_800))
 

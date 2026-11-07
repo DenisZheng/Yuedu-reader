@@ -35,11 +35,6 @@ final class JSONFileReadingPositionStore: ReadingPositionStore {
         guard let data = try? encoder.encode(StoredPosition(position, textVersion: textVersion)) else { return }
         let url = fileURL(for: bookId)
         try? data.write(to: url, options: .atomic)
-        // Debounce the cloud push: positions save on every page turn, so writing
-        // each one directly would flood Firestore.
-        Task { @MainActor in
-            FirestoreSyncManager.shared.scheduleReadingPositionPush(position, for: bookId, textVersion: textVersion)
-        }
         AppLogger.cache("[ProgressTrace][PositionStore] save bookId=\(bookId) spine=\(position.spineIndex) charOffset=\(position.charOffset)")
     }
 

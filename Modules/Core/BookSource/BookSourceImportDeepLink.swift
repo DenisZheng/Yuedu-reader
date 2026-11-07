@@ -16,6 +16,9 @@ import Foundation
 //   yuedu://module?src=URL                      – a module (Phase 6e-2); any path
 //                                                under `module` is accepted
 enum BookSourceImportDeepLink {
+    /// 系统只注册 Fork 自己的 scheme；站内旧链接仍按同一解析合同处理。
+    static let appScheme = "readerfork-dev"
+
     /// What a link imports.
     enum Target: Equatable {
         case sources(URL)
@@ -30,16 +33,17 @@ enum BookSourceImportDeepLink {
         let path = url.path.lowercased()
 
         // Legacy self-hosted deep link: yuedu://booksource/importOnline?src=URL
-        let isLegacyYuedu = scheme == "yuedu"
+        let isAppScheme = scheme == appScheme || scheme == "yuedu"
+        let isLegacyYuedu = isAppScheme
             && host == "booksource"
             && path == "/importonline"
         // Legado-style deep link (either scheme): …://import/{auto,bookSource,
         // bookSourceUrl,…}?src=URL. Any path under `import` is accepted, matching
         // Legado's own host set (auto / bookSource / bookSourceUrl / rssSource / …).
         let isLegadoStyleImport =
-            (scheme == "yuedu" || scheme == "legado") && host == "import"
+            (isAppScheme || scheme == "legado") && host == "import"
         // Modules are this app's own: Legado has no such link.
-        let isModule = scheme == "yuedu" && host == "module"
+        let isModule = isAppScheme && host == "module"
 
         guard isLegacyYuedu || isLegadoStyleImport || isModule,
               let address = linkedURL(in: url) else { return nil }

@@ -24,8 +24,8 @@ struct ICloudSyncShadowCommitTests {
 
     private func hash(_ item: Item) -> String { item.text }
 
-    private func live(_ item: Item, at date: Date) -> FirestoreSyncRecord<Item> {
-        FirestoreSyncRecord(id: item.id, value: item, updatedAt: date, deleted: false)
+    private func live(_ item: Item, at date: Date) -> SyncRecord<Item> {
+        SyncRecord(id: item.id, value: item, updatedAt: date, deleted: false)
     }
 
     private func entry(_ item: Item, at date: Date) -> SyncShadowEntry {
@@ -35,7 +35,7 @@ struct ICloudSyncShadowCommitTests {
     /// One sync: the merge, and the shadow it leaves given whether its values were applied.
     private func sync(
         local: [Item],
-        remote: [FirestoreSyncRecord<Item>],
+        remote: [SyncRecord<Item>],
         shadow: [String: SyncShadowEntry],
         applied: Bool,
         now: Date

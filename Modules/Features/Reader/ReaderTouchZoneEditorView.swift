@@ -1,11 +1,15 @@
 import SwiftUI
 
+#Preview {
+    ReaderTouchZoneEditorView(isRTL: false, onCancel: {}, onSave: {})
+}
+
 private extension TouchAction {
     var localizedTitle: String { localized(rawValue) }
 }
 
 struct ReaderTouchZoneEditorView: View {
-    @ObservedObject private var subscriptionStore = SubscriptionStore.shared
+
     @StateObject private var model: ReaderTouchZoneEditorModel
 
     let onCancel: () -> Void
@@ -29,9 +33,6 @@ struct ReaderTouchZoneEditorView: View {
                 resetButton
             }
         }
-        .onChange(of: subscriptionStore.isProActive) { _, isActive in
-            if !isActive { onCancel() }
-        }
     }
 
     private var header: some View {
@@ -48,7 +49,7 @@ struct ReaderTouchZoneEditorView: View {
                 .frame(maxWidth: .infinity)
 
             Button {
-                guard model.save(isProActive: subscriptionStore.isProActive) else { return }
+                guard model.save() else { return }
                 onSave()
             } label: {
                 Image(systemName: "checkmark")

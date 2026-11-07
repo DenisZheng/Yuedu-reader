@@ -40,8 +40,8 @@ final class ReaderTouchZoneEditorModel: ObservableObject {
     }
 
     @discardableResult
-    func save(isProActive: Bool) -> Bool {
-        guard isProActive, draft.zones.count == 9 else { return false }
+    func save() -> Bool {
+        guard draft.zones.count == 9 else { return false }
         persist(draft)
         disableGlobalPaging()
         return true

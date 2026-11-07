@@ -400,7 +400,6 @@ enum NowPlayingBarButton: Hashable {
 /// which do not inherit this environment: each is handed what the app root gives the tabs.
 struct NowPlayingPopupHost: ViewModifier {
     let store: BookStore
-    let subscriptionStore: SubscriptionStore
     @ObservedObject var tabBar: RootTabBarVisibility
     @Environment(\.appDependencies) private var dependencies
     @Environment(\.appThemes) private var appThemes
@@ -431,7 +430,7 @@ struct NowPlayingPopupHost: ViewModifier {
         let bar = bar
         return content
             .modifier(AppRootEnvironment(
-                store: store, subscriptionStore: subscriptionStore, dependencies: dependencies,
+                store: store, dependencies: dependencies,
                 appThemes: appThemes, scenePhase: scenePhase
             ))
             .popup(
@@ -448,7 +447,7 @@ struct NowPlayingPopupHost: ViewModifier {
                     shelfCover: shelfCover.flatMap { $0.bookID == bar.bookID ? $0.image : nil }
                 )
                     .modifier(AppRootEnvironment(
-                        store: store, subscriptionStore: subscriptionStore, dependencies: dependencies,
+                        store: store, dependencies: dependencies,
                         appThemes: appThemes, scenePhase: scenePhase
                     ))
             }
@@ -559,7 +558,6 @@ struct NowPlayingPopupHost: ViewModifier {
 /// LNPopupUI re-hosts.
 private struct AppRootEnvironment: ViewModifier {
     let store: BookStore
-    let subscriptionStore: SubscriptionStore
     let dependencies: AppDependencies
     let appThemes: ActiveAppThemes
     let scenePhase: ScenePhase
@@ -568,7 +566,7 @@ private struct AppRootEnvironment: ViewModifier {
         content
             .environmentObject(store)
             .environment(store.filledCovers)
-            .environmentObject(subscriptionStore)
+
             .environment(\.appDependencies, dependencies)
             .environment(\.appThemes, appThemes)
             .environment(\.scenePhase, scenePhase)

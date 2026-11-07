@@ -30,7 +30,7 @@ struct UserDefaultsDiskWriteTests {
     /// The suite all sources shared before 2026-10-29; measured so a return to it fails here.
     private static let legacyRuntimeSuite = "com.yuedu.bookSourceRuntimeState"
     private static let loginSuite = "com.yuedu.loginStore"
-    private static let groupSuite = "group.com.zhangruilin.yuedureader"
+    private static let groupSuite = "group.dev.denis.readerfork.dev"
     private static let standardName = "standard"
 
     /// A suite's own keys: what CFPrefs keeps in its plist, without the global and

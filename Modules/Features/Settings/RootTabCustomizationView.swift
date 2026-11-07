@@ -3,26 +3,12 @@ import UniformTypeIdentifiers
 
 struct RootTabCustomizationView: View {
     @Bindable private var settings = GlobalSettings.shared
-    @EnvironmentObject private var subscriptionStore: SubscriptionStore
-    @State private var showPaywall = false
+
     @State private var iconImportError: RootTabIconImportError?
 
-    private var canCustomize: Bool {
-        subscriptionStore.hasAccess(.bottomBarCustomization)
-    }
 
     var body: some View {
         Form {
-            if !canCustomize {
-                Section {
-                    Button {
-                        showPaywall = true
-                    } label: {
-                        Label(localized("底部 Tab 自定義需要 Pro"), systemImage: "lock.fill")
-                    }
-                }
-                .interfaceSectionSurface()
-            }
 
             visibleTabsSection
             tabPresentationSection
@@ -41,10 +27,6 @@ struct RootTabCustomizationView: View {
                 message: Text(error.message),
                 dismissButton: .default(Text(localized("確定")))
             )
-        }
-        .sheet(isPresented: $showPaywall) {
-            PaywallView(highlightedFeature: .bottomBarCustomization)
-                .environmentObject(subscriptionStore)
         }
     }
 
@@ -65,7 +47,6 @@ struct RootTabCustomizationView: View {
                         Label(localized(tab.titleKey), systemImage: tab.defaultSystemImage)
                             .labelStyle(IconConsistentLabelStyle())
                     }
-                    .disabled(!canCustomize)
                 }
             }
         } header: {
@@ -89,7 +70,6 @@ struct RootTabCustomizationView: View {
                         .foregroundStyle(DSColor.textSecondary)
                 }
             }
-            .disabled(!canCustomize)
 
             Toggle(isOn: customIconSizeEnabledBinding) {
                 HStack {
@@ -101,7 +81,7 @@ struct RootTabCustomizationView: View {
                         .foregroundStyle(DSColor.textSecondary)
                 }
             }
-            .disabled(!canCustomize)
+            .accessibilityIdentifier("root_tabs_custom_size")
 
             if settings.usesCustomRootTabIconSize {
                 VStack(alignment: .leading, spacing: DSSpacing.sm) {
@@ -118,7 +98,6 @@ struct RootTabCustomizationView: View {
                         in: 22...36,
                         step: 1
                     )
-                    .disabled(!canCustomize)
                     // A bare Slider has no name and announces a fraction of its
                     // range instead of the size printed above it.
                     // docs/design.md §7.1, third trap.
@@ -178,7 +157,6 @@ struct RootTabCustomizationView: View {
                     .font(DSFont.subheadline)
             }
             .buttonStyle(.bordered)
-            .disabled(!canCustomize)
         }
         .frame(minHeight: 52)
     }
@@ -205,10 +183,6 @@ struct RootTabCustomizationView: View {
         Binding(
             get: { settings.rootTabHidesLabels },
             set: { value in
-                guard canCustomize else {
-                    showPaywall = true
-                    return
-                }
                 settings.rootTabHidesLabels = value
             }
         )
@@ -229,10 +203,6 @@ struct RootTabCustomizationView: View {
                     : GlobalSettings.initialCustomRootTabIconSize
             },
             set: { value in
-                guard canCustomize else {
-                    showPaywall = true
-                    return
-                }
                 settings.rootTabIconSize = value
             }
         )
@@ -242,10 +212,6 @@ struct RootTabCustomizationView: View {
         Binding(
             get: { settings.usesCustomRootTabIconSize },
             set: { value in
-                guard canCustomize else {
-                    showPaywall = true
-                    return
-                }
                 settings.rootTabIconSize = value
                     ? GlobalSettings.initialCustomRootTabIconSize
                     : GlobalSettings.defaultRootTabIconSize
@@ -257,10 +223,6 @@ struct RootTabCustomizationView: View {
         Binding(
             get: { settings.isRootTabVisible(tab) },
             set: { value in
-                guard canCustomize else {
-                    showPaywall = true
-                    return
-                }
                 settings.setRootTab(tab, visible: value)
             }
         )
@@ -271,10 +233,6 @@ struct RootTabCustomizationView: View {
         tab: RootTabItem,
         slot: RootTabIconSlot
     ) {
-        guard canCustomize else {
-            showPaywall = true
-            return
-        }
         do {
             switch result {
             case .success(.data(let data)):
@@ -309,6 +267,6 @@ private struct RootTabIconImportError: Identifiable {
 #Preview {
     NavigationStack {
         RootTabCustomizationView()
-            .environmentObject(SubscriptionStore.shared)
+
     }
 }

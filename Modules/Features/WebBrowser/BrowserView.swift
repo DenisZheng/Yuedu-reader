@@ -1302,5 +1302,5 @@ struct WebTOCSheet: View {
 #Preview("Explore and browser") {
     BrowserView(browser: BrowserState())
         .environmentObject(BookStore())
-        .environmentObject(SubscriptionStore.shared)
+
 }

@@ -5,8 +5,7 @@ import SwiftUI
 /// 導覽列走原生 chrome（inline 標題＋trailing 的刪除／完成），內容區依序是
 /// 時間、被標註的原文引用、輸入區——開啟即聚焦，鍵盤直接彈出。
 ///
-/// `isEditable == false` 是「Pro 過期但這段本來就有筆記」的情況：內容照樣讀得到，
-/// 只是不能改，底下換成一條續訂入口。
+/// 只读模式保留内容展示；本地笔记编辑不再经过购买或会员入口。
 struct ReaderNoteEditorView: View {
     /// 被標註的原文。
     let excerpt: String
@@ -14,11 +13,10 @@ struct ReaderNoteEditorView: View {
     let date: Date
     /// 已有筆記時才顯示刪除鈕。
     let showsDelete: Bool
-    /// Pro 生效時才可編輯。
+    /// 调用方指定是否允许编辑，不代表会员身份。
     let isEditable: Bool
     let onSave: (String) -> Void
     let onDelete: () -> Void
-    let onUpgrade: () -> Void
     let onClose: () -> Void
 
     @State private var text: String
@@ -32,7 +30,6 @@ struct ReaderNoteEditorView: View {
         isEditable: Bool,
         onSave: @escaping (String) -> Void,
         onDelete: @escaping () -> Void,
-        onUpgrade: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
         self.excerpt = ReaderBookmarkExcerpt.plain(excerpt)
@@ -41,7 +38,6 @@ struct ReaderNoteEditorView: View {
         self.isEditable = isEditable
         self.onSave = onSave
         self.onDelete = onDelete
-        self.onUpgrade = onUpgrade
         self.onClose = onClose
         _text = State(initialValue: note)
     }
@@ -119,7 +115,7 @@ struct ReaderNoteEditorView: View {
         }
     }
 
-    // MARK: - 唯讀（Pro 過期）
+    // MARK: - 只读展示
 
     private var readOnlyNote: some View {
         VStack(alignment: .leading, spacing: DSSpacing.lg) {
@@ -129,15 +125,6 @@ struct ReaderNoteEditorView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
-
-            Button {
-                onUpgrade()
-            } label: {
-                Label(localized("訂閱 Pro 繼續編輯筆記"), systemImage: "lock.fill")
-                    .font(DSFont.subheadline)
-                    .frame(maxWidth: .infinity, minHeight: DSLayout.minimumTapTarget)
-            }
-            .buttonStyle(.onAccentProminent)
 
             Spacer(minLength: 0)
         }
@@ -204,7 +191,6 @@ struct ReaderNoteEditorView: View {
                 isEditable: true,
                 onSave: { _ in },
                 onDelete: {},
-                onUpgrade: {},
                 onClose: {}
             )
         }
@@ -221,7 +207,6 @@ struct ReaderNoteEditorView: View {
                 isEditable: true,
                 onSave: { _ in },
                 onDelete: {},
-                onUpgrade: {},
                 onClose: {}
             )
         }
@@ -238,7 +223,6 @@ struct ReaderNoteEditorView: View {
                 isEditable: false,
                 onSave: { _ in },
                 onDelete: {},
-                onUpgrade: {},
                 onClose: {}
             )
         }

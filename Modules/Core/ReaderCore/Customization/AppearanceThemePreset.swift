@@ -186,7 +186,6 @@ struct AppearanceThemePreset: Identifiable, Hashable {
     let previewBackground: UIColor
     let relativePreviewImagePath: String?
     let imagePaths: [String]
-    let requiresPro: Bool
     let isImagePreset: Bool
     let isCustom: Bool
     /// True when this instance is the theme's **dark-appearance** palette, i.e.
@@ -315,7 +314,6 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             previewBackground: isImagePreset ? previewBackground : Self.hex(colors.barHex),
             relativePreviewImagePath: relativePreviewImagePath,
             imagePaths: imagePaths,
-            requiresPro: requiresPro,
             isImagePreset: isImagePreset,
             isCustom: isCustom
         )
@@ -347,7 +345,6 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             previewBackground: colors.bar,
             relativePreviewImagePath: relativePreviewImagePath,
             imagePaths: imagePaths,
-            requiresPro: requiresPro,
             isImagePreset: isImagePreset,
             isCustom: isCustom
         )
@@ -402,7 +399,6 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             previewBackground: darkBar,
             relativePreviewImagePath: relativePreviewImagePath,
             imagePaths: imagePaths,
-            requiresPro: requiresPro,
             isImagePreset: isImagePreset,
             isCustom: isCustom
         )
@@ -462,7 +458,7 @@ struct AppearanceThemePreset: Identifiable, Hashable {
         bar: .white, accent: hex(0x007AFF), dialogue: hex(0xD8E9FB),
         previewBackground: .white,
         relativePreviewImagePath: nil, imagePaths: [],
-        requiresPro: false, isImagePreset: false, isCustom: false
+        isImagePreset: false, isCustom: false
     )
 
     static var allDefaultPresets: [AppearanceThemePreset] {
@@ -479,7 +475,7 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             bar: hex(0xDCE9F8), accent: hex(0x3478F6), dialogue: hex(0xD4E4F7),
             previewBackground: hex(0xDCE9F8),
             relativePreviewImagePath: nil, imagePaths: [],
-            requiresPro: false, isImagePreset: false, isCustom: false
+            isImagePreset: false, isCustom: false
         ),
         AppearanceThemePreset(
             id: "sunset_orange", nameKey: "暮色橙",
@@ -488,7 +484,7 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             bar: hex(0xF5E2D4), accent: hex(0xE8703A), dialogue: hex(0xF4DCCB),
             previewBackground: hex(0xF5E2D4),
             relativePreviewImagePath: nil, imagePaths: [],
-            requiresPro: false, isImagePreset: false, isCustom: false
+            isImagePreset: false, isCustom: false
         ),
         AppearanceThemePreset(
             id: "forest_green", nameKey: "苔原綠",
@@ -497,7 +493,7 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             bar: hex(0xDCEBDE), accent: hex(0x3E9D63), dialogue: hex(0xD5E8D8),
             previewBackground: hex(0xDCEBDE),
             relativePreviewImagePath: nil, imagePaths: [],
-            requiresPro: false, isImagePreset: false, isCustom: false
+            isImagePreset: false, isCustom: false
         ),
         AppearanceThemePreset(
             id: "lavender", nameKey: "薰衣紫",
@@ -506,7 +502,7 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             bar: hex(0xE7DDF6), accent: hex(0x8B5CD6), dialogue: hex(0xE3D8F4),
             previewBackground: hex(0xE7DDF6),
             relativePreviewImagePath: nil, imagePaths: [],
-            requiresPro: false, isImagePreset: false, isCustom: false
+            isImagePreset: false, isCustom: false
         ),
         AppearanceThemePreset(
             id: "rose_pink", nameKey: "櫻語粉",
@@ -515,7 +511,7 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             bar: hex(0xF6DCE7), accent: hex(0xE05C8A), dialogue: hex(0xF5D5E2),
             previewBackground: hex(0xF6DCE7),
             relativePreviewImagePath: nil, imagePaths: [],
-            requiresPro: false, isImagePreset: false, isCustom: false
+            isImagePreset: false, isCustom: false
         ),
         AppearanceThemePreset(
             id: "amber_gold", nameKey: "琥珀金",
@@ -524,7 +520,7 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             bar: hex(0xF2E6C9), accent: hex(0xD69A2D), dialogue: hex(0xF0E1BD),
             previewBackground: hex(0xF2E6C9),
             relativePreviewImagePath: nil, imagePaths: [],
-            requiresPro: false, isImagePreset: false, isCustom: false
+            isImagePreset: false, isCustom: false
         ),
     ]
 
@@ -578,7 +574,6 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             previewBackground: hex(custom.backgroundHex),
             relativePreviewImagePath: nil,
             imagePaths: [],
-            requiresPro: true,
             isImagePreset: false,
             isCustom: true
         )
@@ -712,7 +707,6 @@ struct AppearanceThemePreset: Identifiable, Hashable {
             previewBackground: isDark ? hex(0x312B27) : hex(0xF2EDE4),
             relativePreviewImagePath: previewPath,
             imagePaths: imagePaths,
-            requiresPro: true,
             isImagePreset: true,
             isCustom: false
         )

@@ -36,27 +36,16 @@ final class ReaderSettingsPublicationTests: XCTestCase {
         withExtendedLifetime(configToken) {}
     }
 
-    func testIdenticalProfileAndBubbleSyncPublishNothing() {
+    func testIdenticalBubbleSyncPublishesNothing() {
         let settings = GlobalSettings.shared
-        let wasLoggedIn = settings.isLoggedIn
-        defer { settings.isLoggedIn = wasLoggedIn }
-        let profile = UserProfile(uid: settings.accountUserIdentifier,
-            displayName: settings.accountDisplayName, email: settings.accountEmail,
-            provider: settings.accountProvider, photoURL: settings.accountPhotoURL)
-        settings.applyFirebaseProfile(profile)
         settings.applyCommentBubbleSync(styles: settings.commentBubbleCustomStyles)
-        let recorder = ObservationRecorder {
-            (settings.isLoggedIn, settings.accountUserIdentifier, settings.accountDisplayName,
-             settings.accountEmail, settings.accountProvider, settings.accountPhotoURL,
-             settings.commentBubbleCustomStyles)
-        }
-        settings.applyFirebaseProfile(profile)
+        let recorder = ObservationRecorder { settings.commentBubbleCustomStyles }
         settings.applyCommentBubbleSync(styles: settings.commentBubbleCustomStyles)
         XCTAssertEqual(recorder.changeCount, 0)
         recorder.cancel()
     }
 
-    func testRemoteChangeSupersedesPendingLocalWritebackWithoutEcho() {
+    func testRemoteChangeSupersedesPendingLocalWritebackWithoutEcho() async {
         let settings = GlobalSettings.shared
         let original = ReaderPreferences.current()
         defer { original.apply() }
@@ -67,14 +56,22 @@ final class ReaderSettingsPublicationTests: XCTestCase {
         remote.readerFontSize += 2
         remote.readerHeaderTopPadding = (original.readerHeaderTopPadding ?? 0) + 5
         let fontValues = ObservationRecorder { settings.readerFontSize }
+        let recorded = expectation(description: "远端字号应用后的观察值")
+        fontValues.onRecord = { value in
+            if value == remote.readerFontSize { recorded.fulfill() }
+        }
         remote.apply()
-        RunLoop.main.run(until: Date())
+        await fulfillment(of: [recorded], timeout: 2)
+        fontValues.onRecord = nil
         XCTAssertEqual(fontValues.values, [remote.readerFontSize])
         XCTAssertEqual(ReaderConfig.shared.fontSize, CGFloat(remote.readerFontSize))
         XCTAssertEqual(settings.readerHeaderTopPadding, remote.readerHeaderTopPadding)
         let echo = ObservationRecorder { ReaderPreferences.current(settings: settings) }
-        // Runs past a known 120 ms debounce, not waiting for app readiness.
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+        // 覆盖既有120ms防抖窗口：断言没有回写事件，不靠延时猜测应用已稳定。
+        let noEcho = expectation(description: "远端应用不能触发本地回写")
+        noEcho.isInverted = true
+        echo.onRecord = { _ in noEcho.fulfill() }
+        await fulfillment(of: [noEcho], timeout: 0.3)
         XCTAssertEqual(echo.changeCount, 0, "remote sync must not echo after the slider debounce")
         XCTAssertEqual(fontValues.values, [remote.readerFontSize])
         echo.cancel()

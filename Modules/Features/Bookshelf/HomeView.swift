@@ -264,8 +264,7 @@ struct HomeView: View {
     @State private var groupRenameText = ""
     /// Pushed rather than presented: a sheet asked for from a menu action can be dropped on iOS 17.
     @State private var showBookshelfOrganizer = false
-    @State private var showAIPaywall = false
-    @ObservedObject private var subscription = SubscriptionStore.shared
+
     @AppStorage("bookLayoutIsGrid") private var isGridMode = false
     @AppStorage(BookSortOrder.storageKey) private var sortOrder = BookSortOrder.manual.rawValue
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -686,10 +685,6 @@ struct HomeView: View {
             .navigationDestination(isPresented: $showBookshelfOrganizer) {
                 AIBookshelfOrganizerView().environmentObject(store)
             }
-            .sheet(isPresented: $showAIPaywall) {
-                PaywallView(highlightedFeature: .aiReading)
-                    .environmentObject(subscription)
-            }
             .navigationDestination(item: $shelfWork) { route in
                 // A book-source book's page leaves with the book when it is taken off the shelf.
                 WorkDetailView(route: route, onRemoveFromShelf: { shelfWork = nil })
@@ -839,24 +834,13 @@ struct HomeView: View {
         }
     }
 
-    /// Without Pro: marked, and opens the paywall. On iOS 17 a menu cannot open a sheet
-    /// (Technotes/iOS17MenuModalPresentation.md), so there it pushes the organizer, whose
-    /// 開始整理 opens the paywall instead.
     private var organizerMenuItem: some View {
-        let locked = !ReaderPremiumVisibilityPolicy(isProActive: subscription.isProActive).allowsAI
         return Button {
-            if locked, !MenuModalPresentationPolicy.requiresDismissalSequencedChooser {
-                showAIPaywall = true
-            } else {
-                showBookshelfOrganizer = true
-            }
+            showBookshelfOrganizer = true
         } label: {
             // Two `Text`s: the second is the menu row's subtitle.
             Text(localized("AI 整理書架"))
-            if locked {
-                Text(localized("需要 Pro"))
-            }
-            Image(systemName: locked ? "lock.fill" : "sparkles")
+            Image(systemName: "sparkles")
         }
     }
 
@@ -1138,7 +1122,6 @@ struct HomeView: View {
             }
         }
     }
-
 
     // MARK: - Book List
     private func bookList(entries: [ShelfEntry], page: ShelfPage, isInView: Bool) -> some View {
@@ -2760,7 +2743,6 @@ private func previewOnlineBook(hasUpdate: Bool) -> ReadingBook {
         .environmentObject(BookStore())
 }
 #endif
-
 
 // MARK: - Skipping unchanged cells
 

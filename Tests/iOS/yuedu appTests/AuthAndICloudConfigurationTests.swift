@@ -2,16 +2,18 @@ import Foundation
 import Testing
 @testable import yuedu_app
 
-@Suite("Auth and iCloud configuration")
+@Suite("Fork 本地身份与 iCloud 配置")
 struct AuthAndICloudConfigurationTests {
-    @Test("main app entitlements enable Apple sign-in and CloudKit")
-    func mainAppEntitlementsEnableAppleSignInAndCloudKit() throws {
+    @Test("保留独立 CloudKit 容器但不申请账号登录或推送权限")
+    func forkEntitlementsPreserveCloudKit() throws {
         let entitlements = try loadMainAppEntitlements()
 
-        #expect(entitlements["com.apple.developer.applesignin"] as? [String] == ["Default"])
+        #expect(entitlements["com.apple.developer.applesignin"] == nil)
+        #expect(entitlements["aps-environment"] == nil)
+        #expect(entitlements["com.apple.security.application-groups"] as? [String] == ["group.dev.denis.readerfork.dev"])
         #expect(entitlements["com.apple.developer.icloud-services"] as? [String] == ["CloudKit"])
         #expect(entitlements["com.apple.developer.icloud-container-identifiers"] as? [String] == [
-            "iCloud.com.zhangruilin.yuedureader"
+            "iCloud.dev.denis.readerfork.dev"
         ])
     }
 

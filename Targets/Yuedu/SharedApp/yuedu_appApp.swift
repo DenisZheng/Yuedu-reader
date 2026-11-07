@@ -1,6 +1,5 @@
 import YueduCoreText
 import SwiftUI
-import GoogleSignIn
 
 @main
 struct yuedu_appApp: App {
@@ -13,7 +12,7 @@ struct yuedu_appApp: App {
         offShelfReadRecordsDefaults: .standard,
         readingGenres: .shared
     )
-    @StateObject private var subscriptionStore = SubscriptionStore.shared
+
     @StateObject private var bookSourceDeepLinkHandler = BookSourceDeepLinkHandler()
     @Environment(\.scenePhase) private var scenePhase
     /// Set when the scene reaches the background, consumed by the next `.active`: only a
@@ -212,7 +211,7 @@ struct yuedu_appApp: App {
     /// down naturally instead of fighting a separate `isPresented` flag.
     private var bookSourceImportSheetBinding: Binding<Bool> {
         Binding(
-            get: { TestFlightAccessController.shared.state.allowsUse && bookSourceDeepLinkHandler.phase != .idle },
+            get: { bookSourceDeepLinkHandler.phase != .idle },
             set: { presented in
                 if !presented, bookSourceDeepLinkHandler.phase != .idle {
                     bookSourceDeepLinkHandler.finish()
@@ -240,7 +239,7 @@ struct yuedu_appApp: App {
             }
                 .environmentObject(bookStore)
                 .environment(bookStore.filledCovers)
-                .environmentObject(subscriptionStore)
+
                 .environment(\.appDependencies, .live)
                 #if DEBUG
                 .task {
@@ -249,22 +248,13 @@ struct yuedu_appApp: App {
                 #endif
                 .onOpenURL { incomingURL in
                     if incomingURL.isFileURL {
-                        guard TestFlightAccessController.shared.state.allowsUse else { return }
+
                         let importer = SharedImportQueueDrainer.shared
                         // A cold-launch URL may arrive before onAppear binds stores.
                         importer.bind(bookStore: bookStore)
                         Task { await importer.openFile(incomingURL) }
                         return
                     }
-                    // Google Sign-In OAuth callback: hand off first so a Google
-                    // sign-in round-trip completes. `handle(_:)` returns false
-                    // for non-Google URLs, in which case we route to book-source
-                    // import. Routing one concern per URL keeps a deep link from
-                    // accidentally invoking both handlers.
-                    if GIDSignIn.sharedInstance.handle(incomingURL) {
-                        return
-                    }
-                    guard TestFlightAccessController.shared.state.allowsUse else { return }
                     if case .module(let address) = BookSourceImportDeepLink.target(from: incomingURL) {
                         RuleModuleLinkPresenter.present(address)
                         return
@@ -284,9 +274,6 @@ struct yuedu_appApp: App {
                             .appendingPathComponent("discover_cache")
                         try? FileManager.default.removeItem(at: dir)
                     }
-                    // Bind the book store before the auth listener fires, so the
-                    // first post-launch sync (triggered by the listener) sees it.
-                    FirestoreSyncManager.shared.bind(bookStore: bookStore)
                     ICloudSyncManager.shared.bind(bookStore: bookStore)
                     SharedImportQueueDrainer.shared.bind(bookStore: bookStore)
                     WebDAVManager.shared.bind(bookStore: bookStore)
@@ -294,7 +281,6 @@ struct yuedu_appApp: App {
                     // What an earlier 清除封面快取 deleted, or a cover download that failed then
                     // (feedback #116).
                     Task(priority: .utility) { await bookStore.restoreMissingCovers() }
-                    _ = FirebaseAuthManager.shared
                     Task {
                         await AppDependencies.live.offlineDownloadManager
                             .reconcileInterruptedDownloads(store: bookStore)
@@ -374,8 +360,6 @@ struct yuedu_appApp: App {
                 if newPhase != .active { bookStore.flushPendingMetadataSave() }
                 // Pick up sources shared while the app was backgrounded.
                 if newPhase == .active {
-                    Task { await subscriptionStore.refreshAllEntitlements() }
-                    Task { await subscriptionStore.reloadProductsIfStorefrontChanged() }
                     Task { await SharedImportQueueDrainer.shared.drain() }
                     // A button tap while the app was suspended is waiting in the queue.
                     Task { await DownloadActivityCommandApplier.drainObserved() }

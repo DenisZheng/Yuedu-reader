@@ -738,12 +738,11 @@ struct BookDetailCoverWash: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var colorScheme
     @Bindable private var settings = GlobalSettings.shared
-    @ObservedObject private var subscriptions = SubscriptionStore.shared
+
 
     var body: some View {
         if let wash, !reduceTransparency, contrast != .increased,
-           PageBackgroundView.slice(for: .global, colorScheme: colorScheme, settings: settings,
-                                    subscriptions: subscriptions) == nil {
+           PageBackgroundView.slice(for: .global, colorScheme: colorScheme, settings: settings) == nil {
             GeometryReader { proxy in
                 let extensionHeight = DSLayout.bookDetailBackdropTopExtension
                 LinearGradient(

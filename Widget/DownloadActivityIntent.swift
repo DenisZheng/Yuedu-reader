@@ -41,7 +41,7 @@ struct ToggleDownloadPauseIntent: LiveActivityIntent {
 enum DownloadActivityCommandQueue {
     /// Posted after a request is written, so an app already in the foreground reacts at once
     /// instead of waiting for its next lifecycle event.
-    static let didChangeNotification = "com.zhangruilin.yuedureader.downloadActivityCommand"
+    static let didChangeNotification = "dev.denis.readerfork.dev.downloadActivityCommand"
 
     private static let defaultsKey = "download_activity_commands"
 

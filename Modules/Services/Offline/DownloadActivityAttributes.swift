@@ -50,7 +50,7 @@ struct DownloadActivityAttributes: ActivityAttributes {
 
 extension DownloadActivityAttributes {
     /// Shared with the widget extension; also used by the share extension's import queue.
-    static let appGroupID = "group.com.zhangruilin.yuedureader"
+    static let appGroupID = "group.dev.denis.readerfork.dev"
 
     /// Where the app writes the cover thumbnails the activity shows.
     ///

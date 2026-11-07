@@ -14,7 +14,7 @@ struct ICloudSyncBlobDecodingTests {
 
     private let stamped = Date(timeIntervalSince1970: 1_700_000_000)
 
-    private func decode(_ data: Data) throws -> (records: [FirestoreSyncRecord<Item>], payloadHash: String?) {
+    private func decode(_ data: Data) throws -> (records: [SyncRecord<Item>], payloadHash: String?) {
         try ICloudSyncManager.decodeCloudSyncBlob(
             data, recordName: "items_v2",
             id: { $0.id }, fallbackUpdatedAt: { _ in .distantPast }

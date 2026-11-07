@@ -8,8 +8,11 @@ private enum ReaderSettingsDeferredPresentationRoute {
     /// 匯入字體 / 匯入閱讀設定 / 匯入正則高亮 — the settings sheet's document pickers,
     /// handed to this first-level presenter because they live inside that sheet.
     case styleImporter(ReaderStyleImportRoute)
-    /// A locked control inside settings (匯入字體 without Pro) asked for the paywall.
-    case paywall(PremiumFeature)
+}
+
+#Preview("没有匹配书籍时的阅读入口") {
+    ReaderView(bookId: UUID())
+        .environmentObject(BookStore())
 }
 
 // MARK: - Main Reader View
@@ -44,7 +47,7 @@ struct ReaderView: View {
     /// the shelf entry once already (see `effectiveReaderSafeTop`).
     @Environment(\.displayScale) var readerDisplayScale
     @Bindable var settings = GlobalSettings.shared
-    @ObservedObject var subscriptionStore = SubscriptionStore.shared
+
     @StateObject var readerConfig = ReaderConfig.shared
     /// The clock/battery readings the bars draw — read, never observed.
     ///
@@ -60,7 +63,7 @@ struct ReaderView: View {
     // MARK: - Speculative Pre-Layout for Cross-Chapter Scrolling
     @State private var scrollVelocity: CGFloat = 0.0
     @State private var isGhostModeActive: Bool = false
-    
+
     private func updateScrollVelocity(_ newVelocity: CGFloat) {
         scrollVelocity = newVelocity
         if abs(scrollVelocity) > 1000 && !isGhostModeActive {
@@ -70,7 +73,7 @@ struct ReaderView: View {
             speculativePreLayoutNextChapter()
         }
     }
-    
+
     private func speculativePreLayoutNextChapter() {
         Task { @MainActor in
             guard currentChapterIndex + 1 < spineChapters.count else { return }
@@ -83,7 +86,6 @@ struct ReaderView: View {
             }
         }
     }
-
 
     /// Set only for a slow open: the card animation already started on the
     /// loading chrome, so the first page must not be swapped in until the
@@ -138,7 +140,6 @@ struct ReaderView: View {
     @State private var noteEditorFollowUp =
         DismissalSequencedPresentation<ReaderNoteEditorFollowUp>()
     /// 開著的付費牆；`nil` 表示沒開。
-    @State var paywallFeature: PremiumFeature?
     @State var showTouchZoneEditor = false
     @State var readerOverlaySVGAssetStore: ReaderOverlaySVGAssetStore?
     @State var readerOverlaySVGAssetStoreIsPersistent = false
@@ -486,8 +487,7 @@ struct ReaderView: View {
             preset = settings.readerBackgroundPreset(for: background)
         } else if resolution.paintsWithAppearanceTheme {
             preset = settings.appearanceTheme(
-                for: settings.readerMode,
-                isProActive: subscriptionStore.hasAccess(.readerThemePacks)
+                for: settings.readerMode
             )
         }
 
@@ -2546,7 +2546,6 @@ struct ReaderView: View {
                 .onChanged(of: readerTranslation) { old, new in
                     readerTranslationDidChange(from: old, to: new)
                 }
-                .onChanged(of: readerPremiumVisibility.allowsAI) { _ in aiAccessDidChange() }
                 .onReceive(AIChapterTranslationService.shared.updates) { chapter in
                     applyTranslationUpdate(chapter)
                 }
@@ -2558,9 +2557,6 @@ struct ReaderView: View {
                 .onChanged(of: currentPage) { _ in translateVisibleChapterIfNeeded() }
                 .onChanged(of: epubRenderer.scrollChapterInsertions) { _ in translateVisibleChapterIfNeeded() }
         .onChanged(of: settings.customAppearanceThemes) { _ in
-            syncActiveThemePreset()
-        }
-        .onReceive(subscriptionStore.$isProActive) { _ in
             syncActiveThemePreset()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIScreen.brightnessDidChangeNotification))
@@ -2752,12 +2748,11 @@ struct ReaderView: View {
                     allowsVerticalWritingMode: (book ?? snapshotBook)?.allowsVerticalWritingMode == true,
                     hasParagraphReviews: currentBookHasParagraphReviews,
                     onOpenTouchZoneEditor: {
-                        guard subscriptionStore.isProActive, !effectiveScrollMode else { return }
+                        guard !effectiveScrollMode else { return }
                         setReaderChromeVisible(false)
                         showTouchZoneEditor = true
                     },
-                    onOpenStyleImporter: requestFirstLevelReaderStyleImporter,
-                    onOpenPaywall: readerSettingsPaywallAction
+                    onOpenStyleImporter: requestFirstLevelReaderStyleImporter
                 )
             }
         }
@@ -2785,10 +2780,6 @@ struct ReaderView: View {
                 },
                 onCustomize: {
                     quickPanelDeferredRoute = .settings
-                    showQuickThemePanel = false
-                },
-                onOpenPaywall: { feature in
-                    quickPanelDeferredRoute = .paywall(feature)
                     showQuickThemePanel = false
                 }
             )
@@ -2912,7 +2903,6 @@ struct ReaderView: View {
             onDismiss: {
                 switch noteEditorFollowUp.consumeAfterDismissal() {
                 case .confirmDelete(let route): noteDeleteRoute = route
-                case .paywall: paywallFeature = .paragraphNote
                 case nil: break
                 }
             }
@@ -2937,21 +2927,11 @@ struct ReaderView: View {
                     )
                     noteEditorRoute = nil
                 },
-                onUpgrade: {
-                    noteEditorFollowUp.select(.paywall)
-                    noteEditorRoute = nil
-                },
                 onClose: { noteEditorRoute = nil }
             )
             // App UI, so the app's accent rather than the reader's ink (`body`): its prominent
             // button was filled with the ink, 黑色's D9D9D9 under white text.
             .tint(DSColor.accent)
-        }
-        .sheet(item: $paywallFeature) { feature in
-            PaywallView(highlightedFeature: feature)
-                .environmentObject(subscriptionStore)
-                // The app's accent, not the reader's ink, as the note editor above.
-                .tint(DSColor.accent)
         }
         .alert(
             localized("刪除筆記"),
@@ -3164,17 +3144,6 @@ struct ReaderView: View {
         )
     }
 
-    /// Settings' paywall route, taken over by the reader only where it must present first-level.
-    private var readerSettingsPaywallAction: ((PremiumFeature) -> Void)? {
-        let openPaywall: (PremiumFeature) -> Void = requestFirstLevelReaderPaywall
-        return ReaderSettingsPresentationPolicy.requiresFirstLevelImporter ? openPaywall : nil
-    }
-
-    private func requestFirstLevelReaderPaywall(_ feature: PremiumFeature) {
-        readerSettingsDeferredPresentation.select(.paywall(feature))
-        showSettings = false
-    }
-
     private func requestFirstLevelReaderStyleImporter(_ route: ReaderStyleImportRoute) {
         guard ReaderSettingsPresentationPolicy.requiresFirstLevelImporter else {
             readerStyleImportRoute = route
@@ -3191,8 +3160,6 @@ struct ReaderView: View {
         switch route {
         case .settings:
             showSettings = true
-        case .paywall(let feature):
-            paywallFeature = feature
         }
     }
 
@@ -3203,8 +3170,6 @@ struct ReaderView: View {
         switch route {
         case .styleImporter(let styleRoute):
             readerStyleImportRoute = styleRoute
-        case .paywall(let feature):
-            paywallFeature = feature
         }
     }
 
