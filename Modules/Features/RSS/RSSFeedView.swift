@@ -468,11 +468,17 @@ struct RSSFeedView: View {
     }
 
     private func refresh() async {
+        let requestedSource = currentSource
+        let requestedEntry = selectedSortEntry
+        guard let ticket = store.requestTicket(for: requestedSource.id) else { return }
         await fetcher.fetchItems(
-            from: currentSource,
-            metadata: store.feedMetadata(for: currentSource.id),
-            sortEntry: selectedSortEntry
+            from: requestedSource,
+            metadata: store.feedMetadata(for: requestedSource.id),
+            sortEntry: requestedEntry
         )
+        guard !Task.isCancelled, store.accepts(ticket),
+              store.source(id: requestedSource.id) == requestedSource,
+              selectedSortEntry == requestedEntry else { return }
 
         if selectedSortEntry == nil, fetcher.sortEntries.count > 1 {
             selectedSortEntry = fetcher.sortEntries.first
@@ -485,7 +491,8 @@ struct RSSFeedView: View {
             if let response = fetcher.response {
                 newArticles = store.applyFeedResponse(response, for: currentSource.id)
             } else {
-                newArticles = store.mergeFetchedItems(fetcher.items, for: currentSource.id)
+                newArticles = store.mergeFetchedItems(fetcher.items, for: currentSource.id,
+                                                      scope: selectedSortEntry.map(RSSArticleScope.category) ?? .feed)
             }
             RSSNotificationManager.shared.notifyNewArticles(newArticles, source: notificationSource)
         }

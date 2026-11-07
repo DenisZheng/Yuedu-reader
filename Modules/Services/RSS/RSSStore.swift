@@ -9,8 +9,15 @@ final class RSSStore: ObservableObject {
     @Published var sources: [RSSSource] = [] { didSet { configurationRevision &+= 1 } }
     @Published var folders: [RSSFolder] = [] { didSet { configurationRevision &+= 1 } }
     private(set) var configurationRevision: UInt64 = 0
-    @Published private var cachedArticlesBySource: [String: [RSSArticleRecord]] = [:]
-    @Published private var articleStatuses: [String: RSSArticleStatus] = [:]
+    private var authenticationRevisions: [String: UInt64] = [:]
+    private var sourceVariables: [String: [String: String]] = [:]
+    @Published private var cachedArticlesBySource: [String: [RSSArticleRecord]] = [:] { didSet { contentRevision &+= 1 } }
+    @Published private var articleStatuses: [String: RSSArticleStatus] = [:] { didSet { contentRevision &+= 1 } }
+    private var contentRevision: UInt64 = 0
+    // 仅owner派生索引：避免状态动作逐次扫描全库；不持有另一份内容/状态。
+    private var articleLocations: [String: (sourceID: String, index: Int)] = [:]
+    private var legacyArticleIDs: [String: Set<String>] = [:]
+    private var unreadBySource: [String: Int] = [:]
     @Published private var feedMetadataBySource: [String: RSSFeedFetchMetadata] = [:]
 
     private let sourceStorageURL: URL
@@ -33,7 +40,7 @@ final class RSSStore: ObservableObject {
             ensureFolderExists(named: groupName)
         }
         sources.append(source)
-        save()
+        save([.sources, .folders])
     }
 
     func addSources(_ newSources: [RSSSource]) -> Int {
@@ -58,7 +65,7 @@ final class RSSStore: ObservableObject {
         }
 
         if !addedSources.isEmpty {
-            save()
+            save([.sources, .folders])
         }
         return addedSources
     }
@@ -74,15 +81,20 @@ final class RSSStore: ObservableObject {
     func removeSources(ids: [String]) {
         guard !ids.isEmpty else { return }
         let sourceIDs = Set(ids)
-        let articleIDs = sourceIDs.flatMap { cachedArticlesBySource[$0]?.map(\.id) ?? [] }
+        let articleIDs = Set(sourceIDs.flatMap { cachedArticlesBySource[$0]?.map(\.id) ?? [] })
+        let legacyIDs = Set(sourceIDs.flatMap { cachedArticlesBySource[$0]?.compactMap(\.legacyID) ?? [] })
 
         sources.removeAll { sourceIDs.contains($0.id) }
         for sourceID in sourceIDs {
+            indexArticles([], replacing: cachedArticlesBySource[sourceID] ?? [], for: sourceID)
             cachedArticlesBySource[sourceID] = nil
             feedMetadataBySource[sourceID] = nil
+            sourceVariables[sourceID] = nil
+            authenticationRevisions[sourceID, default: 0] &+= 1
         }
-        for articleID in articleIDs {
-            articleStatuses[articleID] = nil
+        articleStatuses = articleStatuses.filter { key, value in
+            !articleIDs.contains(key) && !sourceIDs.contains(value.sourceID ?? "")
+                && !(legacyIDs.contains(key) && legacyArticleIDs[key] == nil)
         }
         save()
     }
@@ -94,8 +106,9 @@ final class RSSStore: ObservableObject {
             if let groupName = normalized.sourceGroup {
                 ensureFolderExists(named: groupName)
             }
+            guard sources[index] != normalized else { return }
             sources[index] = normalized
-            save()
+            save([.sources, .folders])
         }
     }
 
@@ -212,7 +225,11 @@ final class RSSStore: ObservableObject {
     }
 
     @discardableResult
-    func mergeFetchedItems(_ items: [RSSItem], for sourceID: String) -> [RSSArticleRecord] {
+    func mergeFetchedItems(_ items: [RSSItem], for sourceID: String,
+                           scope: RSSArticleScope = .feed, append: Bool = false) -> [RSSArticleRecord] {
+        guard source(id: sourceID) != nil else { return [] }
+        let scope = items.first?.scope ?? scope
+        let items = items.map { $0.identified(sourceID: sourceID, scope: scope) }
         let existingRecords = cachedArticlesBySource[sourceID] ?? []
 
         // Real-world feeds (and Legado custom-rule sources whose uniqueID
@@ -237,7 +254,7 @@ final class RSSStore: ObservableObject {
         var seenIDs = Set<String>()
         let dedupedItems = items.filter { seenIDs.insert($0.id).inserted }
 
-        let mergedRecords = dedupedItems.map { item in
+        var mergedRecords = dedupedItems.map { item in
             var record = RSSArticleRecord(item: item, fetchedAt: fetchedAt, status: articleStatuses[item.id])
             if let oldRecord = existingByID[item.id] {
                 // First seen, not last fetched: re-stamping every record made every refresh
@@ -256,8 +273,16 @@ final class RSSStore: ObservableObject {
             }
             return record
         }
-        if mergedRecords != existingRecords {
+        // 刷新只替换当前分类/查询；缺席的收藏仍可从智能列表打开。
+        mergedRecords += existingRecords.filter { record in
+            !seenIDs.contains(record.id) && ((record.scope ?? .feed) != scope || append
+                || (articleStatuses[record.id]?.isFavorite ?? record.isFavorite))
+        }
+        let changedScope = mergedRecords.filter { ($0.scope ?? .feed) == scope }
+        let previousScope = existingRecords.filter { ($0.scope ?? .feed) == scope }
+        if changedScope != previousScope {
             cachedArticlesBySource[sourceID] = mergedRecords
+            indexArticles(mergedRecords, replacing: existingRecords, for: sourceID)
             saveRefreshResult(.articles)
         }
         guard hadExistingCache else { return [] }
@@ -268,6 +293,7 @@ final class RSSStore: ObservableObject {
 
     @discardableResult
     func applyFeedResponse(_ response: RSSFeedResponse, for sourceID: String) -> [RSSArticleRecord] {
+        guard source(id: sourceID) != nil else { return [] }
         switch response {
         case .notModified:
             var metadata = feedMetadataBySource[sourceID] ?? RSSFeedFetchMetadata()
@@ -285,8 +311,11 @@ final class RSSStore: ObservableObject {
     }
 
     func articles(for sourceID: String) -> [RSSArticleRecord] {
-        (cachedArticlesBySource[sourceID] ?? [])
-            .map { $0.applying(status: articleStatuses[$0.id]) }
+        (cachedArticlesBySource[sourceID] ?? []).enumerated()
+            .compactMap { index, record -> RSSArticleRecord? in
+                guard articleLocations[record.id]?.index == index else { return nil }
+                return record.applying(status: articleStatuses[record.id])
+            }
             .sorted { lhs, rhs in
                 (lhs.pubDate ?? lhs.fetchedAt) > (rhs.pubDate ?? rhs.fetchedAt)
             }
@@ -314,7 +343,13 @@ final class RSSStore: ObservableObject {
     }
 
     func status(for articleID: String) -> RSSArticleStatus? {
-        articleStatuses[articleID]
+        if let status = articleStatuses[articleID], status.identityVersion == RSSIdentity.version { return status }
+        guard let article = article(id: articleID) else { return nil }
+        if let status = articleStatuses[article.id] { return status }
+        // 早期Fork已经将状态镜像到各源记录；只继承该记录快照，不把歧义raw GUID广播到别的源。
+        return RSSArticleStatus(articleId: article.id, sourceID: article.sourceId, identityVersion: RSSIdentity.version, scope: article.scope,
+                                isRead: article.isRead, isFavorite: article.isFavorite,
+                                lastOpenedAt: article.lastOpenedAt, readerScrollY: article.readerScrollY)
     }
 
     var firestoreArticleStatusesSnapshot: [RSSArticleStatus] {
@@ -322,35 +357,51 @@ final class RSSStore: ObservableObject {
     }
 
     func markRead(articleId: String, isRead: Bool) {
-        var status = articleStatuses[articleId] ?? RSSArticleStatus(articleId: articleId)
+        guard let article = article(id: articleId) else { return }
+        let articleId = article.id
+        var status = self.status(for: articleId) ?? RSSArticleStatus(articleId: articleId)
+        guard status.isRead != isRead else { return }
+        status.sourceID = article.sourceId
+        status.identityVersion = RSSIdentity.version
+        status.scope = article.scope
         status.isRead = isRead
         if isRead {
             status.lastOpenedAt = Date()
         }
         articleStatuses[articleId] = status
-        updateCachedArticle(articleId: articleId, status: status)
-        save()
+        updateCachedArticle(articleId: articleId, status: status, previousRead: !isRead)
+        save(.statuses)
         if isRead {
             RSSNotificationManager.shared.removeDeliveredNotification(articleID: articleId)
         }
     }
 
     func updateReaderScrollY(articleId: String, scrollY: Double) {
-        var status = articleStatuses[articleId] ?? RSSArticleStatus(articleId: articleId)
+        guard scrollY.isFinite, let article = article(id: articleId) else { return }
+        let articleId = article.id
+        var status = self.status(for: articleId) ?? RSSArticleStatus(articleId: articleId)
         let normalizedScrollY = max(0, scrollY)
         guard abs(status.readerScrollY - normalizedScrollY) > 1 else { return }
+        status.sourceID = article.sourceId
+        status.identityVersion = RSSIdentity.version
+        status.scope = article.scope
         status.readerScrollY = normalizedScrollY
         articleStatuses[articleId] = status
         updateCachedArticle(articleId: articleId, status: status)
-        save()
+        save(.statuses)
     }
 
     func toggleFavorite(articleId: String) {
-        var status = articleStatuses[articleId] ?? RSSArticleStatus(articleId: articleId)
+        guard let article = article(id: articleId) else { return }
+        let articleId = article.id
+        var status = self.status(for: articleId) ?? RSSArticleStatus(articleId: articleId)
+        status.sourceID = article.sourceId
+        status.identityVersion = RSSIdentity.version
+        status.scope = article.scope
         status.isFavorite.toggle()
         articleStatuses[articleId] = status
         updateCachedArticle(articleId: articleId, status: status)
-        save()
+        save(.statuses)
     }
 
     func markAllRead(sourceID: String? = nil, isRead: Bool = true) {
@@ -371,16 +422,25 @@ final class RSSStore: ObservableObject {
         guard !articleIDs.isEmpty else { return }
 
         let now = Date()
+        var changed = false
         for articleID in articleIDs {
-            var status = articleStatuses[articleID] ?? RSSArticleStatus(articleId: articleID)
+            guard let article = article(id: articleID) else { continue }
+            let articleID = article.id
+            var status = self.status(for: articleID) ?? RSSArticleStatus(articleId: articleID)
+            guard status.isRead != isRead else { continue }
+            changed = true
+            status.sourceID = article.sourceId
+            status.identityVersion = RSSIdentity.version
+            status.scope = article.scope
             status.isRead = isRead
             if isRead {
                 status.lastOpenedAt = now
             }
             articleStatuses[articleID] = status
-            updateCachedArticle(articleId: articleID, status: status)
+            updateCachedArticle(articleId: articleID, status: status, previousRead: !isRead)
         }
-        save()
+        guard changed else { return }
+        save(.statuses)
         if isRead {
             RSSNotificationManager.shared.removeDeliveredNotifications(articleIDs: articleIDs)
         }
@@ -392,9 +452,7 @@ final class RSSStore: ObservableObject {
     /// articles (Debug simulator). Same answer: `applying(status:)` takes `isRead` from the
     /// status when there is one.
     func unreadCount(for sourceID: String) -> Int {
-        (cachedArticlesBySource[sourceID] ?? []).reduce(0) { count, article in
-            count + (isRead(article) ? 0 : 1)
-        }
+        unreadBySource[sourceID, default: 0]
     }
 
     private func isRead(_ article: RSSArticleRecord) -> Bool {
@@ -410,7 +468,8 @@ final class RSSStore: ObservableObject {
     func unreadCount(for smartFeed: RSSSmartFeedKind) -> Int {
         var count = 0
         for source in sources {
-            for article in cachedArticlesBySource[source.id] ?? [] where !isRead(article) {
+            for (index, article) in (cachedArticlesBySource[source.id] ?? []).enumerated()
+                where articleLocations[article.id]?.index == index && !isRead(article) {
                 switch smartFeed {
                 case .today:
                     if Calendar.current.isDateInToday(article.pubDate ?? article.fetchedAt) { count += 1 }
@@ -444,7 +503,7 @@ final class RSSStore: ObservableObject {
     func clearFeedMetadata(for sourceID: String) {
         guard feedMetadataBySource[sourceID] != nil else { return }
         feedMetadataBySource[sourceID] = nil
-        save()
+        save(.feedMetadata)
     }
 
     func searchArticles(query: String) -> [RSSArticleRecord] {
@@ -463,19 +522,44 @@ final class RSSStore: ObservableObject {
     }
 
     func article(id articleID: String) -> RSSArticleRecord? {
-        for sourceID in cachedArticlesBySource.keys {
-            if let article = cachedArticlesBySource[sourceID]?.first(where: { $0.id == articleID }) {
-                return article.applying(status: articleStatuses[articleID])
-            }
-        }
-        return nil
+        let resolvedID: String
+        if articleLocations[articleID] != nil { resolvedID = articleID }
+        else if let aliases = legacyArticleIDs[articleID], aliases.count == 1, let only = aliases.first { resolvedID = only }
+        else { return nil }
+        guard let location = articleLocations[resolvedID], source(id: location.sourceID) != nil,
+              let records = cachedArticlesBySource[location.sourceID], records.indices.contains(location.index) else { return nil }
+        return records[location.index].applying(status: articleStatuses[resolvedID])
     }
 
     func source(id sourceID: String) -> RSSSource? {
         sources.first { $0.id == sourceID }
     }
 
+    func requestTicket(for sourceID: String) -> RSSRequestTicket? {
+        guard source(id: sourceID) != nil else { return nil }
+        return .init(sourceID: sourceID, configurationRevision: configurationRevision,
+                     authenticationRevision: authenticationRevisions[sourceID, default: 0])
+    }
+
+    func accepts(_ ticket: RSSRequestTicket) -> Bool {
+        requestTicket(for: ticket.sourceID) == ticket && source(id: ticket.sourceID)?.enabled == true
+    }
+
+    func authenticationChanged(for sourceID: String) {
+        authenticationRevisions[sourceID, default: 0] &+= 1
+    }
+
+    func variables(for sourceID: String) -> [String: String] { sourceVariables[sourceID] ?? [:] }
+
+    func setVariables(_ values: [String: String], for sourceID: String) {
+        guard source(id: sourceID) != nil, sourceVariables[sourceID] != values else { return }
+        sourceVariables[sourceID] = values
+        save(.variables)
+    }
+
     func updateFullText(articleId: String, text: String, html: String? = nil, fetchedAt: Date = Date()) {
+        guard let existing = article(id: articleId), existing.fullText != text || existing.fullTextHTML != html else { return }
+        let articleId = existing.id
         for sourceID in cachedArticlesBySource.keys {
             guard let index = cachedArticlesBySource[sourceID]?.firstIndex(where: { $0.id == articleId }) else {
                 continue
@@ -484,16 +568,60 @@ final class RSSStore: ObservableObject {
             cachedArticlesBySource[sourceID]?[index].fullTextHTML = html
             cachedArticlesBySource[sourceID]?[index].fullTextFetchedAt = fetchedAt
         }
-        save()
+        save(.articles)
     }
 
-    private func updateCachedArticle(articleId: String, status: RSSArticleStatus) {
-        for sourceID in cachedArticlesBySource.keys {
-            guard let index = cachedArticlesBySource[sourceID]?.firstIndex(where: { $0.id == articleId }) else {
-                continue
-            }
-            cachedArticlesBySource[sourceID]?[index] = cachedArticlesBySource[sourceID]![index].applying(status: status)
+    func updateMediaProgress(articleID: String, attachmentKey: String, position: Double, duration: Double? = nil) {
+        guard position.isFinite, position >= 0, let article = article(id: articleID),
+              duration == nil || (duration!.isFinite && duration! >= 0) else { return }
+        let articleID = article.id
+        var status = self.status(for: articleID) ?? RSSArticleStatus(articleId: articleID)
+        let key = RSSIdentity.attachment(articleID: articleID, key: attachmentKey)
+        let progress = RSSMediaProgress(position: position, duration: duration)
+        guard status.mediaProgress?[key] != progress else { return }
+        status.sourceID = article.sourceId
+        status.identityVersion = RSSIdentity.version
+        status.scope = article.scope
+        if status.mediaProgress == nil { status.mediaProgress = [:] }
+        status.mediaProgress?[key] = progress
+        articleStatuses[articleID] = status
+        save(.statuses)
+    }
+
+    private func updateCachedArticle(articleId: String, status: RSSArticleStatus, previousRead: Bool? = nil) {
+        guard let location = articleLocations[articleId],
+              let records = cachedArticlesBySource[location.sourceID], records.indices.contains(location.index) else { return }
+        let old = records[location.index]
+        if let previousRead, previousRead != status.isRead {
+            unreadBySource[location.sourceID, default: 0] += status.isRead ? -1 : 1
         }
+        cachedArticlesBySource[location.sourceID]?[location.index] = old.applying(status: status)
+    }
+
+    private func indexArticles(_ records: [RSSArticleRecord], replacing old: [RSSArticleRecord], for sourceID: String) {
+        for record in old {
+            articleLocations[record.id] = nil
+            if let legacy = record.legacyID {
+                legacyArticleIDs[legacy]?.remove(record.id)
+                if legacyArticleIDs[legacy]?.isEmpty == true { legacyArticleIDs[legacy] = nil }
+            }
+        }
+        var unread = 0
+        for (index, record) in records.enumerated() {
+            if articleLocations[record.id] == nil {
+                articleLocations[record.id] = (sourceID, index)
+                if !isRead(record) { unread += 1 }
+            }
+            if let legacy = record.legacyID { legacyArticleIDs[legacy, default: []].insert(record.id) }
+        }
+        unreadBySource[sourceID] = unread
+    }
+
+    private func rebuildArticleIndex() {
+        articleLocations = [:]
+        legacyArticleIDs = [:]
+        unreadBySource = [:]
+        for (sourceID, records) in cachedArticlesBySource { indexArticles(records, replacing: [], for: sourceID) }
     }
 
     private func applyFeedInfo(_ feedInfo: RSSFeedInfo?, to sourceID: String) {
@@ -619,6 +747,8 @@ final class RSSStore: ObservableObject {
         cachedArticlesBySource = load([String: [RSSArticleRecord]].self, from: articleStorageURL) ?? [:]
         articleStatuses = load([String: RSSArticleStatus].self, from: statusStorageURL) ?? [:]
         feedMetadataBySource = load([String: RSSFeedFetchMetadata].self, from: feedMetadataStorageURL) ?? [:]
+        sourceVariables = load([String: [String: String]].self, from: sourceStorageURL.deletingLastPathComponent().appendingPathComponent("rss_runtime_variables.json")) ?? [:]
+        rebuildArticleIndex()
         backfillFoldersFromSources()
     }
 
@@ -634,8 +764,9 @@ final class RSSStore: ObservableObject {
             folders = syncedFolders
         }
         if let syncedStatuses {
-            articleStatuses = Dictionary(uniqueKeysWithValues: syncedStatuses.map { ($0.articleId, $0) })
+            articleStatuses = Dictionary(syncedStatuses.map { ($0.articleId, $0) }, uniquingKeysWith: { first, _ in first })
         }
+        rebuildArticleIndex()
         save()
     }
 
@@ -648,7 +779,8 @@ final class RSSStore: ObservableObject {
         static let articles = StoredFiles(rawValue: 1 << 2)
         static let statuses = StoredFiles(rawValue: 1 << 3)
         static let feedMetadata = StoredFiles(rawValue: 1 << 4)
-        static let all: StoredFiles = [.sources, .folders, .articles, .statuses, .feedMetadata]
+        static let variables = StoredFiles(rawValue: 1 << 5)
+        static let all: StoredFiles = [.sources, .folders, .articles, .statuses, .feedMetadata, .variables]
     }
 
     /// Runs one refresh of many feeds and writes what it changed once, at the end.
@@ -703,6 +835,50 @@ final class RSSStore: ObservableObject {
     private var persistenceTask: Task<Void, Never>?
     var persistenceFailed: Bool { !failedFiles.isEmpty || !unreadableFiles.isEmpty }
 
+    func backupData() async throws -> Data {
+        try await flushPersistence()
+        return try await RSSBackupCodec.encode(sources: sources, folders: folders,
+                                               records: cachedArticlesBySource, statuses: articleStatuses)
+    }
+
+    /// 先完整校验再修改owner；落盘前备份旧文件，失败不会伪报成功或清理可恢复的数据。
+    func restoreBackup(_ data: Data) async throws {
+        let configuration = configurationRevision
+        let content = contentRevision
+        let snapshot = try await RSSBackupCodec.decode(data)
+        let records = await RSSBackupCodec.materialize(snapshot)
+        try Task.checkCancellation()
+        try await flushPersistence()
+        try await Self.backupBeforeRestore(directory: sourceStorageURL.deletingLastPathComponent())
+        guard configuration == configurationRevision, content == contentRevision else {
+            throw RSSImportService.Issue.stalePlan
+        }
+        sources = snapshot.sources
+        folders = snapshot.folders
+        cachedArticlesBySource = records
+        articleStatuses = Dictionary(uniqueKeysWithValues: snapshot.statuses.map { ($0.articleId, $0) })
+        feedMetadataBySource = [:]
+        sourceVariables = [:]
+        authenticationRevisions = [:]
+        rebuildArticleIndex()
+        save()
+        try await flushPersistence()
+    }
+
+    private nonisolated static func backupBeforeRestore(directory: URL) async throws {
+        let files = ["rss_sources.json", "rss_folders.json", "rss_articles.json", "rss_article_status.json",
+                     "rss_feed_metadata.json", "rss_runtime_variables.json"]
+        let target = directory.appendingPathComponent("rss-restore-backups", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        for file in files {
+            let source = directory.appendingPathComponent(file)
+            if FileManager.default.fileExists(atPath: source.path) {
+                try FileManager.default.copyItem(at: source, to: target.appendingPathComponent(file))
+            }
+        }
+    }
+
     func importSnapshot() -> RSSImportService.Snapshot {
         .init(revision: configurationRevision, sources: sources, folders: folders)
     }
@@ -716,7 +892,12 @@ final class RSSStore: ObservableObject {
             let foldersChanged = folders.count != changes.folders.count
             sources = changes.sources
             if foldersChanged { folders = changes.folders }
-            save(foldersChanged ? [.sources, .folders] : .sources)
+            var files: StoredFiles = foldersChanged ? [.sources, .folders] : .sources
+            for id in changes.changedIDs where feedMetadataBySource[id] != nil {
+                feedMetadataBySource[id] = nil
+                files.insert(.feedMetadata)
+            }
+            save(files)
         }
         try await flushPersistence()
     }
@@ -738,6 +919,7 @@ final class RSSStore: ObservableObject {
         var articles: [String: [RSSArticleRecord]]?
         var statuses: [String: RSSArticleStatus]?
         var metadata: [String: RSSFeedFetchMetadata]?
+        var variables: [String: [String: String]]?
         var directory: URL
     }
 
@@ -756,6 +938,7 @@ final class RSSStore: ObservableObject {
                 articles: files.contains(.articles) ? cachedArticlesBySource : nil,
                 statuses: files.contains(.statuses) ? articleStatuses : nil,
                 metadata: files.contains(.feedMetadata) ? feedMetadataBySource : nil,
+                variables: files.contains(.variables) ? sourceVariables : nil,
                 directory: sourceStorageURL.deletingLastPathComponent()
             )
             let results = await Self.write(snapshot, excluding: unreadableFiles)
@@ -767,6 +950,7 @@ final class RSSStore: ObservableObject {
                 case "rss_folders.json": kind = .folders
                 case "rss_articles.json": kind = .articles
                 case "rss_article_status.json": kind = .statuses
+                case "rss_runtime_variables.json": kind = .variables
                 default: kind = .feedMetadata
                 }
                 if success { writeCounts[file, default: 0] += 1 } else { failedFiles.insert(kind) }
@@ -798,6 +982,7 @@ final class RSSStore: ObservableObject {
             write(snapshot.articles, "rss_articles.json")
             write(snapshot.statuses, "rss_article_status.json")
             write(snapshot.metadata, "rss_feed_metadata.json")
+            write(snapshot.variables, "rss_runtime_variables.json")
             return results
         }
     }
@@ -805,7 +990,11 @@ final class RSSStore: ObservableObject {
     private func load<T: Decodable>(_ type: T.Type, from url: URL) -> T? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         do {
-            return try JSONDecoder().decode(type, from: Data(contentsOf: url))
+            let value = try JSONDecoder().decode(type, from: Data(contentsOf: url))
+            if let configs = value as? [RSSSource], configs.contains(where: { $0.configurationVersion != nil && $0.configurationVersion != 1 }) {
+                throw RSSBackupCodec.Failure.unsupportedVersion
+            }
+            return value
         } catch {
             unreadableFiles.insert(url.lastPathComponent)
             let failure = error as NSError

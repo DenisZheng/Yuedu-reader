@@ -4361,6 +4361,12 @@
 "調整播放速度" = "Adjust Playback Speed";
 "滑動以顯示更多速度" = "Swipe for More Speeds";
 
+/* RSS 身份与备份 */
+"此 RSS 備份版本尚不支援，未還原訂閱資料" = "This RSS backup version is unsupported. Subscriptions were not restored.";
+"RSS 備份校驗失敗或超過大小限制，未還原訂閱資料" = "RSS backup is invalid or too large. Subscriptions were not restored.";
+"RSS 備份包含配置與閱讀狀態，不含正文或媒體；還原後需刷新，登入狀態不會恢復。" = "RSS backups include configuration and reading state, not content or media. Refresh after restoring; login sessions are not restored.";
+"資料已還原，書庫、替換規則與備份中的 RSS 已即時更新" = "Data restored. Library, replacement rules and RSS data in the backup have been updated.";
+
 /* RSS 导入：比较、保存与独立刷新 */
 "%d 個配置欄位變更" = "%d configuration fields changed";
 "不變，跳過" = "Unchanged, skip";

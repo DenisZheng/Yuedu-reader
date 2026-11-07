@@ -38,7 +38,8 @@ struct RSSStoreTests {
         let items = parser.parse(data: Data(xml.utf8))
 
         #expect(items.count == 1)
-        #expect(items[0].id == "https://example.com/article-1")
+        #expect(items[0].rawKey == "https://example.com/article-1")
+        #expect(items[0].id == RSSIdentity.article(sourceID: "source-1", scope: .feed, rawKey: items[0].rawKey!))
         #expect(items[0].title == "Test & Title")
         #expect(items[0].description == "Real summary text for this article.")
         #expect(items[0].contentHTML.contains("<p>Real summary text for this article.</p>"))
@@ -68,7 +69,7 @@ struct RSSStoreTests {
         store.toggleFavorite(articleId: original.id)
 
         let updated = RSSItem(
-            id: original.id,
+            id: original.rawKey!,
             title: "Updated",
             link: original.link,
             pubDate: nil,
@@ -105,9 +106,9 @@ struct RSSStoreTests {
         ]
         store.mergeFetchedItems(items, for: source.id)
 
-        let records = store.articles(for: source.id).map(\.id).sorted()
+        let records = store.articles(for: source.id).compactMap(\.rawKey).sorted()
         #expect(records == ["dup", "unique"])
-        #expect(store.articles(for: source.id).first { $0.id == "dup" }?.summary == "v1")
+        #expect(store.articles(for: source.id).first { $0.rawKey == "dup" }?.summary == "v1")
     }
 
     @Test("merge self-heals a cache already corrupted with duplicate ids")
@@ -138,12 +139,14 @@ struct RSSStoreTests {
 
         let store = RSSStore(storageDirectory: directory)
 
+        #expect(store.articles(for: source.id).count == 1)
+        #expect(store.unreadCount(for: source.id) == 1)
         // This call used to trap inside _NativeDictionary.merge/assertionFailure.
         let refresh = RSSItem(id: "dup", title: "Fresh", link: "https://example.com/a",
                               pubDate: nil, description: "fresh", author: nil, sourceId: source.id)
         store.mergeFetchedItems([refresh], for: source.id)
 
-        let dupRecords = store.articles(for: source.id).filter { $0.id == "dup" }
+        let dupRecords = store.articles(for: source.id).filter { $0.rawKey == "dup" }
         #expect(dupRecords.count == 1)
         #expect(dupRecords.first?.title == "Fresh")
     }
@@ -427,7 +430,7 @@ struct RSSStoreTests {
             )
         ], for: source.id)
 
-        #expect(store.searchArticles(query: "chip").map(\.id) == ["https://example.com/one"])
+        #expect(store.searchArticles(query: "chip").compactMap(\.rawKey) == ["https://example.com/one"])
         #expect(store.searchArticles(query: "BBC").count == 2)
     }
 
@@ -468,12 +471,12 @@ struct RSSStoreTests {
         )
         let records = [unread, read, favorite]
 
-        #expect(RSSArticleTimelineFilter.all.apply(to: records).map(\.id) == ["unread", "read", "favorite"])
-        #expect(RSSArticleTimelineFilter.unread.apply(to: records).map(\.id) == ["unread", "favorite"])
-        #expect(RSSArticleTimelineFilter.read.apply(to: records).map(\.id) == ["read"])
-        #expect(RSSArticleTimelineFilter.favorite.apply(to: records).map(\.id) == ["favorite"])
-        #expect(RSSArticleTimelineFilter.all.apply(to: records, query: "sports").map(\.id) == ["read"])
-        #expect(RSSArticleTimelineFilter.all.apply(to: records, query: "interface").map(\.id) == ["favorite"])
+        #expect(RSSArticleTimelineFilter.all.apply(to: records).map(\.id) == [unread.id, read.id, favorite.id])
+        #expect(RSSArticleTimelineFilter.unread.apply(to: records).map(\.id) == [unread.id, favorite.id])
+        #expect(RSSArticleTimelineFilter.read.apply(to: records).map(\.id) == [read.id])
+        #expect(RSSArticleTimelineFilter.favorite.apply(to: records).map(\.id) == [favorite.id])
+        #expect(RSSArticleTimelineFilter.all.apply(to: records, query: "sports").map(\.id) == [read.id])
+        #expect(RSSArticleTimelineFilter.all.apply(to: records, query: "interface").map(\.id) == [favorite.id])
     }
 
     @Test("conditional feed request uses etag and last modified validators")

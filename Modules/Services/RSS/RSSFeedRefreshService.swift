@@ -37,10 +37,11 @@ enum RSSFeedRefreshService {
                 onProgress(index + 1, sources.count)
                 continue
             }
+            guard let ticket = store.requestTicket(for: source.id) else { continue }
             let fetcher = makeFetcher()
             await fetcher.fetchItems(from: current, metadata: store.feedMetadata(for: source.id))
             guard !Task.isCancelled else { return false }
-            guard let refreshedSource = store.source(id: source.id), refreshedSource.enabled, refreshedSource == current else {
+            guard store.accepts(ticket), let refreshedSource = store.source(id: source.id), refreshedSource == current else {
                 onProgress(index + 1, sources.count)
                 continue
             }

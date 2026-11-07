@@ -225,6 +225,7 @@ struct RSSArticleReaderView: View {
             return
         }
 
+        guard let ticket = store.requestTicket(for: article.sourceId) else { return }
         isLoadingFullText = true
         fullTextError = nil
         defer { isLoadingFullText = false }
@@ -236,6 +237,7 @@ struct RSSArticleReaderView: View {
                source.ruleContent?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
                !article.link.isEmpty,
                let html = try await LegadoRSSScraper.fetchArticleContent(source: source, articleLink: article.link) {
+                guard !Task.isCancelled, store.accepts(ticket) else { return }
                 store.updateFullText(
                     articleId: article.id,
                     text: RSSContentSanitizer.cleanText(html),
@@ -245,6 +247,7 @@ struct RSSArticleReaderView: View {
             }
 
             let extracted = try await RSSArticleContentLoader.loadFullText(for: article)
+            guard !Task.isCancelled, store.accepts(ticket) else { return }
             store.updateFullText(articleId: article.id, text: extracted.text, html: extracted.html)
         } catch {
             fullTextError = fullTextErrorMessage(for: error)
@@ -393,7 +396,8 @@ private struct RSSArticleReaderPreview: View {
         url: "https://feedx.net/rss/bbc.xml",
         homepageURL: "https://bbc.com/news"
     )
-    private let articleID = "https://example.com/rss-preview"
+    private let originalKey = "https://example.com/rss-preview"
+    private var articleID: String { RSSIdentity.article(sourceID: source.id, scope: .feed, rawKey: originalKey) }
 
     var body: some View {
         RSSArticleReaderView(articleID: articleID)
@@ -404,7 +408,7 @@ private struct RSSArticleReaderPreview: View {
                 if store.article(id: articleID) == nil {
                     store.mergeFetchedItems([
                         RSSItem(
-                            id: articleID,
+                            id: originalKey,
                             title: "A supercut of context-free intertitles from Adam Curtis",
                             link: articleID,
                             pubDate: Date(),

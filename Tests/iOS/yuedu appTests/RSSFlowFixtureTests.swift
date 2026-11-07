@@ -95,7 +95,7 @@ struct RSSFlowFixtureTests {
         #expect(RSSPageFixtureProtocol.requests(host: host).map { $0.url?.path } == ["/protected"])
     }
 
-    @Test("现状差异：同源跨分类相同链接仍拥有相同item身份")
+    @Test("S3：同源跨分类相同链接使用不同item身份")
     func categoryIdentityCollision() async throws {
         let host = fixtureHost()
         let body = Data(article("Shared", link: "/shared").utf8)
@@ -105,7 +105,8 @@ struct RSSFlowFixtureTests {
         let first = try await LegadoRSSScraper.scrape(source: source, entry: RSSSortEntry(name: "A", url: "https://\(host)/a"))
         let second = try await LegadoRSSScraper.scrape(source: source, entry: RSSSortEntry(name: "B", url: "https://\(host)/b"))
         #expect(first.count == 1 && second.count == 1)
-        #expect(first.map(\.id) == second.map(\.id))
+        #expect(first.map(\.id) != second.map(\.id))
+        #expect(first.map(\.rawKey) == second.map(\.rawKey))
     }
 
     @MainActor

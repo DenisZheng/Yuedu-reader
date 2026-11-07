@@ -339,8 +339,12 @@ enum RSSSmartFeedKind: String, CaseIterable, Identifiable, Codable {
 
 // MARK: - RSS Item (parser output)
 
-struct RSSItem: Codable, Identifiable {
-    var id: String = UUID().uuidString
+struct RSSItem: Codable, Identifiable, Sendable {
+    private(set) var id: String
+    private(set) var rawKey: String?
+    private(set) var scope: RSSArticleScope?
+    var variables: [String: String]?
+    var media: [RSSMediaReference]?
     var title: String
     var link: String
     var pubDate: Date?
@@ -367,7 +371,9 @@ struct RSSItem: Codable, Identifiable {
          sourceId: String = "",
          language: String? = nil,
          tags: [String] = []) {
-        self.id = id
+        self.rawKey = id
+        self.scope = .feed
+        self.id = RSSIdentity.article(sourceID: sourceId, scope: .feed, rawKey: id)
         self.title = title
         self.link = link
         self.pubDate = pubDate
@@ -385,7 +391,9 @@ struct RSSItem: Codable, Identifiable {
     /// Convert from unified ParsedFeedItem and source ID.
     /// The caller is responsible for generating a plain-text summary from `contentHTML`.
     init(from parsed: ParsedFeedItem, sourceId: String, summary: String = "") {
-        self.id = parsed.uniqueID
+        self.rawKey = parsed.uniqueID
+        self.scope = .feed
+        self.id = RSSIdentity.article(sourceID: sourceId, scope: .feed, rawKey: parsed.uniqueID)
         self.title = parsed.title ?? ""
         self.link = parsed.url ?? parsed.externalURL ?? ""
         self.pubDate = parsed.datePublished
@@ -399,20 +407,68 @@ struct RSSItem: Codable, Identifiable {
         self.tags = parsed.tags.map { Array($0) } ?? []
         self.description = summary
     }
+
+    func identified(sourceID: String, scope: RSSArticleScope) -> RSSItem {
+        if self.sourceId == sourceID, self.scope == scope, rawKey != nil { return self }
+        var item = self
+        item.rawKey = rawKey ?? id
+        item.sourceId = sourceID
+        item.scope = scope
+        item.id = RSSIdentity.article(sourceID: sourceID, scope: scope, rawKey: item.rawKey!)
+        item.media = media?.map { reference in
+            var reference = reference
+            reference.articleID = item.id
+            return reference
+        }
+        return item
+    }
 }
 
 // MARK: - Article Status & Record
 
-struct RSSArticleStatus: Codable, Equatable {
+struct RSSArticleStatus: Codable, Equatable, Sendable {
     var articleId: String
+    var sourceID: String?
+    var identityVersion: Int?
+    var scope: RSSArticleScope?
+    var mediaProgress: [String: RSSMediaProgress]?
     var isRead: Bool = false
     var isFavorite: Bool = false
     var lastOpenedAt: Date?
     var readerScrollY: Double = 0
 }
 
-struct RSSArticleRecord: Codable, Identifiable, Equatable {
+extension RSSArticleStatus {
+    private enum CodingKeys: String, CodingKey {
+        case articleId, sourceID, identityVersion, scope, mediaProgress, isRead, isFavorite, lastOpenedAt, readerScrollY
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        articleId = try values.decode(String.self, forKey: .articleId)
+        sourceID = try values.decodeIfPresent(String.self, forKey: .sourceID)
+        identityVersion = try values.decodeIfPresent(Int.self, forKey: .identityVersion)
+        if let identityVersion, identityVersion != RSSIdentity.version {
+            throw DecodingError.dataCorruptedError(forKey: .identityVersion, in: values, debugDescription: "Unsupported RSS state version")
+        }
+        scope = try values.decodeIfPresent(RSSArticleScope.self, forKey: .scope)
+        mediaProgress = try values.decodeIfPresent([String: RSSMediaProgress].self, forKey: .mediaProgress)
+        isRead = try values.decodeIfPresent(Bool.self, forKey: .isRead) ?? false
+        isFavorite = try values.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+        lastOpenedAt = try values.decodeIfPresent(Date.self, forKey: .lastOpenedAt)
+        readerScrollY = try values.decodeIfPresent(Double.self, forKey: .readerScrollY) ?? 0
+    }
+}
+
+struct RSSArticleRecord: Codable, Identifiable, Equatable, Sendable {
     var id: String
+    var identityVersion: Int?
+    /// 仅用于Fork早期通知/链接的无歧义兼容；新请求不得使用它作全局身份。
+    var legacyID: String?
+    var rawKey: String?
+    var scope: RSSArticleScope?
+    var variables: [String: String]?
+    var media: [RSSMediaReference]?
     var sourceId: String
     var title: String
     var link: String
@@ -432,7 +488,7 @@ struct RSSArticleRecord: Codable, Identifiable, Equatable {
     var readerScrollY: Double = 0
 
     private enum CodingKeys: String, CodingKey {
-        case id
+        case id, identityVersion, legacyID, rawKey, scope, variables, media
         case sourceId
         case title
         case link
@@ -455,6 +511,15 @@ struct RSSArticleRecord: Codable, Identifiable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
+        identityVersion = try container.decodeIfPresent(Int.self, forKey: .identityVersion)
+        legacyID = try container.decodeIfPresent(String.self, forKey: .legacyID)
+        if let identityVersion, identityVersion != RSSIdentity.version {
+            throw DecodingError.dataCorruptedError(forKey: .identityVersion, in: container, debugDescription: "Unsupported RSS identity version")
+        }
+        rawKey = try container.decodeIfPresent(String.self, forKey: .rawKey)
+        scope = try container.decodeIfPresent(RSSArticleScope.self, forKey: .scope)
+        variables = try container.decodeIfPresent([String: String].self, forKey: .variables)
+        media = try container.decodeIfPresent([RSSMediaReference].self, forKey: .media)
         sourceId = try container.decode(String.self, forKey: .sourceId)
         title = try container.decode(String.self, forKey: .title)
         link = try container.decode(String.self, forKey: .link)
@@ -472,10 +537,22 @@ struct RSSArticleRecord: Codable, Identifiable, Equatable {
         isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
         lastOpenedAt = try container.decodeIfPresent(Date.self, forKey: .lastOpenedAt)
         readerScrollY = try container.decodeIfPresent(Double.self, forKey: .readerScrollY) ?? 0
+        if identityVersion == nil {
+            legacyID = id
+            rawKey = id
+            scope = .feed
+            id = RSSIdentity.article(sourceID: sourceId, scope: .feed, rawKey: id)
+            identityVersion = RSSIdentity.version
+        }
     }
 
     init(item: RSSItem, fetchedAt: Date = Date(), status: RSSArticleStatus? = nil) {
         id = item.id
+        identityVersion = RSSIdentity.version
+        rawKey = item.rawKey ?? item.id
+        scope = item.scope ?? .feed
+        variables = item.variables
+        media = item.media
         sourceId = item.sourceId
         title = item.title
         link = item.link

@@ -39,10 +39,16 @@ struct WebDAVSyncView: View {
         }
         .alert(localized("偵測到備份衝突"), isPresented: $showConflictAlert) {
             Button(localized("使用雲端備份"), role: .destructive) {
-                Task { try? await manager.resolveConflict(keepRemote: true) }
+                Task {
+                    do { try await manager.resolveConflict(keepRemote: true) }
+                    catch { presentError(error) }
+                }
             }
             Button(localized("保留本地資料"), role: .cancel) {
-                Task { try? await manager.resolveConflict(keepRemote: false) }
+                Task {
+                    do { try await manager.resolveConflict(keepRemote: false) }
+                    catch { presentError(error) }
+                }
             }
         } message: {
             if let c = manager.pendingConflict {
@@ -89,7 +95,7 @@ struct WebDAVSyncView: View {
     }
 
     private var actionsSection: some View {
-        Section(header: Text(localized("操作")).foregroundStyle(DSColor.textSecondary)) {
+        Section {
             Button {
                 Task { await testConnection() }
             } label: {
@@ -110,6 +116,10 @@ struct WebDAVSyncView: View {
                 Label(localized("從雲端還原"), systemImage: "icloud.and.arrow.down")
                     .foregroundColor(DSColor.accent)
             }
+        } header: {
+            Text(localized("操作")).foregroundStyle(DSColor.textSecondary)
+        } footer: {
+            Text(localized("RSS 備份包含配置與閱讀狀態，不含正文或媒體；還原後需刷新，登入狀態不會恢復。")).dsSectionFooter()
         }
         .interfaceSectionSurface()
     }
@@ -184,9 +194,10 @@ struct WebDAVSyncView: View {
         guard validateSettings() else { return }
         do {
             try await manager.restore()
+            guard manager.pendingConflict == nil else { return }
             await MainActor.run {
                 alertTitle   = localized("還原成功")
-                alertMessage = localized("資料已還原，書庫與替換規則已即時更新")
+                alertMessage = localized("資料已還原，書庫、替換規則與備份中的 RSS 已即時更新")
                 showAlert    = true
             }
         } catch {
@@ -210,8 +221,12 @@ struct WebDAVSyncView: View {
     private func presentError(_ error: Error) {
         Task { @MainActor in
             alertTitle   = localized("操作失敗")
-            alertMessage = error.localizedDescription
+            alertMessage = DiagnosticRedactor.redact(error.localizedDescription)
             showAlert    = true
         }
     }
+}
+
+#Preview("WebDAV RSS backup scope") {
+    NavigationStack { WebDAVSyncView() }
 }

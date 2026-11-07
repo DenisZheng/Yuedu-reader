@@ -75,7 +75,7 @@ enum LegadoRSSScraper {
             try parseArticles(
                 body: body, finalURL: finalURL, listRule: articlesRule,
                 reverse: reversesArticles, source: source, jsEngine: jsEngine
-            )
+            ).map { $0.identified(sourceID: source.id, scope: entry.map(RSSArticleScope.category) ?? .feed) }
         }
     }
 

@@ -50,17 +50,19 @@ struct SyncConflict {
 final class WebDAVManager: @MainActor ObservableObject {
 
     static let shared = WebDAVManager()
+    private let defaults: UserDefaults
+    nonisolated private let transport: URLSession
 
     // MARK: Settings (persisted to UserDefaults)
 
     @Published var serverUrl: String {
-        didSet { UserDefaults.standard.set(serverUrl, forKey: "webdav_url") }
+        didSet { defaults.set(serverUrl, forKey: "webdav_url") }
     }
     @Published var username: String {
-        didSet { UserDefaults.standard.set(username, forKey: "webdav_username") }
+        didSet { defaults.set(username, forKey: "webdav_username") }
     }
     @Published var password: String {
-        didSet { UserDefaults.standard.set(password, forKey: "webdav_password") }
+        didSet { defaults.set(password, forKey: "webdav_password") }
     }
 
     // MARK: State
@@ -69,7 +71,7 @@ final class WebDAVManager: @MainActor ObservableObject {
     @Published var lastSyncDate: Date? {
         didSet {
             if let date = lastSyncDate {
-                UserDefaults.standard.set(date, forKey: "webdav_last_sync")
+                defaults.set(date, forKey: "webdav_last_sync")
             }
         }
     }
@@ -111,11 +113,13 @@ final class WebDAVManager: @MainActor ObservableObject {
 
     // MARK: Initialization
 
-    private init() {
-        serverUrl    = UserDefaults.standard.string(forKey: "webdav_url") ?? ""
-        username     = UserDefaults.standard.string(forKey: "webdav_username") ?? ""
-        password     = UserDefaults.standard.string(forKey: "webdav_password") ?? ""
-        lastSyncDate = UserDefaults.standard.object(forKey: "webdav_last_sync") as? Date
+    init(defaults: UserDefaults = .standard, session: URLSession? = nil) {
+        self.defaults = defaults
+        self.transport = session ?? Self.session
+        serverUrl    = defaults.string(forKey: "webdav_url") ?? ""
+        username     = defaults.string(forKey: "webdav_username") ?? ""
+        password     = defaults.string(forKey: "webdav_password") ?? ""
+        lastSyncDate = defaults.object(forKey: "webdav_last_sync") as? Date
     }
 
     /// Bind the live bookshelf so `restore()` can refresh it in place. Call once
@@ -136,11 +140,11 @@ final class WebDAVManager: @MainActor ObservableObject {
     /// WebDAV server in use stops dropping idle keep-alive connections.
     nonisolated private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
         do {
-            return try await Self.session.data(for: request)
+            return try await transport.data(for: request)
         } catch {
             guard Self.isTransientConnectionError(error) else { throw error }
             AppLogger.sync("retry \(request.httpMethod ?? "GET") \(request.url?.path ?? "") after transient \(String(describing: (error as? URLError)?.code))", level: .notice)
-            return try await Self.session.data(for: request)
+            return try await transport.data(for: request)
         }
     }
 
@@ -198,6 +202,9 @@ final class WebDAVManager: @MainActor ObservableObject {
         let replaceURL = libDir.appendingPathComponent("replace_rules.json")
         try await backupFileIfExists(at: replaceURL, to: "/yuedu/replace_rules.json")
 
+        // RSS使用Fork自己的版本化路径，不覆盖原版RSS或拷贝运行时Cookie/媒体缓存。
+        try await backupRSS()
+
         // 4. manifest.json (for conflict detection)
         let deviceName = await MainActor.run { UIDevice.current.name }
         let manifest = SyncManifest(
@@ -214,6 +221,21 @@ final class WebDAVManager: @MainActor ObservableObject {
             self.lastSyncDate = Date()
             self.statusMessage = "備份成功"
         }
+    }
+
+    nonisolated func backupRSS(store: RSSStore? = nil) async throws {
+        let owner = await MainActor.run { store ?? RSSStore.shared }
+        try await mkcol(path: "/readerfork-dev/")
+        let data = try await owner.backupData()
+        try await put(data: data, path: "/readerfork-dev/rss-v1.json")
+    }
+
+    nonisolated func downloadRSSBackup() async throws -> Data? {
+        do {
+            let data = try await get(path: "/readerfork-dev/rss-v1.json")
+            _ = try await RSSBackupCodec.decode(data)
+            return data
+        } catch WebDAVError.fileNotFound { return nil }
     }
 
     /// Only explicit shelf records and durable metadata leave this device. The
@@ -270,6 +292,9 @@ final class WebDAVManager: @MainActor ObservableObject {
             }
         }
 
+        // RSS新快照只有404表示旧备份尚未包含；损坏、认证失败、网络失败都必须终止。
+        let rssData = try await downloadRSSBackup()
+
         // ── Perform Restore ─────────────────────────────────────────────────────────
         let libDir  = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
 
@@ -290,6 +315,8 @@ final class WebDAVManager: @MainActor ObservableObject {
             let url = libDir.appendingPathComponent("replace_rules.json")
             try rulesData.write(to: url, options: .atomic)
         }
+
+        if let rssData { try await RSSStore.shared.restoreBackup(rssData) }
 
         // Reload the in-memory stores from the just-restored files so the
         // bookshelf and replace-rule list update live, mirroring the iCloud

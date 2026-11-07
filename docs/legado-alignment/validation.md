@@ -11,7 +11,8 @@
 | S0 独立构建与基线 | 本地阶段通过：独立 App/扩展构建、203项相关验收、2项阅读器导入UI及4项iPad UI通过；签名/真实iCloud和最低系统验收留发布门槛 |
 | S1 | 本地阶段通过：iPhone/iPad最终各54项通过，固定流程、图片解码、资源约束见[媒体PoC](media-poc.md) |
 | S2 | 本地阶段通过：iPhone/iPad各101项，307项离线导入/重载/导出0字段差异；[细节与限制](s2-import.md) |
-| S3–S8 | 按依赖顺序继续；媒体时钟、Feed搜索AX和云端archive问题分别在S5/S6/S8验收前解决 |
+| S3 | 本地阶段通过：iPhone/iPad120项，iPad导入UI2项；[S3身份与状态记录](s3-identity.md) |
+| S4–S8 | 按依赖顺序继续；媒体时钟、Feed搜索AX和云端archive问题分别在S5/S6/S8验收前解决 |
 
 ## S0-01：模拟器环境
 
@@ -298,6 +299,19 @@ S1固定输入与平台可行性验证完成，**可以进入S2**。DASH、复�
 实现和逐项边界见 [S2导入记录](s2-import.md)。实际iPhone最终101项通过；iPad最终99项行为+2项真实UI分别执行通过，均0失败/0跳过。真实307项包在测试临时store中读入、保存、重载、重新导出并逐字段比较，39类输入字段全部承载，0脚本执行/网络请求；原包没有复制到测试资源或提交。
 
 已知扩大回归问题也保留在S2记录：旧Feed搜索AX两个用例失败，归S5；S1媒体音频在当前模拟器无法推进，本地不经RSS的m4a同样失败，归S6/S8环境阻碍，不能把此前S1通过当作本轮通过。S2本身的配置/UI门槛不包含媒体运行对齐，后续门槛不会因此取消。
+
+## S3：作用域身份、状态与版本化快照
+
+详见 [S3记录](s3-identity.md)。`scripts/validate_reader_fork_s3.sh`要求至少120项、0失败/0跳过。
+
+- iPhone最终 `/tmp/readerfork-s3-acceptance-final/tests.xcresult`：**120通过**。
+- iPad `/tmp/readerfork-s3-final-ipad-coalesced/tests.xcresult`：**120通过**。
+- iPad真实导入UI `/tmp/readerfork-s3-import-ui.xcresult`：**2通过**。
+- 旧重复记录在首次刷新前的UI投影/未读计数另补断言，iPhone44项回归通过后，再跑上述完整120项。
+- 50源×200项状态测试初版新增全库查找造成78.960秒，owner派生索引后同测试4.601秒；这一数字含测试数据构造/6000次动作，不是App单次延迟。
+- 实际WebDAV客户端MKCOL/PUT/GET在隔离URLSession/临时defaults验证，快照校验、404/401/损坏与恢复语义通过，未使用真实账户。
+
+规则/标准Feed文章身份与探索/通知所用App ID保持一致，未知未来数据版本拒绝覆盖。配置/状态分文件落盘，签名媒体URL、正文和运行变量不进入RSS备份。恢复前原文件保留在 `rss-restore-backups`，多文件原子事务不是本轮保证；具体回滚与旧raw GUID歧义处理见S3记录。
 
 ## 手动IPA构建工作流
 

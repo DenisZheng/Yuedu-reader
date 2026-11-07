@@ -1160,77 +1160,50 @@ final class RSSFetcher: ObservableObject {
                 return
             }
 
-            // Try unified parser first
-            if let parsed = RSSFeedParser.parse(data: data, url: source.url) {
-                let rssItems = parsed.items.map { item in
-                    RSSItem(from: item, sourceId: source.id,
-                        summary: RSSContentSanitizer.summary(from: item.contentHTML ?? item.contentText ?? item.summary ?? ""))
-                }
-                items = rssItems
-
-                let http = httpResponse as? HTTPURLResponse
-                let fetchMeta = RSSFeedFetchMetadata(
-                    etag: http?.value(forHTTPHeaderField: "ETag"),
-                    lastModified: http?.value(forHTTPHeaderField: "Last-Modified"),
-                    lastFetchedAt: Date()
-                )
-                let feedInfo = RSSFeedInfo(
-                    title: parsed.title, homepageURL: parsed.homePageURL, faviconURL: parsed.faviconURL
-                )
-                self.response = .updated(items: rssItems, metadata: fetchMeta, feedInfo: feedInfo)
-
-                if rssItems.isEmpty {
-                    error = localized("RSS 解析成功，但沒有找到文章。")
-                }
-                return
-            }
-
-            // Fallback: legacy XML parser + feed discovery
-            let parser = RSSXMLParser(sourceId: source.id, feedURL: source.url)
-            let parsedItems = parser.parse(data: data)
-
-            if let parserError = parser.error {
-                if allowFeedDiscovery,
-                   let sourceURL = request.url,
-                   data.isProbablyHTML,
-                   await fetchDiscoveredFeed(from: data, sourceURL: sourceURL, originalSource: source) {
-                    return
-                }
-                if data.isProbablyHTML {
-                    // A web page without any discoverable feed (typical for Legado
-                    // singleUrl sources imported by older app versions): offer to
-                    // open it as a web page instead of surfacing an XML error.
+            let parsed = await Self.parseFeed(data: data, source: source)
+            guard !Task.isCancelled else { return }
+            if let parserError = parsed.error {
+                if allowFeedDiscovery, let sourceURL = request.url, parsed.isHTML,
+                   await fetchDiscoveredFeed(from: data, sourceURL: sourceURL, originalSource: source) { return }
+                if parsed.isHTML {
                     error = localized("此來源是網頁而非 RSS 訂閱，可直接以網頁開啟。")
                     webPageFallbackURL = (request.url ?? source.webPageURL).flatMap(InAppWebURL.init)
-                    items = []
-                    return
-                }
-                // Keep the error from feed discovery if it was set; otherwise use parser error
-                if error == nil {
-                    error = parserError
-                }
+                } else if error == nil { error = parserError }
                 items = []
                 return
             }
-
-            items = parsedItems
+            items = parsed.items
             let http = httpResponse as? HTTPURLResponse
             let fetchMeta = RSSFeedFetchMetadata(
                 etag: http?.value(forHTTPHeaderField: "ETag"),
                 lastModified: http?.value(forHTTPHeaderField: "Last-Modified"),
                 lastFetchedAt: Date()
             )
-            self.response = .updated(items: parsedItems, metadata: fetchMeta, feedInfo: parser.feedInfo)
-
-            if parsedItems.isEmpty {
-                error = localized("RSS 解析成功，但沒有找到文章。")
-            }
+            self.response = .updated(items: parsed.items, metadata: fetchMeta, feedInfo: parsed.info)
+            if parsed.items.isEmpty { error = localized("RSS 解析成功，但沒有找到文章。") }
         } catch {
             if isATSBlockedError(error) {
                 self.error = localized("此來源使用不安全的 HTTP 連線，已被 iOS 安全政策阻擋。")
             } else {
                 self.error = error.localizedDescription
             }
+        }
+    }
+
+    /// 身份哈希、JSON/XML和HTML摘要均在后台执行，主线程只接收值快照。
+    private nonisolated static func parseFeed(data: Data, source: RSSSource) async
+        -> (items: [RSSItem], info: RSSFeedInfo?, error: String?, isHTML: Bool) {
+        SourcePerfTrace.span("rss.feed.decode", "main=\(Thread.isMainThread) bytes=\(data.count)") { () -> (items: [RSSItem], info: RSSFeedInfo?, error: String?, isHTML: Bool) in
+            if let parsed = RSSFeedParser.parse(data: data, url: source.url) {
+                let items = parsed.items.map {
+                    RSSItem(from: $0, sourceId: source.id,
+                            summary: RSSContentSanitizer.summary(from: $0.contentHTML ?? $0.contentText ?? $0.summary ?? ""))
+                }
+                return (items, RSSFeedInfo(title: parsed.title, homepageURL: parsed.homePageURL, faviconURL: parsed.faviconURL), nil, false)
+            }
+            let parser = RSSXMLParser(sourceId: source.id, feedURL: source.url)
+            let items = parser.parse(data: data)
+            return (items, parser.feedInfo, parser.error, data.isProbablyHTML)
         }
     }
 

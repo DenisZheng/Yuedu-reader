@@ -123,10 +123,10 @@ struct RSSArticleLinkResolutionTests {
         let items = RSSXMLParser(sourceId: "legacy", feedURL: Self.feedURL).parse(data: Data(xml.utf8))
 
         let legacy = try #require(items.first { $0.title == "Legacy post" })
-        #expect(legacy.id == "/x.html")
+        #expect(legacy.rawKey == "/x.html")
         #expect(legacy.link == "https://site.example/x.html")
         let sibling = try #require(items.first { $0.title == "Sibling post" })
-        #expect(sibling.id == "y.html")
+        #expect(sibling.rawKey == "y.html")
         #expect(sibling.link == "https://site.example/news/y.html")
     }
 
@@ -189,8 +189,8 @@ struct RSSArticleLinkResolutionTests {
 
         let stored = RSSItem(id: id, title: "Post", link: id, sourceId: source.id)
         store.mergeFetchedItems([stored], for: source.id)
-        store.markRead(articleId: id, isRead: true)
-        store.toggleFavorite(articleId: id)
+        store.markRead(articleId: stored.id, isRead: true)
+        store.toggleFavorite(articleId: stored.id)
         return (store, source)
     }
 
@@ -200,7 +200,8 @@ struct RSSArticleLinkResolutionTests {
         #expect(articles.count == 1)
         #expect(newArticles.isEmpty)
         let article = try #require(articles.first)
-        #expect(article.id == id)
+        #expect(article.id == RSSIdentity.article(sourceID: sourceID, scope: .feed, rawKey: id))
+        #expect(article.rawKey == id)
         #expect(article.link == link)
         #expect(article.isRead)
         #expect(article.isFavorite)

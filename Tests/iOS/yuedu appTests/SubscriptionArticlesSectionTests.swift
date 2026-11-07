@@ -47,7 +47,8 @@ struct SubscriptionArticlesSectionTests {
             RSSItem(id: "b\($0)", title: "乙\($0)", link: "https://b.example/\($0)", pubDate: base.addingTimeInterval(Double($0) * 120 + 60),
                     sourceId: second.id)
         }, for: second.id)
-        store.markRead(articleId: "b14", isRead: true)
+        let b14 = RSSIdentity.article(sourceID: second.id, scope: .feed, rawKey: "b14")
+        store.markRead(articleId: b14, isRead: true)
 
         let provider = SubscriptionArticlesProvider(store: store)
         #expect(provider.loadPolicy(for: section) == .local)
@@ -55,7 +56,9 @@ struct SubscriptionArticlesSectionTests {
 
         #expect(loaded.map(\.id) == Array(store.allArticles().prefix(HomeRow.limit).map(\.id)))
         #expect(loaded.count == HomeRow.limit)
-        #expect(loaded.prefix(3).map(\.id) == ["b14", "a14", "b13"])
+        #expect(loaded.prefix(3).map(\.id) == [b14,
+            RSSIdentity.article(sourceID: first.id, scope: .feed, rawKey: "a14"),
+            RSSIdentity.article(sourceID: second.id, scope: .feed, rawKey: "b13")])
         #expect(loaded[0].feedName == "乙" && loaded[0].isRead)
         #expect(loaded[1].feedName == "甲" && !loaded[1].isRead)
         // http pictures are upgraded as the RSS tab's rows load them.

@@ -227,6 +227,8 @@ bash scripts/xctest.sh -- -only-testing:'yuedu appTests/LegadoRSSCompatTests'
 | S0 | 本地阶段通过 | 独立App/扩展构建、203项自动验收、2项阅读器导入UI、4项iPad UI通过；签名/真实iCloud等未验证项见[验证记录](validation.md) |
 | S1 | 本地阶段通过 | 最终iPhone/iPad各54项通过，固定输入、现状差异与资源边界见[媒体PoC](media-poc.md)；不代表生产RSS功能完成 |
 | S2 | 本地阶段通过 | 导入/比较/更新/保存及独立刷新闭环，iPhone/iPad各101项；307项原包离线逐字段保真。剩余平台/媒体回归限制见[S2记录](s2-import.md) |
-| S3–S8 | 待前置完成 | 不跳过阶段行为测试与已知阻碍 |
+| S3 | 本地阶段通过 | 作用域身份、状态/变量、失效票据与WebDAV快照接入；iPhone/iPad120项通过，[S3记录](s3-identity.md) |
+| S4 | 待开始 | S3已提交后进入共享运行时接入 |
+| S5–S8 | 待前置完成 | Feed搜索AX、媒体时钟和Xcode26.x archive仍须对应门槛解决 |
 
 遇到事实与方案不符，应先修订相应合同和依据。只在新增依赖、扩大权限/支持范围、破坏数据兼容或改变已确认产品选择时回到决策，不重复询问已确认事项。
