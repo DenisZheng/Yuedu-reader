@@ -33,6 +33,11 @@ class ManualIPAWorkflowTests(unittest.TestCase):
         self.assertIn("github.ref", self.workflow["concurrency"]["group"])
         self.assertEqual(self.job["timeout-minutes"], 60)
 
+    def test_job_env_does_not_use_runner_context(self):
+        # job环境在runner分配前求值；临时路径必须由step写入GITHUB_ENV。
+        for value in self.job.get("env", {}).values():
+            self.assertNotRegex(str(value), r"\$\{\{\s*runner\.")
+
     def test_stable_runner_and_read_only_pinned_actions(self):
         self.assertEqual(self.job["runs-on"], "macos-26")
         self.assertEqual(self.workflow["permissions"], {"contents": "read"})
@@ -88,9 +93,14 @@ else: print(os.environ['FAKE_SDK'])
             environment = os.environ.copy()
             environment.update(PATH=str(binary) + os.pathsep + environment["PATH"], FAKE_SWIFT=swift,
                                FAKE_SDK=sdk, FAKE_BUILD=build,
-                               GITHUB_ENV=str(directory / "env"), GITHUB_OUTPUT=str(directory / "output"))
+                               RUNNER_TEMP=str(directory), GITHUB_ENV=str(directory / "env"), GITHUB_OUTPUT=str(directory / "output"))
             result = subprocess.run(["python3", "-c", python], env=environment, text=True, capture_output=True)
             output = (directory / "output").read_text() if (directory / "output").exists() else ""
+            if result.returncode == 0:
+                variables = (directory / "env").read_text()
+                self.assertIn("SOURCE_PACKAGES=" + str(directory / "ReaderForkSourcePackages"), variables)
+                self.assertIn("ARCHIVE=" + str(directory / "ReaderFork.xcarchive"), variables)
+                self.assertIn("IPA_OUTPUT=" + str(directory / "ReaderForkIPA"), variables)
             return result, output
 
     def test_accepts_compatible_26_toolchain_without_requiring_27(self):

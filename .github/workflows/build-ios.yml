@@ -22,9 +22,6 @@ jobs:
     env:
       PROJECT: Yuedu-Reader.xcodeproj
       SCHEME: Reader-Fork-Dev
-      SOURCE_PACKAGES: ${{ runner.temp }}/ReaderForkSourcePackages
-      ARCHIVE: ${{ runner.temp }}/ReaderFork.xcarchive
-      IPA_OUTPUT: ${{ runner.temp }}/ReaderForkIPA
 
     steps:
       - name: Checkout selected branch or tag
@@ -57,6 +54,8 @@ jobs:
               raise SystemExit('无法识别Xcode build version')
           with open(os.environ['GITHUB_ENV'], 'a') as file:
               file.write('DEVELOPER_DIR=' + developer + '\n')
+              for key, directory in [('SOURCE_PACKAGES', 'ReaderForkSourcePackages'), ('ARCHIVE', 'ReaderFork.xcarchive'), ('IPA_OUTPUT', 'ReaderForkIPA')]:
+                  file.write(key + '=' + os.path.join(os.environ['RUNNER_TEMP'], directory) + '\n')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as file:
               file.write('build=' + build.group(1) + '\n')
           PY

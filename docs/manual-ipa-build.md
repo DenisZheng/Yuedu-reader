@@ -49,6 +49,8 @@ python3 -B scripts/package_unsigned_ipa.py \
 
 包装测试使用合成archive，验证Payload结构、扩展、平台、权限、符号链接、SHA-256及失败分支；它不伪装成真实IPA编译测试。
 
+修改工作流后还要用 `actionlint .github/workflows/build-ios.yml` 做表达式语义检查：YAML能解析不代表GitHub接受该上下文。`runner`不能用于job级 `env`；本工作流在step内读取 `RUNNER_TEMP` 并写入 `GITHUB_ENV`。本轮使用官方actionlint 1.7.12临时二进制并核对Release校验和，不给App引入依赖。
+
 ## 参考与取舍
 
 - 用户参考：[legado-ios build-ios.yml](https://github.com/DenisZheng/legado-ios/blob/d55585c52776359906c754b6eef0e06d471105da/.github/workflows/build-ios.yml)。该版本位于 `feature/rss-navigation-compat`，默认分支当时没有此文件。借鉴未签名archive→Payload→artifact流程，不复制它的Push触发、固定模拟器或大套UI回归。

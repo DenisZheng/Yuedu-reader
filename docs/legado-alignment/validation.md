@@ -294,6 +294,14 @@ YUEDU_EVIDENCE_DIR=/tmp/readerfork-s0-final-host bash scripts/validate_reader_fo
 
 工作流不会自行commit/push或发布Release，不包含原始源包。回滚只移除本次workflow/打包脚本/测试/指南并撤回viewport编译保护，保留S0及其他S1改动。
 
+## 手动IPA工作流上线校验修正
+
+首次Push `6594ad48` 后，GitHub拒绝了job级 `env` 对 `runner.temp` 的引用：[失败记录](https://github.com/DenisZheng/Yuedu-reader/actions/runs/42373615431)。Actions API确认 `total_count=0`，没有分配构建job，也没有编译IPA。这是表达式上下文错误，不是PR/Push编译触发；先前YAML解析和包装测试不足以覆盖这一层。
+
+已将三个临时路径移入toolchain step，通过 `RUNNER_TEMP` 生成并写入 `GITHUB_ENV`；新增回归先在旧文件复现失败，再验证修正后通过。工作流/打包合同现为**17项通过**。另从官方Release临时下载并校验SHA-256后运行 **actionlint 1.7.12**：原文件报三处runner上下文错误，修正后通过；没有给App添加依赖。
+
+IPA仍仅允许手动运行。修正配置的Push不会启动IPA归档；云端26.x完整archive仍待用户首次手动触发，不能写为已经成功。
+
 ## 提交前复核
 
 已按用户授权提交 `bd6b0076`（建立独立 Fork，移除账号收费体系并补齐验收基线），未push。提交包含S0独立Fork改造、参考文档和首批已通过的S1子集，不把S1整体写成完成。原始书源/RSS包、`.codegraph/`和Python缓存不纳入提交。
