@@ -1,6 +1,6 @@
-# S1 固定输入与媒体 PoC（进行中）
+# S1 固定输入与媒体 PoC
 
-S0已通过；本页记录S1已执行的子集和仍缺的验收。**不代表RSS网页/媒体已经接入生产路径，也不放行S2。**
+**S1本地阶段已通过，可以进入S2。** 本页记录可重复输入、实际平台能力和已复现的现状差异；不代表RSS网页/媒体已经接入生产路径，更不代表用户源包全部可用。
 
 ## 固定输入
 
@@ -115,9 +115,48 @@ bash scripts/validate_reader_fork_s1.sh
 
 后续选择：普通网页优先原生http(s)+受域/路径约束的Cookie；需要解码或逐请求认证的受限资源可评估custom-scheme路径，但不全量改写外站URL，也不把任意认证头附到整个AVURLAsset。真正接入和资源预算约束在S6完成。
 
-## S1仍待完成
+## S1收尾：资源与固定流程
 
-- 源脚本图片bytes解码到实际图像加载的PoC，以及Android黑/白名单语义对应的资源过滤输入。
-- 分页失败/重复/刷新竞态、源/文章变量隔离、登录检查和配置更新的固定流程输入扩充。
-- DASH/DRM、全屏/画中画与跨站认证的限制清单收敛；真机、iOS17运行时、后台音频仍单列未验证。
-- S1全面自动验收前不得标完成或进入S2。当前36项证明平台PoC与现状基线，不是RSS生产功能闭环或任意第三方网页播放器兼容。
+新增 `RSSResourcePipelinePoCTests` 4项：
+
+- 本地HTTP返回XOR处理过的合成PNG，原bytes不能解码；通过既有 `SourceImageDecoder → BookSourceSession` 解码，保留原始src，并证明两次解码复用同一个已加载jsLib的会话；最终WKWebView实际图片宽度为1，原bytes图片宽度为0。
+- 解码抛错确实返回失败，不把保留损坏原bytes当图片成功；RSS如何展示该失败由S6接入。
+- WebKit真实图片请求验证黑名单优先于白名单、前缀与全串正则、大小写和主文档不受图片规则误伤。仅为可表示的图片子集，不是生产过滤器。
+- Java可表达的lookbehind被WKContentRuleList编译拒绝。S6不能把Java正则原样塞入WebKit后静默放行；须选择可控资源路径或明确报告限制。
+
+新增 `RSSFlowFixtureTests` 8项，原始输入及现状输出都固定：
+
+| 输入 | 当前观测 | 后续合同 |
+| --- | --- | --- |
+| 分类依赖jsLib | RSS回退sourceKey，共享书源桥能求值同一脚本 | S4绑定共享源运行时 |
+| 合法空HTML列表 | 仍抛noArticlesFound | S5区分空页与错误 |
+| 第一页→第二页503→重试第二页→重复页 | 固定响应顺序被实际消费，重复页返回相同id | S5成功提交、重试目标、去重状态机 |
+| 标题java.put、description java.get | 标题One/Two有效，description均为空 | S4正确绑定条目RuleData |
+| 403与loginCheckJs | 未执行验证请求，直接HTTP错误 | S4错误响应也进入登录检查 |
+| 同源不同分类相同链接 | item.id相同 | S3作用域身份 |
+| 同sourceKey重导配置 | 旧入口跳过更新、保留本地id | S2比较更新并保留本地身份 |
+| MPD文本或.mpd链接 | 原生解析器明确报DASH受限 | 不新增播放器，不假装MP4成功 |
+
+首轮固定流程尝试使用loopback HTTP，实际RSS请求被现有 `upgradedToHTTPS` 改为HTTPS，三项20秒超时；变量用例也复现了空description。失败日志 `/tmp/readerfork-s1-flow-fixtures.log` 保留。没有关闭TLS/ATS或修改生产升级策略来让测试通过。
+
+流程测试改为复用并扩展既有 `RSSPageFixtureProtocol`：只为唯一合成host提供固定响应，记录真实生成的请求（包括HTTP→HTTPS），序列耗尽即失败；按host隔离，不因另一个suite结束而注销其handler。这是URLSession用例的网络替身，**不是WebKit子资源拦截或真实TLS传输证明**。网页/媒体传输仍由前述真实loopback与custom-scheme实验覆盖。原RSS编码回归3项同时通过。
+
+另复用现有刷新取消、禁用中途结果、取消后保留已合并数据3项；它们不冒充S3/S5尚未实现的配置revision和全分页状态机。
+
+### 最终自动验收
+
+`scripts/validate_reader_fork_s1.sh` 现要求 **至少54项、0失败、0跳过**。
+
+| 设备 | 结果 | 证据 |
+| --- | --- | --- |
+| 动态选择的iPhone／iOS26.2 | **54通过** | `/tmp/readerfork-s1-closure-iphone/tests.xcresult` |
+| 动态选择的iPad／iOS26.2 | **54通过** | `/tmp/readerfork-s1-closure-ipad/tests.xcresult` |
+
+包括32项Swift Testing、22项XCTest。所有输入为合成数据，用户原包哈希保持不变。S1只建立固定合同、发现差异和资源技术可行性，因此允许上述“现状差异”基线为绿；它们绝不能充当对应S2–S6功能已完成的证据。
+
+## 支持边界与后续验收
+
+- MP4/HLS/M4A、合成JS动态地址、iframe、图片解码与受控资源请求已在模拟器验证；任意编码/任意第三方JS播放器不在结论内。
+- 原生DASH明确受限；DRM授权、真机媒体、全屏/画中画交互、后台音频、iOS17运行时仍未验证，留S6/S8对应验收，不宣称可用。
+- 任意私有头不能盲目附到整个asset；Java复杂正则不能等同WKContentRuleList。生产资源预算、取消失效、frame/动作验证与这些能力的RSS接入仍须S4/S6实现。
+- 固定流程已具备反馈，不代表分页/变量/登录/配置更新已对齐。S2–S6逐项实现时，应将对应现状基线替换或补充为目标行为测试。

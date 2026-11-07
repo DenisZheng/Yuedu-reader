@@ -9,8 +9,8 @@
 | 最终方案/执行计划 | Q1–Q13 已确认；移除 Google/收费，保留 iCloud/WebDAV，备份先保证 Fork 自身恢复 |
 | 项目代理指南 | 根目录 AGENTS.md 已生成，格式/相对链接已校验 |
 | S0 独立构建与基线 | 本地阶段通过：独立 App/扩展构建、203项相关验收、2项阅读器导入UI及4项iPad UI通过；签名/真实iCloud和最低系统验收留发布门槛 |
-| S1 | 进行中：最终隔离宿主在iPhone/iPad各36项通过，常规S0再回归203项通过；缺项与资源限制见[媒体PoC](media-poc.md)，未放行 |
-| S2–S8 | 待前置阶段完成 |
+| S1 | 本地阶段通过：iPhone/iPad最终各54项通过，固定流程、图片解码、资源约束见[媒体PoC](media-poc.md) |
+| S2–S8 | S1已放行，按依赖顺序继续 |
 
 ## S0-01：模拟器环境
 
@@ -277,6 +277,20 @@ YUEDU_EVIDENCE_DIR=/tmp/readerfork-s0-final-host bash scripts/validate_reader_fo
 当前资源限制：现有asset自定义头可跨host传播；custom-scheme MP4在一个合成片段产生84次本地小Range请求，不可直接放大为外网请求。图片脚本解码/资源过滤/流程输入等S1余项未结束，S2仍不放行。
 
 回滚范围：仅移除本批新增PoC测试、scheme、支持文件和ReaderAppMain，并把 `@main` 标记放回原App；RSSMediaPoCTests的测试辅助提取也一起还原。不要撤回 `bd6b0076` 的S0改造，不碰原始样本和用户数据。
+
+## S1-03：资源与固定流程收尾
+
+新增4项实际资源管道测试、8项固定流程测试，复用3项RSS编码与3项刷新竞态合同；最终自动入口已扩展到54项。实测内容与现状差异逐项记录在[媒体PoC](media-poc.md)。
+
+- iPhone：`YUEDU_EVIDENCE_DIR=/tmp/readerfork-s1-closure-iphone bash scripts/validate_reader_fork_s1.sh`，**54通过、0失败、0跳过**。
+- iPad：动态解析 `YUEDU_DEST="$(bash scripts/sim.sh dest iPad)"` 后同入口，`/tmp/readerfork-s1-closure-ipad`，**54通过、0失败、0跳过**。
+- 两者最终xcresult均Passed，32项Swift Testing/22项XCTest；当前运行时iOS26.2。
+
+保留首轮失败：RSS对loopback HTTP强制升级HTTPS导致请求超时，条目变量返回空值；见 `/tmp/readerfork-s1-flow-fixtures.log`。前者改用已有URLSession测试seam固定响应以隔离传输，仍记录升级后的真实请求，不修改生产HTTPS策略、不关闭安全检查；后者作为S4待修复的明确现状基线。共享fixture的Swift6 Sendable编译错误也已修正为先捕获URLRequest值，再进入锁闭包。
+
+S1固定输入与平台可行性验证完成，**可以进入S2**。DASH、复杂Java资源正则及跨站私有头限制已明确；真机/DRM/画中画/全屏/后台/iOS17的未验证项留对应S6/S8验收。原始307/253项源包未执行或移动，S1通过不代表源全部可用。
+
+回滚本批新增测试和fixture调整，不改生产RSS/媒体路由；保留先前已推送的S0与手动IPA工作流。
 
 ## 手动IPA构建工作流
 

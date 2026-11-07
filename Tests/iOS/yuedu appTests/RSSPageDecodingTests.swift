@@ -53,8 +53,7 @@ struct RSSPageDecodingTests {
     private static func articleContent(body: Data, contentType: String) async throws -> String? {
         let host = "rss-page-\(UUID().uuidString.prefix(8).lowercased()).example"
         RSSPageFixtureProtocol.serve(host: host, contentType: contentType, body: body)
-        URLProtocol.registerClass(RSSPageFixtureProtocol.self)
-        defer { URLProtocol.unregisterClass(RSSPageFixtureProtocol.self) }
+        defer { RSSPageFixtureProtocol.remove(host: host) }
 
         var source = RSSSource(name: "rss page fixture", url: "https://\(host)/")
         source.ruleContent = "@css:p@text"
@@ -62,46 +61,4 @@ struct RSSPageDecodingTests {
             source: source, articleLink: "https://\(host)/article"
         )
     }
-}
-
-/// Answers one fixture host with a fixed body and Content-Type.
-private final class RSSPageFixtureProtocol: URLProtocol {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var host = ""
-    nonisolated(unsafe) private static var contentType = ""
-    nonisolated(unsafe) private static var body = Data()
-
-    static func serve(host: String, contentType: String, body: Data) {
-        lock.lock()
-        self.host = host
-        self.contentType = contentType
-        self.body = body
-        lock.unlock()
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return request.url?.host == host
-    }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        Self.lock.lock()
-        let contentType = Self.contentType
-        let body = Self.body
-        Self.lock.unlock()
-        let response = HTTPURLResponse(
-            url: request.url!,
-            statusCode: 200,
-            httpVersion: nil,
-            headerFields: ["Content-Type": contentType]
-        )!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: body)
-        client?.urlProtocolDidFinishLoading(self)
-    }
-
-    override func stopLoading() {}
 }
