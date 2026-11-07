@@ -1,309 +1,119 @@
 import Foundation
 
-/// Legado-compatible RSS scraping built on the same stack as book sources:
-/// `AnalyzeUrl` for request construction (URL option JSON, `{{page}}` templates,
-/// POST bodies, charset) and `ModernRuleEngine` for rule evaluation (CSS / XPath /
-/// JSONPath / regex / JS segments, `||`/`&&` combinators, `##` replacements).
-/// Mirrors Legado's `Rss.getArticles` + `RssParserByRule`.
+/// RSS只提供源/流程/文章上下文；与书源共用同一会话、AnalyzeUrl、请求和规则引擎。
 enum LegadoRSSScraper {
-
-    // MARK: - Sort categories (Legado RssSource.sortUrls())
-
-    /// Resolve the source's category tabs. `@js:`/`<js>` sortUrl rules are
-    /// evaluated with JSCoreEngine before splitting.
-    static func resolveSortEntries(for source: RSSSource) async -> [RSSSortEntry] {
+    static func resolveSortEntries(for source: RSSSource, owner: RSSStore? = nil,
+                                   requestSession: URLSession = LegadoJSBridge.requestSession) async throws -> [RSSSortEntry] {
         let raw = source.sortUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty else {
-            return LegadoSortURLParser.entries(from: nil, fallbackURL: source.url)
-        }
         guard LegadoSortURLParser.needsJSEvaluation(raw) else {
-            return LegadoSortURLParser.entries(from: raw, fallbackURL: source.url)
+            return LegadoSortURLParser.entries(from: raw, fallbackURL: source.sourceKey)
         }
-
-        let js = LegadoSortURLParser.jsBody(raw) ?? ""
-        let sourceURL = source.url
-        let evaluated: String? = await SourceScriptThread.run {
-            let jsEngine = JSCoreEngine()
-            wireNetworkHandler(jsEngine)
-            return jsEngine.evaluateIsolated(js, bindings: [
-                "baseUrl": sourceURL,
-                "baseURL": sourceURL
-            ])
-        }
-        return LegadoSortURLParser.entries(from: evaluated, fallbackURL: source.url)
-    }
-
-    // MARK: - Scrape (Legado Rss.getArticles + RssParserByRule.parseXML)
-
-    static func scrape(source: RSSSource, entry: RSSSortEntry? = nil, page: Int = 1) async throws -> [RSSItem] {
-        var listRule = source.ruleArticles?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !listRule.isEmpty else {
-            throw ScraperError.invalidRule("ruleArticles")
-        }
-
-        let entryURL = normalizedRequestURL(entry?.url ?? source.url)
-        let host = scriptHost(for: source)
-
-        // The URL and the rules run the source's JS: on the scrape's script host, with only
-        // the network round-trip in between here.
-        let prepared = await host.run { jsEngine in
-            PreparedRequest(AnalyzeUrl(
-                ruleUrl: entryURL,
-                page: page,
-                sourceHeader: source.header,
-                baseUrl: source.url,
-                jsEvaluator: { [weak jsEngine] js, bindings in
-                    jsEngine?.evaluateIsolated(js, bindings: bindings)
+        let runtime = try await RSSRuntime.make(source: source, owner: owner, requestSession: requestSession)
+        return try await runtime.run { host in
+            try await host.run { bridge in
+                let value = try bridge.withRuleContext(content: "", baseURL: source.sourceKey, scope: nil, stage: "rss.categories") {
+                    $0.getString(ruleStr: "@js:" + (LegadoSortURLParser.jsBody(raw) ?? ""))
                 }
-            ))
-        }
-
-        let (body, finalURL) = try await fetchBody(
-            prepared,
-            headerJSON: source.header
-        )
-
-        // Legado: a leading '-' on ruleArticles reverses the article list.
-        var reverse = false
-        if listRule.hasPrefix("-") {
-            reverse = true
-            listRule.removeFirst()
-        }
-        let articlesRule = listRule
-        let reversesArticles = reverse
-        return try await host.run { jsEngine in
-            try parseArticles(
-                body: body, finalURL: finalURL, listRule: articlesRule,
-                reverse: reversesArticles, source: source, jsEngine: jsEngine
-            ).map { $0.identified(sourceID: source.id, scope: entry.map(RSSArticleScope.category) ?? .feed) }
+                return LegadoSortURLParser.entries(from: value, fallbackURL: source.sourceKey)
+            }
         }
     }
 
-    static func parseArticles(
-        body: String, finalURL: String, listRule: String,
-        reverse: Bool, source: RSSSource, jsEngine: JSCoreEngine
-    ) throws -> [RSSItem] {
-        let engine = ModernRuleEngine()
-        engine.jsEvaluator = { [weak engine, weak jsEngine] jsCode, prevResult in
-            guard let engine, let jsEngine else { return nil }
-            var bindings: [String: Any] = [
-                "baseUrl": engine.baseUrl,
-                "baseURL": engine.baseUrl
-            ]
-            if let content = engine.content {
-                bindings["src"] = content
+    static func scrape(source: RSSSource, entry: RSSSortEntry? = nil, page: Int = 1, owner: RSSStore? = nil,
+                       requestSession: URLSession = LegadoJSBridge.requestSession) async throws -> [RSSItem] {
+        var rule = source.ruleArticles?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !rule.isEmpty else { throw ScraperError.invalidRule("ruleArticles") }
+        let reverse = rule.hasPrefix("-")
+        if reverse { rule.removeFirst() }
+        let listRule = rule
+        let runtime = try await RSSRuntime.make(source: source, owner: owner, requestSession: requestSession)
+        return try await runtime.run { host in
+            let response = try await host.fetchRulePage(ruleURL: normalizedRequestURL(entry?.url ?? source.sourceKey), page: page, isPrimaryRequest: true)
+            guard (200..<300).contains(response.status) else { throw ScraperError.httpStatus(response.status) }
+            try Task.checkCancellation()
+            return try await host.run { bridge in
+                try parseArticles(body: response.body, finalURL: response.url, listRule: listRule, reverse: reverse,
+                                  source: source, bridge: bridge, variables: response.variables,
+                                  scope: entry.map(RSSArticleScope.category) ?? .feed, sortName: entry?.name ?? "",
+                                  requestURL: response.requestURL)
             }
-            return jsEngine.evaluateIsolated(jsCode, result: prevResult, bindings: bindings)
         }
-        engine.setContent(body, baseUrl: finalURL)
+    }
 
-        let elements = engine.getElements(ruleStr: listRule)
-        guard !elements.isEmpty else {
-            throw ScraperError.noArticlesFound
+    /// 一条解析路径，固定输入测试也走同一个共享bridge，不另造无状态JSContext。
+    static func parseArticles(body: String, finalURL: String, listRule: String, reverse: Bool,
+                              source: RSSSource, bridge: ModernParserBridge, variables: [String: String] = [:],
+                              scope: RSSArticleScope = .feed, sortName: String = "", requestURL: String? = nil) throws -> [RSSItem] {
+        return try SourcePerfTrace.span("rss.rules.list", "main=\(Thread.isMainThread) bytes=\(body.utf8.count)") { () throws -> [RSSItem] in
+        let page = RuleData()
+        page.variableMap = variables
+        let baseURL = requestURL ?? finalURL
+        let elements = try bridge.withRuleContext(content: body, baseURL: baseURL, scope: page, redirectURL: finalURL, stage: "rss.list") {
+            $0.getElements(ruleStr: listRule)
         }
-
+        guard !elements.isEmpty else { throw ScraperError.noArticlesFound }
         var items: [RSSItem] = []
         items.reserveCapacity(elements.count)
-
         for element in elements {
-            engine.setContent(element, baseUrl: finalURL)
-
-            let title = RSSContentSanitizer.cleanText(engine.getString(ruleStr: source.ruleTitle))
-            guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-
-            let link = engine.getString(ruleStr: source.ruleLink, isUrl: true)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let description = descriptionRuleIsEmpty(source) ? "" : engine.getString(ruleStr: source.ruleDescription)
-            let pubDateText = engine.getString(ruleStr: source.rulePubDate)
-            // As Sigma's RssParserByRule: an image only when the rule yields one. Through
-            // `isUrl`, a source without an image rule made the feed page every article's
-            // image — each thumbnail requested the page, and each article opened under a
-            // broken <img>. MD3 still reads the image with `isUrl`; Sigma's way was chosen
-            // over it on 2026-10-03.
-            let imageURL = engine.getOptionalURL(ruleStr: source.ruleImage)
-
-            let finalDescription: String
-            var finalContentHTML: String
-            if !description.isEmpty {
-                finalContentHTML = description
-                finalDescription = RSSContentSanitizer.summary(from: description)
-            } else {
-                finalContentHTML = ""
-                finalDescription = ""
+            let row = RuleData()
+            row.variableMap = page.variableMap
+            let article = RSSArticleScriptObject(source: source, sortName: sortName, data: row, isListItem: true)
+            let item = try bridge.withRuleContext(content: element, baseURL: baseURL, scope: row,
+                                                  redirectURL: finalURL, bindings: ["rssArticle": article], stage: "rss.article") { engine -> RSSItem? in
+                let title = RSSContentSanitizer.cleanText(engine.getString(ruleStr: source.ruleTitle))
+                article.title = title
+                let date = parseDate(engine.getString(ruleStr: source.rulePubDate))
+                let description = (source.ruleDescription ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "" : engine.getString(ruleStr: source.ruleDescription)
+                let image = engine.getOptionalURL(ruleStr: source.ruleImage)
+                let link = engine.getString(ruleStr: source.ruleLink, isUrl: true).trimmingCharacters(in: .whitespacesAndNewlines)
+                article.link = link
+                let finalTitle = RSSContentSanitizer.cleanText(article.title)
+                guard !finalTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                var html = description
+                if !image.isEmpty { html = "<img src=\"\(image)\" style=\"max-width:100%;height:auto;margin-bottom:1em;\" />" + html }
+                var item = RSSItem(id: link.isEmpty ? finalTitle : link, title: finalTitle, link: link, pubDate: date,
+                                   description: description.isEmpty ? "" : RSSContentSanitizer.summary(from: description),
+                                   contentHTML: html, imageURL: image.isEmpty ? nil : image, sourceId: source.id)
+                    .identified(sourceID: source.id, scope: scope)
+                item.variables = row.variableMap
+                item.categoryName = sortName.isEmpty ? nil : sortName
+                return item
             }
-            if !imageURL.isEmpty {
-                let imgTag = "<img src=\"\(imageURL)\" style=\"max-width:100%;height:auto;margin-bottom:1em;\" />"
-                finalContentHTML = imgTag + finalContentHTML
-            }
-
-            let itemID = link.isEmpty ? "\(source.id)::\(title)" : link
-            items.append(RSSItem(
-                id: itemID,
-                title: title,
-                link: link,
-                pubDate: parseDate(pubDateText),
-                description: finalDescription,
-                contentHTML: finalContentHTML,
-                author: nil,
-                imageURL: imageURL.isEmpty ? nil : imageURL,
-                sourceId: source.id
-            ))
+            if let item { items.append(item) }
         }
-
-        if reverse {
-            items.reverse()
-        }
-
-        guard !items.isEmpty else {
-            throw ScraperError.noArticlesFound
-        }
+        if reverse { items.reverse() }
+        guard !items.isEmpty else { throw ScraperError.noArticlesFound }
         return items
+        }
     }
 
-    // MARK: - Article content (Legado Rss.getContent, ruleContent on the article page)
-
-    /// Fetch an article's full content by applying the source's ruleContent to the
-    /// article page. Returns HTML, or nil when the source has no ruleContent.
-    static func fetchArticleContent(source: RSSSource, articleLink: String) async throws -> String? {
-        let contentRule = source.ruleContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !contentRule.isEmpty else { return nil }
-
-        let host = scriptHost(for: source)
-
-        let prepared = await host.run { jsEngine in
-            PreparedRequest(AnalyzeUrl(
-                ruleUrl: normalizedRequestURL(articleLink),
-                sourceHeader: source.header,
-                baseUrl: source.url,
-                jsEvaluator: { [weak jsEngine] js, bindings in
-                    jsEngine?.evaluateIsolated(js, bindings: bindings)
+    static func fetchArticleContent(source: RSSSource, articleLink: String, owner: RSSStore? = nil,
+                                    variables: [String: String] = [:], categoryName: String = "", articleTitle: String = "",
+                                    requestSession: URLSession = LegadoJSBridge.requestSession) async throws -> String? {
+        let rule = source.ruleContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !rule.isEmpty else { return nil }
+        let runtime = try await RSSRuntime.make(source: source, owner: owner, requestSession: requestSession)
+        return try await runtime.run { host in
+            let response = try await host.fetchRulePage(ruleURL: normalizedRequestURL(articleLink), variables: variables)
+            guard (200..<300).contains(response.status) else { throw ScraperError.httpStatus(response.status) }
+            try Task.checkCancellation()
+            return try await host.run { bridge in
+                let data = RuleData()
+                data.variableMap = response.variables
+                let article = RSSArticleScriptObject(source: source, sortName: categoryName, data: data)
+                article.link = articleLink
+                article.title = articleTitle
+                let html = try bridge.withRuleContext(content: response.body, baseURL: response.requestURL, scope: data,
+                                                     redirectURL: response.url, bindings: ["rssArticle": article], stage: "rss.content") {
+                    $0.getString(ruleStr: rule)
                 }
-            ))
-        }
-        let (body, finalURL) = try await fetchBody(prepared, headerJSON: source.header)
-        return await host.run { jsEngine in
-            articleContent(body: body, finalURL: finalURL, contentRule: contentRule, jsEngine: jsEngine)
-        }
-    }
-
-    private static func articleContent(
-        body: String, finalURL: String, contentRule: String, jsEngine: JSCoreEngine
-    ) -> String? {
-        let engine = ModernRuleEngine()
-        engine.jsEvaluator = { [weak engine, weak jsEngine] jsCode, prevResult in
-            guard let engine, let jsEngine else { return nil }
-            var bindings: [String: Any] = [
-                "baseUrl": engine.baseUrl,
-                "baseURL": engine.baseUrl
-            ]
-            if let content = engine.content {
-                bindings["src"] = content
+                return html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : html
             }
-            return jsEngine.evaluateIsolated(jsCode, result: prevResult, bindings: bindings)
-        }
-        engine.setContent(body, baseUrl: finalURL)
-
-        let html = engine.getString(ruleStr: contentRule)
-        let trimmed = html.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    /// One scrape's JS engine, on its own host: the URL, the rules and their
-    /// `java.ajax` requests all run there.
-    private static func scriptHost(for source: RSSSource) -> SourceScriptHost<JSCoreEngine> {
-        let jsEngine = JSCoreEngine()
-        wireNetworkHandler(jsEngine)
-        return SourceScriptHost(jsEngine, label: "rss.\(source.name)")
-    }
-
-    // MARK: - Fetch
-
-    /// What the network half needs from an `AnalyzeUrl` — which stays on the script host,
-    /// as its template evaluation calls into the engine. Building the request runs no JS.
-    private struct PreparedRequest: Sendable {
-        let request: URLRequest?
-        let useWebView: Bool
-        let webViewDelayTime: Int
-        let charset: String?
-
-        init(_ analyzeUrl: AnalyzeUrl) {
-            request = analyzeUrl.toURLRequest()
-            useWebView = analyzeUrl.useWebView
-            webViewDelayTime = analyzeUrl.webViewDelayTime
-            charset = analyzeUrl.charset
         }
     }
 
-    /// Execute the AnalyzeUrl request (or WebView fetch when required) and decode
-    /// the response body honoring the rule's charset option.
-    private static func fetchBody(
-        _ analyzeUrl: PreparedRequest,
-        headerJSON: String?
-    ) async throws -> (body: String, finalURL: String) {
-        guard var request = analyzeUrl.request, let originalURL = request.url else {
-            throw ScraperError.invalidURL
-        }
-
-        if let upgraded = URLComponents(url: originalURL, resolvingAgainstBaseURL: false)?.url?.upgradedToHTTPS() {
-            request.url = upgraded
-        }
-
-        // Merge source-level headers (AnalyzeUrl carries only per-rule option headers).
-        for (key, value) in parsedHeaders(headerJSON) where request.value(forHTTPHeaderField: key) == nil {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
-        if request.value(forHTTPHeaderField: "User-Agent") == nil {
-            request.setValue(defaultUserAgent, forHTTPHeaderField: "User-Agent")
-        }
-        request.timeoutInterval = 20
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-
-        let requestURL = request.url ?? originalURL
-
-        if analyzeUrl.useWebView {
-            let jsWait = analyzeUrl.webViewDelayTime > 0
-                ? TimeInterval(analyzeUrl.webViewDelayTime) / 1000.0
-                : nil
-            let html = try await BookSourceFetcher.fetchViaWebView(
-                url: requestURL,
-                headers: request.allHTTPHeaderFields ?? [:],
-                jsWait: jsWait
-            )
-            return (html, requestURL.absoluteString)
-        }
-
-        let (data, response): (Data, URLResponse)
-        do {
-            (data, response) = try await URLSession.shared.data(for: request)
-        } catch {
-            if isATSBlocked(error) {
-                throw ScraperError.atsBlocked
-            }
-            throw error
-        }
-
-        if let http = response as? HTTPURLResponse,
-           !(200...299).contains(http.statusCode) {
-            throw ScraperError.httpError
-        }
-
-        // The book sources' decoder, as Legado reads RSS through the same `getStrResponse`:
-        // the `charset` option decides when present; otherwise the page's charset is detected
-        // (header, `<meta>`, GBK/Big5 scoring) rather than tried as UTF-8 then GBK.
-        guard let body = HTMLResponseDecoder.decode(
-            data: data, response: response, declaredCharset: analyzeUrl.charset
-        ) else {
-            throw ScraperError.encodingError
-        }
-        let finalURL = (response.url ?? requestURL).absoluteString
-        return (body, finalURL)
-    }
-
-    // MARK: - Helpers
-
-    /// Legado sourceUrls often omit the scheme ("shuyuan.nyasama.net"). Prefix
-    /// https:// for host-like strings so AnalyzeUrl/URLSession accept them.
-    /// Template/option syntax is preserved untouched.
+    /// 只补缺失的scheme，不剥离模板、fragment或URL options，也不强制HTTP升级。
     static func normalizedRequestURL(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
@@ -313,74 +123,17 @@ enum LegadoRSSScraper {
             || trimmed.hasPrefix("<js>") || lower.hasPrefix("@js:") || trimmed.hasPrefix("{{") {
             return trimmed
         }
-        // Host-like: "example.com/path" or "example.com,{...}"
         let beforeSlash = trimmed.split(separator: "/", maxSplits: 1).first ?? ""
         let head = beforeSlash.split(separator: ",", maxSplits: 1).first ?? ""
-        if head.contains("."), !head.contains(" ") {
-            return "https://" + trimmed
-        }
+        if head.contains("."), !head.contains(" ") { return "https://" + trimmed }
         return trimmed
     }
 
-    private static func descriptionRuleIsEmpty(_ source: RSSSource) -> Bool {
-        (source.ruleDescription ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private static func parsedHeaders(_ headerJSON: String?) -> [String: String] {
-        guard let headerJSON, let data = headerJSON.data(using: .utf8),
-              let headers = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
-            return [:]
-        }
-        return headers
-    }
-
-    private static let defaultUserAgent =
-        "Mozilla/5.0 (Linux; Android 8.1.0; zh-CN) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Mobile Safari/537.36"
-
-    /// Wire java.ajax()-style network access for JS rules. Runs on the JS engine's
-    /// dedicated serial queue, so blocking on a semaphore is safe (same pattern as
-    /// ModernParserBridge).
-    private static func wireNetworkHandler(_ jsEngine: JSCoreEngine) {
-        jsEngine.networkHandler = { request, declaredCharset in
-            let pending = BlockingResult<LegadoHTTPResult>()
-            let task = URLSession.shared.dataTask(with: request) { data, response, _ in
-                pending.deliver(LegadoHTTPResult.make(
-                    request: request, data: data, response: response, declaredCharset: declaredCharset
-                ))
-            }
-            task.resume()
-            return pending.wait(timeout: .now() + 30)
-        }
-    }
-
-    private static func isATSBlocked(_ error: Error) -> Bool {
-        if let urlError = error as? URLError,
-           urlError.code == .appTransportSecurityRequiresSecureConnection {
-            return true
-        }
-        let nsError = error as NSError
-        return nsError.domain == NSURLErrorDomain && nsError.code == -1022
-    }
-
     private static let dateFormatters: [DateFormatter] = {
-        let formats = [
-            "EEE, dd MMM yyyy HH:mm:ss Z",
-            "EEE, dd MMM yyyy HH:mm:ss zzz",
-            "EEE, d MMM yyyy HH:mm:ss Z",
-            "yyyy-MM-dd HH:mm:ss",
-            "yyyy-MM-dd HH:mm",
-            "yyyy-MM-dd'T'HH:mm:ssZ",
-            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-            "yyyy-MM-dd'T'HH:mm:ssXXXXX",
-            "yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX",
-            "yyyy-MM-dd",
-            "yyyy/MM/dd HH:mm:ss",
-            "yyyy/MM/dd",
-            "MM-dd HH:mm",
-            "MM/dd/yyyy",
-            "dd/MM/yyyy"
-        ]
-        return formats.map { format in
+        ["EEE, dd MMM yyyy HH:mm:ss Z", "EEE, dd MMM yyyy HH:mm:ss zzz", "EEE, d MMM yyyy HH:mm:ss Z",
+         "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd'T'HH:mm:ssZ", "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+         "yyyy-MM-dd'T'HH:mm:ssXXXXX", "yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX", "yyyy-MM-dd", "yyyy/MM/dd HH:mm:ss",
+         "yyyy/MM/dd", "MM-dd HH:mm", "MM/dd/yyyy", "dd/MM/yyyy"].map { format in
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = format
@@ -389,15 +142,10 @@ enum LegadoRSSScraper {
     }()
 
     private static func parseDate(_ string: String) -> Date? {
-        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        for formatter in dateFormatters {
-            if let date = formatter.date(from: trimmed) {
-                return date
-            }
-        }
-        // Unix timestamps (seconds or milliseconds) are common in JSON APIs.
-        if let epoch = Double(trimmed) {
+        let value = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        for formatter in dateFormatters { if let date = formatter.date(from: value) { return date } }
+        if let epoch = Double(value) {
             if epoch > 1_000_000_000_000 { return Date(timeIntervalSince1970: epoch / 1000) }
             if epoch > 1_000_000_000 { return Date(timeIntervalSince1970: epoch) }
         }
@@ -406,27 +154,20 @@ enum LegadoRSSScraper {
 }
 
 enum ScraperError: LocalizedError {
-    case invalidURL
-    case invalidRule(String)
-    case httpError
-    case encodingError
-    case noArticlesFound
-    case atsBlocked
-
+    case invalidURL, invalidRule(String), httpError, httpStatus(Int), encodingError, noArticlesFound, atsBlocked, scriptFailure, interactionRequired, runtimeStateUnavailable, executionTimedOut
     var errorDescription: String? {
         switch self {
-        case .invalidURL:
-            return localized("RSS URL 無效")
-        case .invalidRule(let name):
-            return String(format: localized("規則 %@ 格式無效"), name)
-        case .httpError:
-            return localized("HTTP 請求失敗")
-        case .encodingError:
-            return localized("網頁編碼錯誤")
-        case .noArticlesFound:
-            return localized("沒有找到文章")
-        case .atsBlocked:
-            return localized("此來源使用不安全的 HTTP 連線，已被 iOS 安全政策阻擋。")
+        case .invalidURL: localized("RSS URL 無效")
+        case .invalidRule(let name): String(format: localized("規則 %@ 格式無效"), name)
+        case .httpError: localized("HTTP 請求失敗")
+        case .httpStatus(let status): String(format: localized("RSS 請求失敗：HTTP %d"), status)
+        case .encodingError: localized("網頁編碼錯誤")
+        case .noArticlesFound: localized("沒有找到文章")
+        case .atsBlocked: localized("此來源使用不安全的 HTTP 連線，已被 iOS 安全政策阻擋。")
+        case .scriptFailure: localized("RSS 源腳本執行失敗，請查看診斷")
+        case .interactionRequired: localized("此 RSS 來源需要前台網頁或登入驗證")
+        case .runtimeStateUnavailable: localized("RSS 執行狀態無法讀取，已停止執行來源")
+        case .executionTimedOut: localized("RSS 來源執行逾時")
         }
     }
 }

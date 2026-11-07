@@ -53,6 +53,27 @@ extension SourceScriptHost where Resident == ModernParserBridge {
         )
     }
 
+    struct RulePage: Sendable {
+        var body: String
+        var url: String
+        var status: Int
+        var requestURL: String
+        var headers: [String: String]
+        func header(_ name: String) -> String? { headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value }
+        var variables: [String: String]
+    }
+
+    func fetchRulePage(ruleURL: String, key: String? = nil, page: Int? = nil,
+                       variables: [String: String] = [:], isPrimaryRequest: Bool = false,
+                       additionalHeaders: [String: String] = [:]) async throws -> RulePage {
+        let scope = RuleData()
+        scope.variableMap = variables
+        let result = try await resident.fetch(ruleUrl: ruleURL, key: key, page: page, pageScope: scope,
+                                              isPrimaryRequest: isPrimaryRequest, additionalHeaders: additionalHeaders, on: self)
+        return RulePage(body: result.0, url: result.1, status: resident.lastFetchStatus,
+                        requestURL: resident.lastFetchRequestURL, headers: resident.lastFetchHeaders, variables: scope.variableMap)
+    }
+
     func searchBooks(keyword: String, page: Int = 1) async throws -> [OnlineBook] {
         try await resident.searchBooks(keyword: keyword, page: page, on: self)
     }

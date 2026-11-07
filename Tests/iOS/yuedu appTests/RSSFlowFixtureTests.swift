@@ -5,19 +5,12 @@ import Testing
 /// S1固定流程输入。标注“现状差异”的用例不代表对齐；后续阶段须改为目标合同。
 @Suite("RSS flow fixture baseline", .serialized)
 struct RSSFlowFixtureTests {
-    @Test("现状差异：RSS动态分类未载入jsLib，仍回退到sourceKey")
+    @Test("S4：RSS动态分类复用源级jsLib")
     func dynamicCategoryNeedsSharedLibrary() async throws {
         var source = rules(url: "https://fixture.invalid/categories")
         source.jsLib = "function fixtureCategory(){return 'https://fixture.invalid/one'}"
         source.sortUrl = "@js:'One::'+fixtureCategory()"
-        #expect(await LegadoRSSScraper.resolveSortEntries(for: source) == [RSSSortEntry(name: "", url: source.url)])
-        // 同一输入在已接入jsLib的共享桥可求值；S4应复用而不是另造分类引擎。
-        var adapted = BookSource(bookSourceUrl: source.url, bookSourceName: "RSS category fixture")
-        adapted.jsLib = source.jsLib ?? ""
-        let value = await BookSourceSession.session(for: adapted).withTurn { bridge in
-            bridge.evaluateExploreKindScript("'One::'+fixtureCategory()")
-        }
-        #expect(value == "One::https://fixture.invalid/one")
+        #expect(try await LegadoRSSScraper.resolveSortEntries(for: source) == [RSSSortEntry(name: "One", url: "https://fixture.invalid/one")])
     }
 
     @Test("现状差异：合法空列表被解析层作为noArticlesFound抛出")
@@ -26,7 +19,7 @@ struct RSSFlowFixtureTests {
         var rejectedAsEmpty = false
         do {
             _ = try await SourceScriptThread.run {
-                try LegadoRSSScraper.parseArticles(body: "<main>No new items</main>", finalURL: source.url, listRule: "class.item", reverse: false, source: source, jsEngine: JSCoreEngine())
+                try LegadoRSSScraper.parseArticles(body: "<main>No new items</main>", finalURL: source.url, listRule: "class.item", reverse: false, source: source, bridge: ModernParserBridge(source: RSSRuntime.scriptSource(source)))
             }
         } catch ScraperError.noArticlesFound { rejectedAsEmpty = true }
         #expect(rejectedAsEmpty, "S1记录现状错误；实现合法空页后需更新此基线")
@@ -34,6 +27,8 @@ struct RSSFlowFixtureTests {
 
     @Test("固定响应序列：第二页失败后可重试同一页；重复页仍返回同一身份")
     func retryAndDuplicatePageInput() async throws {
+        let session = RSSPageFixtureProtocol.makeSession()
+        defer { session.invalidateAndCancel() }
         let host = fixtureHost()
         RSSPageFixtureProtocol.serve(host: host, sequences: [
             "/list/1": [.init(body: Data(article("One", link: "/one").utf8))],
@@ -46,23 +41,23 @@ struct RSSFlowFixtureTests {
         defer { RSSPageFixtureProtocol.remove(host: host) }
         var source = rules(url: "http://\(host)/list/{{page}}")
         source.ruleNextPage = "PAGE"
-        #expect(try await LegadoRSSScraper.scrape(source: source, page: 1).map(\.title) == ["One"])
+        #expect(try await LegadoRSSScraper.scrape(source: source, page: 1, requestSession: session).map(\.title) == ["One"])
         var retryableFailure = false
         do {
-            _ = try await LegadoRSSScraper.scrape(source: source, page: 2)
-        } catch ScraperError.httpError { retryableFailure = true }
+            _ = try await LegadoRSSScraper.scrape(source: source, page: 2, requestSession: session)
+        } catch ScraperError.httpStatus(503) { retryableFailure = true }
         #expect(retryableFailure, "固定第二页第一次请求必须失败")
-        let second = try await LegadoRSSScraper.scrape(source: source, page: 2)
-        let duplicate = try await LegadoRSSScraper.scrape(source: source, page: 2)
+        let second = try await LegadoRSSScraper.scrape(source: source, page: 2, requestSession: session)
+        let duplicate = try await LegadoRSSScraper.scrape(source: source, page: 2, requestSession: session)
         #expect(second.map(\.title) == ["Two"])
         #expect(second.map(\.id) == duplicate.map(\.id))
         let requests = RSSPageFixtureProtocol.requests(host: host)
         #expect(requests.map { $0.url?.path } == ["/list/1", "/list/2", "/list/2", "/list/2"])
-        #expect(requests.allSatisfy { $0.url?.scheme == "https" }, "S1现状：原HTTP会被升级，未修改该生产策略")
+        #expect(requests.allSatisfy { $0.url?.scheme == "http" }, "S4按源配置构造请求，不擅自升级scheme")
         // 响应由URLProtocol固定，页码由测试显式传入；不冒充分页状态机或HTTP传输证明。
     }
 
-    @Test("现状差异：java.put/get未连接条目变量，标题有值而description为空")
+    @Test("S4：java.put/get贯穿同一条目字段，不串相邻条目")
     func fieldVariableContinuity() async throws {
         var source = rules(url: "https://fixture.invalid/variables")
         source.ruleTitle = "a@text@js:java.put('entry',result);result"
@@ -70,15 +65,16 @@ struct RSSFlowFixtureTests {
         let input = article("One", link: "/one") + article("Two", link: "/two")
         let snapshot = source
         let items = try await SourceScriptThread.run {
-            try LegadoRSSScraper.parseArticles(body: input, finalURL: snapshot.url, listRule: "class.item", reverse: false, source: snapshot, jsEngine: JSCoreEngine())
+            try LegadoRSSScraper.parseArticles(body: input, finalURL: snapshot.url, listRule: "class.item", reverse: false, source: snapshot, bridge: ModernParserBridge(source: RSSRuntime.scriptSource(snapshot)))
         }
         #expect(items.map(\.title) == ["One", "Two"])
-        // 目标应为["One", "Two"]；S1已复现断点，S4接入RuleData后替换为目标合同。
-        #expect(items.map(\.contentHTML) == ["", ""])
+        #expect(items.map(\.contentHTML) == ["One", "Two"])
     }
 
-    @Test("现状差异：RSS 403尚未到达loginCheckJs")
-    func loginCheckIsNotExecutedByRSSFetch() async throws {
+    @Test("S4：RSS 403到达loginCheckJs，使用校验脚本返回的实际响应")
+    func loginCheckIsExecutedByRSSFetch() async throws {
+        let session = RSSPageFixtureProtocol.makeSession()
+        defer { session.invalidateAndCancel() }
         let host = fixtureHost()
         RSSPageFixtureProtocol.serve(host: host, sequences: [
             "/protected": [.init(body: Data("synthetic login wall".utf8), status: 403)],
@@ -87,23 +83,22 @@ struct RSSFlowFixtureTests {
         defer { RSSPageFixtureProtocol.remove(host: host) }
         var source = rules(url: "https://\(host)/protected")
         source.loginCheckJs = "java.connect('https://\(host)/verified')"
-        var rejectedBeforeLoginCheck = false
-        do {
-            _ = try await LegadoRSSScraper.scrape(source: source)
-        } catch ScraperError.httpError { rejectedBeforeLoginCheck = true }
-        #expect(rejectedBeforeLoginCheck, "S1记录尚未接入loginCheckJs的HTTP错误")
-        #expect(RSSPageFixtureProtocol.requests(host: host).map { $0.url?.path } == ["/protected"])
+        let items = try await LegadoRSSScraper.scrape(source: source, requestSession: session)
+        #expect(items.map(\.title) == ["Verified"])
+        #expect(RSSPageFixtureProtocol.requests(host: host).map { $0.url?.path } == ["/protected", "/verified"])
     }
 
     @Test("S3：同源跨分类相同链接使用不同item身份")
     func categoryIdentityCollision() async throws {
+        let session = RSSPageFixtureProtocol.makeSession()
+        defer { session.invalidateAndCancel() }
         let host = fixtureHost()
         let body = Data(article("Shared", link: "/shared").utf8)
         RSSPageFixtureProtocol.serve(host: host, sequences: ["/a": [.init(body: body)], "/b": [.init(body: body)]])
         defer { RSSPageFixtureProtocol.remove(host: host) }
         let source = rules(url: "https://\(host)/")
-        let first = try await LegadoRSSScraper.scrape(source: source, entry: RSSSortEntry(name: "A", url: "https://\(host)/a"))
-        let second = try await LegadoRSSScraper.scrape(source: source, entry: RSSSortEntry(name: "B", url: "https://\(host)/b"))
+        let first = try await LegadoRSSScraper.scrape(source: source, entry: RSSSortEntry(name: "A", url: "https://\(host)/a"), requestSession: session)
+        let second = try await LegadoRSSScraper.scrape(source: source, entry: RSSSortEntry(name: "B", url: "https://\(host)/b"), requestSession: session)
         #expect(first.count == 1 && second.count == 1)
         #expect(first.map(\.id) != second.map(\.id))
         #expect(first.map(\.rawKey) == second.map(\.rawKey))

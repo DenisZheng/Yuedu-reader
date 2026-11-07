@@ -19,6 +19,33 @@ protocol DiagnosableError: Error {
     var diagnosticDescription: String { get }
 }
 
+/// 源代码/响应是任意外部输入，不能靠token关键字穷举脱敏。Task传播覆盖async链，
+/// JS专用队列用有作用域的线程标记；退出后不会污染其他源或正常App日志。
+enum SourceDiagnosticContext {
+    @TaskLocal static var restrictedTask = false
+    private static let threadKey = "reader.source.restrictedDiagnostics"
+    static var isRestricted: Bool { restrictedTask || (Thread.current.threadDictionary[threadKey] as? Bool == true) }
+    static func withThreadRedaction<T>(_ restricted: Bool, _ work: () throws -> T) rethrows -> T {
+        guard restricted else { return try work() }
+        let previous = Thread.current.threadDictionary[threadKey]
+        Thread.current.threadDictionary[threadKey] = true
+        defer { Thread.current.threadDictionary[threadKey] = previous }
+        return try work()
+    }
+    static func safeMetrics(_ context: [String: Any]) -> [String: Any] {
+        let keys: Set<String> = ["status", "statusCode", "count", "length", "bytes", "ms", "items", "timedOut"]
+        var safe = context.filter { keys.contains($0.key) && ($0.value is NSNumber) }
+        if let status = context["status"] as? String, let code = Int(status), (-1...599).contains(code) {
+            safe["statusCode"] = code
+        }
+        let stages: Set<String> = ["rule", "request", "jsLib", "loginCheckJs", "bodyJs", "rss.categories", "rss.list", "rss.article", "rss.content"]
+        if let stage = context["stage"] as? String, stages.contains(stage) { safe["stage"] = stage }
+        if let id = context["sourceID"] as? String, id.hasPrefix("rss."), id.count == 68,
+           id.dropFirst(4).allSatisfy({ $0.isHexDigit }) { safe["sourceID"] = id }
+        return safe
+    }
+}
+
 enum AppLogger {
     private static let subsystem = Bundle.main.bundleIdentifier ?? "com.yuedu.app"
 
@@ -192,6 +219,12 @@ enum AppLogger {
         defaultSeverity: DiagnosticSeverity,
         detail: String? = nil
     ) {
+        let restricted = SourceDiagnosticContext.isRestricted
+        let severity = restricted && error != nil ? (severity ?? .error) : severity
+        let message = restricted ? "RSS runtime event (content redacted)" : message
+        let context = restricted ? SourceDiagnosticContext.safeMetrics(context) : context
+        let error: Error? = restricted ? nil : error
+        let detail = restricted ? nil : detail
         var parts = [message]
         if let error {
             parts.append("error=\(error.localizedDescription)")

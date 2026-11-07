@@ -68,6 +68,7 @@ struct PreparedSourceRequest {
         let body: String
         /// Where the response came from; `bodyJs` reads it as `baseUrl`.
         let url: String
+        var http: LegadoHTTPResult? = nil
     }
 
     /// Network only, on any thread; must never reach the JS queue. `nil` when the request failed.
@@ -87,7 +88,7 @@ typealias SourceScriptTransport = (URLRequest, _ declaredCharset: String?) -> Le
 /// Complete response payload captured from the same request that produced the body.
 /// Response-shaped JavaScript APIs retain this metadata; string-shaped APIs consume
 /// only `body` without issuing a second request.
-struct LegadoHTTPResult {
+struct LegadoHTTPResult: Sendable {
     let requestURL: URL
     let finalURL: URL
     let statusCode: Int
@@ -95,6 +96,11 @@ struct LegadoHTTPResult {
     let headers: [String: String]
     let cookies: [String: String]
     let body: String
+
+    func replacingBody(_ value: String) -> LegadoHTTPResult {
+        LegadoHTTPResult(requestURL: requestURL, finalURL: finalURL, statusCode: statusCode,
+                         statusMessage: statusMessage, headers: headers, cookies: cookies, body: value)
+    }
 
     static func bodyOnly(request: URLRequest, body: String) -> LegadoHTTPResult {
         let url = request.url ?? URL(string: "about:blank")!
@@ -282,25 +288,31 @@ struct LegadoHTTPResult {
 }
 
 @objc class LegadoCookieBridge: NSObject, LegadoCookieBridgeExport {
+    var accessAllowed: (() -> Bool)?
 
     func get(_ url: String) -> String {
-        CookieStore.shared.get(url: url)
+        guard accessAllowed?() != false else { return "" }
+        return CookieStore.shared.get(url: url)
     }
 
     /// Legado `cookie.getKey(tag, key)` — value of a single cookie for a domain/URL.
     func getKey(_ url: String, _ key: String) -> String {
-        CookieStore.shared.getKey(url: url, key: key)
+        guard accessAllowed?() != false else { return "" }
+        return CookieStore.shared.getKey(url: url, key: key)
     }
 
     func getCookie(_ url: String) -> String {
-        CookieStore.shared.get(url: url)
+        guard accessAllowed?() != false else { return "" }
+        return CookieStore.shared.get(url: url)
     }
 
     func set(_ url: String, _ cookie: String) {
+        guard accessAllowed?() != false else { return }
         CookieStore.shared.set(url: url, cookie: cookie)
     }
 
     func setCookie(_ url: String, _ cookie: String) {
+        guard accessAllowed?() != false else { return }
         CookieStore.shared.set(url: url, cookie: cookie)
     }
 
@@ -310,14 +322,17 @@ struct LegadoHTTPResult {
     /// name threw. 同人小说网's 段评 mints a `_csrfToken` with it when 起点 has not set
     /// one yet, and the throw landed in the rule's own catch → no 段评, no message.
     func replaceCookie(_ url: String, _ cookie: String) {
+        guard accessAllowed?() != false else { return }
         CookieStore.shared.set(url: url, cookie: cookie)
     }
 
     func remove(_ url: String) {
+        guard accessAllowed?() != false else { return }
         CookieStore.shared.remove(url: url)
     }
 
     func removeCookie(_ url: String) {
+        guard accessAllowed?() != false else { return }
         CookieStore.shared.remove(url: url)
     }
 }
@@ -505,7 +520,18 @@ struct LegadoHTTPResult {
     /// Android `importScript(http…)` delegates to `cacheFile`, whose MD5 URL
     /// key lives in the same `cache` namespace exposed to source JavaScript.
     var importScriptCacheProvider: (() -> LegadoCacheBridge?)?
-    var sourceHeaders: [String: String] { sourceHeadersProvider?() ?? [:] }
+    var sourceHeaders: [String: String] {
+        guard runtimeAccessAllowed?() != false else { return [:] }
+        return sourceHeadersProvider?() ?? [:]
+    }
+    var requestHeaderScope: SourceRequestHeaderScope?
+    var interactionGuard: (() -> Bool)?
+    var runtimeAccessAllowed: (() -> Bool)?
+    private var interactionPermitted: Bool { interactionGuard?() ?? true }
+    private func requestHeaders(for url: URL?) -> [String: String] {
+        let headers = sourceHeaders
+        return requestHeaderScope?.inheritedHeaders(headers, for: url) ?? headers
+    }
 
     /// Timeout for `java.ajax`/`java.connect` requests. Legado sources carry `respondTime`
     /// in milliseconds; JSCoreEngine clamps it before assigning here.
@@ -711,7 +737,9 @@ struct LegadoHTTPResult {
             let job = JSConfined(route.map { AjaxAllJob.analyzeUrl($0.request) } ?? .plain(context))
             throttle.wait() // block until a concurrency slot is free
             group.enter()
+            let restrictedDiagnostics = SourceDiagnosticContext.isRestricted
             DispatchQueue.global(qos: .utility).async {
+              SourceDiagnosticContext.withThreadRedaction(restrictedDiagnostics) {
                 let itemStart = Date()
                 let outcome: AjaxAllOutcome
                 switch job.value {
@@ -737,6 +765,7 @@ struct LegadoHTTPResult {
                 }
                 throttle.signal()
                 group.leave()
+              }
             }
         }
 
@@ -967,6 +996,7 @@ struct LegadoHTTPResult {
     // MARK: Cookie Helpers
 
     func getCookie(_ url: String) -> String {
+        guard runtimeAccessAllowed?() != false else { return "" }
         return CookieStore.shared.get(url: url)
     }
 
@@ -975,6 +1005,7 @@ struct LegadoHTTPResult {
     }
 
     func getCookieValue(_ url: String, _ key: String) -> String {
+        guard runtimeAccessAllowed?() != false else { return "" }
         let cookie = CookieStore.shared.get(url: url)
         guard !key.isEmpty else { return cookie }
         return cookie
@@ -992,6 +1023,7 @@ struct LegadoHTTPResult {
     /// Legado `java.removeCookie(url)` — clears cookies for the host of `url`.
     /// (The `cookie.removeCookie` bridge has the same effect; some sources call it via `java`.)
     func removeCookie(_ url: String) {
+        guard runtimeAccessAllowed?() != false else { return }
         CookieStore.shared.remove(url: url)
     }
 
@@ -1102,6 +1134,7 @@ struct LegadoHTTPResult {
     /// While a video episode is being fetched, a page of the source's (no `html`) is where that
     /// episode plays (`videoEpisodeHandover`).
     func startBrowser(_ url: String, _ title: String, _ html: String?) {
+        guard interactionPermitted else { return }
         if videoEpisodeHandover != nil, html == nil {
             if videoEpisodeHandover?.page == nil { videoEpisodeHandover?.page = url }
             return
@@ -1143,6 +1176,7 @@ struct LegadoHTTPResult {
     func startBrowserAwait(
         _ url: String, _ title: String, _ refetchAfterSuccess: Bool, _ html: String?
     ) -> LegadoStrResponse {
+        guard interactionPermitted else { return throwBrowserCancelled(url: url) }
         guard let presenter = browserPresenter else {
             return throwBrowserCancelled(url: url)
         }
@@ -1179,6 +1213,7 @@ struct LegadoHTTPResult {
     /// blocks the script until the user answers. Legado throws when nothing came back
     /// (`验证结果为空`), so a dismissed sheet or an empty answer throws here too.
     func getVerificationCode(_ imageUrl: String) -> String {
+        guard interactionPermitted else { return throwIntoScript("Interaction required") }
         guard let presenter = captchaPresentHandler ?? Self.sharedCaptchaPresenter else {
             return throwIntoScript("getVerificationCode: no captcha presenter")
         }
@@ -1214,7 +1249,7 @@ struct LegadoHTTPResult {
                 request.setValue(value, forHTTPHeaderField: key)
             }
         }
-        for (key, value) in sourceHeaders where request.value(forHTTPHeaderField: key) == nil {
+        for (key, value) in requestHeaders(for: request.url) where request.value(forHTTPHeaderField: key) == nil {
             request.setValue(value, forHTTPHeaderField: key)
         }
         if request.value(forHTTPHeaderField: "Cookie") == nil {
@@ -1266,7 +1301,7 @@ struct LegadoHTTPResult {
     /// script returns, usually before this delivery.
     func toast(_ msg: String) {
         #if DEBUG
-        print("[JSBridge toast] \(msg)")
+        if !SourceDiagnosticContext.isRestricted { print("[JSBridge toast] \(msg)") }
         #endif
         let handler = toastHandler
         DispatchQueue.main.async { handler?(msg) }
@@ -1308,6 +1343,7 @@ struct LegadoHTTPResult {
             AppLogger.parse("⟐ java.searchBook empty keyword", context: [:])
             return
         }
+        guard interactionPermitted else { return }
         AppLogger.parse("⟐ java.searchBook", context: ["keyword": String(trimmed.prefix(60))])
         DispatchQueue.main.async {
             NotificationCenter.default.post(
@@ -1333,7 +1369,7 @@ struct LegadoHTTPResult {
 
     func logType(_ msg: String) {
         #if DEBUG
-        print("[JSBridge logType] \(type(of: msg)): \(msg)")
+        if !SourceDiagnosticContext.isRestricted { print("[JSBridge logType] \(type(of: msg)): \(msg)") }
         #endif
     }
 
@@ -1896,6 +1932,7 @@ struct LegadoHTTPResult {
     }
 
     func reLoginView() {
+        guard interactionPermitted else { return }
         #if DEBUG
         print("[JSBridge] reLoginView() called")
         #endif
@@ -1925,6 +1962,7 @@ struct LegadoHTTPResult {
     /// Opens a URL in browser without returning body. Only a runtime that presents its own
     /// pages (段評 capture) shows it; it does not fall back to `sharedBrowserPresenter`.
     func showBrowser(_ url: String, _ title: String) {
+        guard interactionPermitted else { return }
         browserPresentHandler?(browserRequest(url: url, title: title, awaitsResult: false)) { _ in }
     }
 
@@ -1939,6 +1977,7 @@ struct LegadoHTTPResult {
     /// Legado `java.copyText`: UIKit owns the system pasteboard, so marshal the
     /// write to the main actor even when source JS is running on its serial queue.
     func copyText(_ text: String) {
+        guard interactionPermitted else { return }
         Task { @MainActor in
             UIPasteboard.general.string = text
         }
@@ -1990,6 +2029,7 @@ struct LegadoHTTPResult {
     /// is ignored and the video opens full screen. While a video episode is being fetched the
     /// link is that episode's instead (`videoEpisodeHandover`).
     func openVideoPlayer(_ url: String, _ title: String) {
+        guard interactionPermitted else { return }
         if videoEpisodeHandover != nil {
             if videoEpisodeHandover?.stream == nil { videoEpisodeHandover?.stream = url }
             return
@@ -2038,6 +2078,7 @@ struct LegadoHTTPResult {
     /// Cookies acquired during the load are copied into `HTTPCookieStorage` so later
     /// `java.ajax`/`cookie.getCookie` calls see them. Blocks the JS serial queue (not main).
     func webView(_ html: JSValue, _ url: JSValue, _ js: JSValue) -> String {
+        guard interactionPermitted else { return throwIntoScript("Foreground WebView required") }
         let htmlArg = Self.optionalString(html)
         let urlArg = Self.optionalString(url)
         let jsArg = Self.optionalString(js) ?? "document.documentElement.outerHTML"
@@ -2092,6 +2133,7 @@ struct LegadoHTTPResult {
         sourceRegex: String?,
         overrideURLRegex: String?
     ) -> String {
+        guard interactionPermitted else { return throwIntoScript("Foreground WebView required") }
         let htmlArg = Self.optionalString(html)
         let urlArg = Self.optionalString(url)
         let jsArg = Self.optionalString(js) ?? ""
@@ -2202,7 +2244,7 @@ struct LegadoHTTPResult {
             "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
             forHTTPHeaderField: "User-Agent"
         )
-        sourceHeaders.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+        requestHeaders(for: url).forEach { request.setValue($1, forHTTPHeaderField: $0) }
         headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
 
         if let handler = networkHandler {
@@ -2246,7 +2288,7 @@ struct LegadoHTTPResult {
             "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
             forHTTPHeaderField: "User-Agent"
         )
-        sourceHeaders.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+        requestHeaders(for: url).forEach { request.setValue($1, forHTTPHeaderField: $0) }
         headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
 
         if let handler = networkHandler {
@@ -2284,7 +2326,7 @@ struct LegadoHTTPResult {
             forHTTPHeaderField: "User-Agent"
         )
         // Source headers first, then explicit per-call headers override.
-        sourceHeaders.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+        requestHeaders(for: url).forEach { request.setValue($1, forHTTPHeaderField: $0) }
         headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
         if request.value(forHTTPHeaderField: "Content-Type") == nil {
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -2317,6 +2359,8 @@ struct LegadoHTTPResult {
         /// Resolved when the context is built, on the JS thread. Resolving them can evaluate the
         /// header rule on the engine's JS queue, which `ajaxAll` occupies while its workers run.
         let sourceHeaders: [String: String]
+        let headerScope: SourceRequestHeaderScope?
+        func headers(for url: URL) -> [String: String] { headerScope?.inheritedHeaders(sourceHeaders, for: url) ?? sourceHeaders }
         let timeoutSeconds: TimeInterval
     }
 
@@ -2327,6 +2371,7 @@ struct LegadoHTTPResult {
             analyzeUrlHandler: analyzeUrlHandler,
             networkHandler: networkHandler,
             sourceHeaders: sourceHeaders,
+            headerScope: requestHeaderScope,
             timeoutSeconds: requestTimeoutSeconds
         )
     }
@@ -2344,7 +2389,10 @@ struct LegadoHTTPResult {
 
         /// JS thread only: `finish` runs the response's `bodyJs`.
         func result(for response: PreparedSourceRequest.Response?) -> LegadoHTTPResult {
-            .bodyOnly(request: placeholder, body: response.flatMap { request?.finish($0) } ?? "")
+            guard let response, let body = request?.finish(response) else {
+                return .make(request: placeholder, data: nil, response: nil)
+            }
+            return response.http?.replacingBody(body) ?? .bodyOnly(request: placeholder, body: body)
         }
     }
 
@@ -2406,7 +2454,7 @@ struct LegadoHTTPResult {
                 return .bodyOnly(request: URLRequest(url: baseURL), body: "")
             }
             var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: context.timeoutSeconds)
-            context.sourceHeaders.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+            context.headers(for: url).forEach { request.setValue($1, forHTTPHeaderField: $0) }
             return handler(request, nil) ?? .bodyOnly(request: request, body: "")
         }
 
@@ -2424,7 +2472,7 @@ struct LegadoHTTPResult {
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         request.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
         // Apply book source headers (may override User-Agent)
-        context.sourceHeaders.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+        context.headers(for: url).forEach { request.setValue($1, forHTTPHeaderField: $0) }
 
         let pending = BlockingResult<LegadoHTTPResult?>()
 
@@ -2565,6 +2613,7 @@ struct LegadoHTTPResult {
         super.init()
     }
 
+    var httpResult: LegadoHTTPResult { result }
     func body() -> String { result.body }
     func cookies() -> LegadoJavaMap { LegadoJavaMap(result.cookies) }
     func headers() -> LegadoJavaMap { LegadoJavaMap(result.headers, caseInsensitive: true) }

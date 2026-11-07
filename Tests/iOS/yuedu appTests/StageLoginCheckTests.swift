@@ -14,7 +14,7 @@ struct StageLoginCheckTests {
         StageURLProtocol.respond(status: 403, body: "<title>Just a moment...</title>")
         let source = makeSource(loginCheckJs: """
             if (result.code() == 403) {
-                java.connect(String(result.url).replace('/search', '/verified'));
+                java.connect(result.url().replace('/search', '/verified'));
             } else {
                 result;
             }

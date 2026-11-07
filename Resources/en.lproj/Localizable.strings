@@ -3317,6 +3317,10 @@
 "選擇來源（%d 個）" = "Choose Source (%d)";
 "%@ 副本" = "%@ Copy";
 "RSS 請求失敗：HTTP %d" = "The RSS request couldn't be completed (HTTP %d).";
+"RSS 源腳本執行失敗，請查看診斷" = "The RSS source script failed. Check Diagnostics.";
+"此 RSS 來源需要前台網頁或登入驗證" = "This RSS source requires a foreground webpage or sign-in verification.";
+"RSS 執行狀態無法讀取，已停止執行來源" = "The RSS runtime state couldn't be read. Source execution has been stopped.";
+"RSS 來源執行逾時" = "RSS source execution timed out.";
 "全不選" = "Deselect All";
 "加入分組" = "Add to Group";
 "加星號" = "Star";

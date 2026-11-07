@@ -6,11 +6,40 @@ import SwiftUI
 final class RSSStore: ObservableObject {
     static let shared = RSSStore()
 
-    @Published var sources: [RSSSource] = [] { didSet { configurationRevision &+= 1 } }
-    @Published var folders: [RSSFolder] = [] { didSet { configurationRevision &+= 1 } }
+    @Published var sources: [RSSSource] = [] { didSet {
+        configurationRevision &+= 1
+        invalidateRuntimes()
+    } }
+    @Published var folders: [RSSFolder] = [] { didSet {
+        configurationRevision &+= 1
+        invalidateRuntimes()
+    } }
     private(set) var configurationRevision: UInt64 = 0
     private var authenticationRevisions: [String: UInt64] = [:]
     private var sourceVariables: [String: [String: String]] = [:]
+    private var sourceOptionJSON: [String: String] = [:]
+    let runtimeIdentity = UUID().uuidString
+    private final class RuntimeReference {
+        weak var value: RSSRuntimeState?
+        init(_ value: RSSRuntimeState) { self.value = value }
+    }
+    // 生命周期登记，不是缓存。弱引用也能使被共享LRU淘汰但仍在请求中的会话失效。
+    private var runtimes: [String: [RuntimeReference]] = [:]
+
+    func registerRuntime(_ value: RSSRuntimeState, source: RSSSource, ticket: RSSRequestTicket) -> Bool {
+        guard accepts(ticket), self.source(id: source.id) == source else { return false }
+        var entries = (runtimes[source.id] ?? []).filter { $0.value != nil }
+        if !entries.contains(where: { $0.value === value }) { entries.append(RuntimeReference(value)) }
+        runtimes[source.id] = entries
+        return true
+    }
+
+    private func invalidateRuntimes(for sourceID: String? = nil) {
+        let keys = sourceID.map { [$0] } ?? Array(runtimes.keys)
+        for key in keys {
+            for entry in runtimes.removeValue(forKey: key) ?? [] { entry.value?.invalidate() }
+        }
+    }
     @Published private var cachedArticlesBySource: [String: [RSSArticleRecord]] = [:] { didSet { contentRevision &+= 1 } }
     @Published private var articleStatuses: [String: RSSArticleStatus] = [:] { didSet { contentRevision &+= 1 } }
     private var contentRevision: UInt64 = 0
@@ -90,6 +119,7 @@ final class RSSStore: ObservableObject {
             cachedArticlesBySource[sourceID] = nil
             feedMetadataBySource[sourceID] = nil
             sourceVariables[sourceID] = nil
+            sourceOptionJSON[sourceID] = nil
             authenticationRevisions[sourceID, default: 0] &+= 1
         }
         articleStatuses = articleStatuses.filter { key, value in
@@ -547,13 +577,37 @@ final class RSSStore: ObservableObject {
 
     func authenticationChanged(for sourceID: String) {
         authenticationRevisions[sourceID, default: 0] &+= 1
+        invalidateRuntimes(for: sourceID)
     }
 
     func variables(for sourceID: String) -> [String: String] { sourceVariables[sourceID] ?? [:] }
 
+    func runtimeSnapshot(for source: RSSSource) throws -> RSSRuntimeSnapshot {
+        guard !unreadableFiles.contains("rss_runtime_variables.json") else { throw ScraperError.runtimeStateUnavailable }
+        return .init(variableJSON: sourceOptionJSON[source.id] ?? source.variable, values: variables(for: source.id),
+              variableIsStored: sourceOptionJSON[source.id] != nil)
+    }
+
+    func mergeRuntimeSnapshot(_ value: RSSRuntimeSnapshot, ticket: RSSRequestTicket, runtime: RSSRuntimeState) -> Bool {
+        guard !Task.isCancelled, accepts(ticket), runtime.isCurrent else { return false }
+        var files: StoredFiles = []
+        if (sourceVariables[ticket.sourceID] ?? [:]) != value.values {
+            sourceVariables[ticket.sourceID] = value.values
+            files.insert(.variables)
+        }
+        if value.variableIsStored && sourceOptionJSON[ticket.sourceID] != value.variableJSON {
+            sourceOptionJSON[ticket.sourceID] = value.variableJSON
+            files.insert(.variables)
+        }
+        if !files.isEmpty { save(files) }
+        return true
+    }
+
     func setVariables(_ values: [String: String], for sourceID: String) {
-        guard source(id: sourceID) != nil, sourceVariables[sourceID] != values else { return }
+        guard source(id: sourceID) != nil, (sourceVariables[sourceID] ?? [:]) != values else { return }
         sourceVariables[sourceID] = values
+        configurationRevision &+= 1
+        invalidateRuntimes()
         save(.variables)
     }
 
@@ -747,7 +801,10 @@ final class RSSStore: ObservableObject {
         cachedArticlesBySource = load([String: [RSSArticleRecord]].self, from: articleStorageURL) ?? [:]
         articleStatuses = load([String: RSSArticleStatus].self, from: statusStorageURL) ?? [:]
         feedMetadataBySource = load([String: RSSFeedFetchMetadata].self, from: feedMetadataStorageURL) ?? [:]
-        sourceVariables = load([String: [String: String]].self, from: sourceStorageURL.deletingLastPathComponent().appendingPathComponent("rss_runtime_variables.json")) ?? [:]
+        if let runtime = load(RSSRuntimeStateFile.self, from: sourceStorageURL.deletingLastPathComponent().appendingPathComponent("rss_runtime_variables.json")) {
+            sourceVariables = runtime.values
+            sourceOptionJSON = runtime.options
+        }
         rebuildArticleIndex()
         backfillFoldersFromSources()
     }
@@ -859,6 +916,7 @@ final class RSSStore: ObservableObject {
         articleStatuses = Dictionary(uniqueKeysWithValues: snapshot.statuses.map { ($0.articleId, $0) })
         feedMetadataBySource = [:]
         sourceVariables = [:]
+        sourceOptionJSON = [:]
         authenticationRevisions = [:]
         rebuildArticleIndex()
         save()
@@ -919,7 +977,7 @@ final class RSSStore: ObservableObject {
         var articles: [String: [RSSArticleRecord]]?
         var statuses: [String: RSSArticleStatus]?
         var metadata: [String: RSSFeedFetchMetadata]?
-        var variables: [String: [String: String]]?
+        var variables: RSSRuntimeStateFile?
         var directory: URL
     }
 
@@ -938,7 +996,7 @@ final class RSSStore: ObservableObject {
                 articles: files.contains(.articles) ? cachedArticlesBySource : nil,
                 statuses: files.contains(.statuses) ? articleStatuses : nil,
                 metadata: files.contains(.feedMetadata) ? feedMetadataBySource : nil,
-                variables: files.contains(.variables) ? sourceVariables : nil,
+                variables: files.contains(.variables) ? RSSRuntimeStateFile(values: sourceVariables, options: sourceOptionJSON) : nil,
                 directory: sourceStorageURL.deletingLastPathComponent()
             )
             let results = await Self.write(snapshot, excluding: unreadableFiles)

@@ -58,7 +58,7 @@ struct RSSPageDecodingTests {
         var source = RSSSource(name: "rss page fixture", url: "https://\(host)/")
         source.ruleContent = "@css:p@text"
         return try await LegadoRSSScraper.fetchArticleContent(
-            source: source, articleLink: "https://\(host)/article"
+            source: source, articleLink: "https://\(host)/article", requestSession: RSSPageFixtureProtocol.makeSession()
         )
     }
 }

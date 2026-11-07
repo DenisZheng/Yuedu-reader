@@ -54,7 +54,7 @@ struct RSSAlignmentFixtureTests {
           <div class="description"><button onclick="window.fixtureClicked=true">Play</button><iframe src="/player"></iframe></div>
         </div>
         """
-        let items = try LegadoRSSScraper.parseArticles(body: body, finalURL: source.url, listRule: "class.item", reverse: false, source: source, jsEngine: JSCoreEngine())
+        let items = try LegadoRSSScraper.parseArticles(body: body, finalURL: source.url, listRule: "class.item", reverse: false, source: source, bridge: ModernParserBridge(source: RSSRuntime.scriptSource(source)))
         let item = try #require(items.first)
         #expect(items.count == 1)
         #expect(item.link == "https://fixture.invalid/article/one")

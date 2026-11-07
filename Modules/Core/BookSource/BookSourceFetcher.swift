@@ -349,7 +349,10 @@ final class WebCrawlerDebugger: ObservableObject {
 
     nonisolated static func logRequest(url: String, method: String, headers: [String: String]) {
         guard gate.isCapturingNetwork else { return }
-        append(.init(type: .request, message: method, url: url, detail: .headers(headers)))
+        let restricted = SourceDiagnosticContext.isRestricted
+        let method = restricted && !["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].contains(method) ? "REQUEST" : method
+        append(.init(type: .request, message: method, url: restricted ? nil : url,
+                     detail: restricted ? nil : .headers(headers)))
     }
 
     nonisolated static func logResponse(url: String, statusCode: Int, htmlBody: String) {
@@ -357,8 +360,8 @@ final class WebCrawlerDebugger: ObservableObject {
         append(.init(
             type: .response,
             message: "HTTP \(statusCode) · \(htmlBody.utf8.count) B",
-            url: url,
-            detail: .body(String(htmlBody.prefix(bodyLimit)))
+            url: SourceDiagnosticContext.isRestricted ? nil : url,
+            detail: SourceDiagnosticContext.isRestricted ? nil : .body(String(htmlBody.prefix(bodyLimit)))
         ))
     }
 
@@ -366,8 +369,8 @@ final class WebCrawlerDebugger: ObservableObject {
         guard gate.isCapturingParse else { return }
         append(.init(
             type: .parseEvent,
-            message: "\(matchCount) match(es) · \(rule)",
-            url: url.isEmpty ? nil : url,
+            message: SourceDiagnosticContext.isRestricted ? "\(matchCount) match(es)" : "\(matchCount) match(es) · \(rule)",
+            url: SourceDiagnosticContext.isRestricted || url.isEmpty ? nil : url,
             detail: nil
         ))
     }
@@ -376,15 +379,16 @@ final class WebCrawlerDebugger: ObservableObject {
         guard gate.isCapturingNetwork else { return }
         append(.init(
             type: .error,
-            message: error.localizedDescription,
-            url: url,
-            detail: .text(String(describing: error))
+            message: SourceDiagnosticContext.isRestricted ? "RSS request error" : error.localizedDescription,
+            url: SourceDiagnosticContext.isRestricted ? nil : url,
+            detail: SourceDiagnosticContext.isRestricted ? nil : .text(String(describing: error))
         ))
     }
 
     nonisolated static func logInfo(_ message: String, url: String? = nil) {
         guard gate.isCapturingNetwork else { return }
-        append(.init(type: .info, message: message, url: url, detail: nil))
+        let restricted = SourceDiagnosticContext.isRestricted
+        append(.init(type: .info, message: restricted ? "RSS request event" : message, url: restricted ? nil : url, detail: nil))
     }
 
     private nonisolated static func append(_ entry: LogEntry) {

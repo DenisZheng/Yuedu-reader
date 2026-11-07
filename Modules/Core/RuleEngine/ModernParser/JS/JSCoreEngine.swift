@@ -72,7 +72,7 @@ class JSCoreEngine {
     /// reset and the evaluation returns nil. Guards against infinite loops in
     /// book-source rule JS that would otherwise permanently block the serial
     /// queue and freeze the calling Task (common on iOS 17).
-    private static let jsTimeout: TimeInterval = 30
+    private let jsTimeout: TimeInterval
 
     /// Last JavaScript error message (nil if no error on last evaluation).
     private(set) var lastError: String?
@@ -81,6 +81,15 @@ class JSCoreEngine {
     private(set) var executionStage = "javascript"
 
     // MARK: - Delegates
+
+    var interactionGuard: (() -> Bool)? { didSet { bridge.interactionGuard = interactionGuard } }
+    var runtimeAccessAllowed: (() -> Bool)? {
+        didSet {
+            cookieBridge.accessAllowed = runtimeAccessAllowed
+            cacheBridge.accessAllowed = runtimeAccessAllowed
+            bridge.runtimeAccessAllowed = runtimeAccessAllowed
+        }
+    }
 
     /// Retrieve a stored variable by key (wired to RuleDataInterface).
     var getData: ((String) -> String?)? {
@@ -185,6 +194,11 @@ class JSCoreEngine {
         didSet { bridge.setResponseBase64Handler = responseBase64Handler }
     }
 
+    /// 共享脚本桥可绑定其他来源的元数据/凭据命名空间，不能把RSS类型映射成书源类型。
+    var sourcePropertiesJSON: Data?
+    var requestHeaderScope: SourceRequestHeaderScope? { didSet { bridge.requestHeaderScope = requestHeaderScope } }
+    var authenticationKey: String?
+
     /// Book source object injected as `source` in JS — set this before evaluating rule scripts.
     var bookSource: BookSource? {
         didSet {
@@ -204,7 +218,8 @@ class JSCoreEngine {
                 let prevHandlers = sourceBridge.getVariableHandler
                 sourceBridge = LegadoSourceBridge.from(src)
                 sourceBridge.getVariableHandler = prevHandlers
-                cacheBridge = LegadoCacheBridge(sourceId: src.bookSourceUrl)
+                cacheBridge = LegadoCacheBridge(sourceId: authenticationKey ?? src.bookSourceUrl)
+                cacheBridge.accessAllowed = runtimeAccessAllowed
                 injectSourceObject(sourceBridge, into: context)
                 context.setObject(cacheBridge, forKeyedSubscript: "cache" as NSString)
                 installExploreInfoMap(into: context)
@@ -218,7 +233,7 @@ class JSCoreEngine {
     private var resolvedHeaderCache: [String: String]?
     private var resolvedHeaderLoginInfoRevision: UInt64?
     private let resolvedHeaderCacheLock = NSLock()
-    private var isResolvingHeaders = false
+    private var resolvingHeaderGeneration: UInt64?
     /// Where every resolution is also published for readers off the source's host (cover
     /// cells on the main thread read it through `BookSource.parsedHeaders`).
     var headerSnapshot: SourceHeaderSnapshot?
@@ -250,26 +265,38 @@ class JSCoreEngine {
 
         let work = { [self] () -> [String: String] in
             let currentRevision = currentLoginInfoRevision()
+            let currentGeneration = withQueueLock { generation }
             resolvedHeaderCacheLock.lock()
-            let cached = resolvedHeaderCache
-            let cachedRevision = resolvedHeaderLoginInfoRevision
-            resolvedHeaderCacheLock.unlock()
-            if let cached, cachedRevision == currentRevision { return cached }
-            guard !isResolvingHeaders else { return [:] }
-            var headers: [String: String] = [:]
-            if let header = bookSource?.header {
-                isResolvingHeaders = true
-                headers = parseHeaders(header)
-                isResolvingHeaders = false
+            if let cached = resolvedHeaderCache, resolvedHeaderLoginInfoRevision == currentRevision {
+                resolvedHeaderCacheLock.unlock()
+                return cached
             }
-            resolvedHeaderCacheLock.lock()
-            resolvedHeaderCache = headers
-            resolvedHeaderLoginInfoRevision = currentRevision
+            guard resolvingHeaderGeneration != currentGeneration else {
+                resolvedHeaderCacheLock.unlock()
+                return [:]
+            }
+            resolvingHeaderGeneration = currentGeneration
             resolvedHeaderCacheLock.unlock()
-            headerSnapshot?.store(headers)
+            defer {
+                resolvedHeaderCacheLock.lock()
+                if resolvingHeaderGeneration == currentGeneration { resolvingHeaderGeneration = nil }
+                resolvedHeaderCacheLock.unlock()
+            }
+            let headers = bookSource.map { parseHeaders($0.header) } ?? [:]
+            withQueueLock {
+                guard generation == currentGeneration else { return }
+                resolvedHeaderCacheLock.lock()
+                resolvedHeaderCache = headers
+                resolvedHeaderLoginInfoRevision = currentRevision
+                resolvedHeaderCacheLock.unlock()
+                headerSnapshot?.store(headers)
+            }
             return headers
         }
-        return onJSQueue(work)
+        switch onJSQueueWithTimeout(work) {
+        case .completed(let headers): return headers
+        case .timedOut: return [:]
+        }
     }
 
     /// Headers visible to `java.*` requests. Legado's request layer merges the
@@ -277,15 +304,18 @@ class JSCoreEngine {
     /// the latter wins when both declare the same field.
     func resolvedRequestHeaders() -> [String: String] {
         var headers = resolvedSourceHeaders()
-        guard let sourceUrl = bookSource?.bookSourceUrl,
+        guard let sourceUrl = authenticationKey ?? bookSource?.bookSourceUrl,
               let loginHeaders = LoginManager.shared.getLoginHeaderMap(sourceUrl: sourceUrl)
         else { return headers }
-        headers.merge(loginHeaders) { _, loginValue in loginValue }
+        for (key, value) in loginHeaders {
+            for oldKey in headers.keys where oldKey.caseInsensitiveCompare(key) == .orderedSame { headers[oldKey] = nil }
+            headers[key] = value
+        }
         return headers
     }
 
     private func currentLoginInfoRevision() -> UInt64 {
-        guard let sourceUrl = bookSource?.bookSourceUrl else { return 0 }
+        guard let sourceUrl = authenticationKey ?? bookSource?.bookSourceUrl else { return 0 }
         return LoginManager.shared.loginInfoRevision(sourceUrl: sourceUrl)
     }
 
@@ -293,6 +323,7 @@ class JSCoreEngine {
         resolvedHeaderCacheLock.lock()
         resolvedHeaderCache = nil
         resolvedHeaderLoginInfoRevision = nil
+        resolvingHeaderGeneration = nil
         resolvedHeaderCacheLock.unlock()
     }
 
@@ -301,7 +332,9 @@ class JSCoreEngine {
 
     // MARK: - Initializer
 
-    init() {
+    init(executionTimeout: TimeInterval = 30) {
+        precondition(executionTimeout.isFinite && executionTimeout > 0 && executionTimeout <= 30)
+        self.jsTimeout = executionTimeout
         let ctx = JSContext()!
         self.context = ctx
         self.currentBridges = ContextBridges(
@@ -324,6 +357,8 @@ class JSCoreEngine {
     /// the providers. The initializer and a timeout's reset both configure theirs here, so a
     /// replacement bridge works exactly like the first. Called under `queueLock` on a reset.
     private func configureJavaBridge(_ bridge: LegadoJSBridge) {
+        bridge.interactionGuard = interactionGuard
+        bridge.runtimeAccessAllowed = runtimeAccessAllowed
         bridge.getData = getData
         bridge.putData = putData
         bridge.networkHandler = networkHandler
@@ -408,7 +443,7 @@ class JSCoreEngine {
                 // Queued behind a script a timeout abandoned: the engine moved to a new queue
                 // meanwhile, and run here this would touch the new context alongside it.
                 guard isCurrentGeneration(queueGeneration) else { return onJSQueue(work) }
-                return work()
+                return SourceDiagnosticContext.withThreadRedaction(sourcePropertiesJSON != nil, work)
             }
         }
     }
@@ -447,7 +482,7 @@ class JSCoreEngine {
                 group.leave()
                 return
             }
-            let value = JSConfined(work.value())
+            let value = JSConfined(SourceDiagnosticContext.withThreadRedaction(liveEngine.sourcePropertiesJSON != nil, work.value))
             result.withLock { $0 = value }
             group.leave()
         }
@@ -459,15 +494,20 @@ class JSCoreEngine {
         // ends (`BrowserAwaitBox`) — but it is shown on the main thread, so a caller blocking
         // the main thread here keeps the timeout: waiting on would leave it unable to appear.
         var timedOut = false
-        SourcePerfTrace.mainThreadWait("wait.jsQueue", "timeout=\(Int(Self.jsTimeout))s timedOut=\(timedOut)") {
-            while group.wait(timeout: .now() + Self.jsTimeout) == .timedOut {
+        SourcePerfTrace.mainThreadWait("wait.jsQueue", "timeout=\(jsTimeout)s timedOut=\(timedOut)") {
+            while group.wait(timeout: .now() + jsTimeout) == .timedOut {
                 if javaBridge.isAwaitingUser, !Thread.isMainThread { continue }
                 resetEngine(abandoning: queueGeneration)
                 timedOut = true
                 return
             }
         }
-        if timedOut { return .timedOut }
+        if timedOut {
+            let message = "Source JavaScript execution timed out"
+            lastError = message
+            errorHandler?(message, "js timeout")
+            return .timedOut
+        }
         guard let value = result.withLock({ $0 }) else { return .timedOut }
         return .completed(value.value)
     }
@@ -481,21 +521,30 @@ class JSCoreEngine {
 
     /// Executes a nested evaluation under a precise pipeline stage. The JS queue is
     /// re-entrant, so callers can wrap existing evaluation APIs without a second path.
-    func withExecutionStage<T>(_ stage: String, _ work: () -> T) -> T {
-        onJSQueue {
+    func withExecutionStage<T>(_ stage: String, _ work: @escaping () -> T?) -> T? {
+        switch onJSQueueWithTimeout({ [self] in
+            let activeContext = context
+            let activeGeneration = withQueueLock { generation }
             let previous = executionStage
             executionStage = stage
-            updateRuntimeErrorContext()
+            updateRuntimeErrorContext(in: activeContext)
             defer {
-                executionStage = previous
-                updateRuntimeErrorContext()
+                let current = withQueueLock {
+                    guard generation == activeGeneration else { return false }
+                    executionStage = previous
+                    return true
+                }
+                if current { updateRuntimeErrorContext(in: activeContext) }
             }
             return work()
+        }) {
+        case .completed(let value): return value
+        case .timedOut: return nil
         }
     }
 
-    private func updateRuntimeErrorContext() {
-        context.setObject([
+    private func updateRuntimeErrorContext(in target: JSContext? = nil) {
+        (target ?? context).setObject([
             "stage": executionStage,
             "sourceName": bookSource?.bookSourceName ?? "?",
             "sourceId": Self.redactedSourceIdentifier(bookSource?.bookSourceUrl),
@@ -510,6 +559,15 @@ class JSCoreEngine {
         components.query = nil
         components.fragment = nil
         return String((components.string ?? rawValue).prefix(160))
+    }
+
+    /// 仅清理当前流程bindings，保留jsLib定义的共享全局。必须从所属脚本host调用。
+    func clearTransientBindings(_ names: [String]) {
+        onJSQueue {
+            for name in names {
+                context.setObject(JSValue(undefinedIn: context), forKeyedSubscript: name as NSString)
+            }
+        }
     }
 
     /// Evaluate JavaScript code and return the result as a string.
@@ -900,6 +958,7 @@ class JSCoreEngine {
             currentBridges = bridges
             jsQueue = newQueue
             context = newContext
+            clearResolvedHeaderCache()
             return true
         }
         if published { lastError = nil }
@@ -949,6 +1008,7 @@ class JSCoreEngine {
         // This context's own bridges: every block below captures these, never the engine's
         // current ones, which a timeout's reset replaces while this context may still run.
         let bridge = bridges.java
+        bridge.requestHeaderScope = requestHeaderScope
         let sourceBridge = bridges.source
 
         // Exception handler
@@ -957,12 +1017,14 @@ class JSCoreEngine {
             // A context a timeout abandoned runs on beside the new one: its exception is not
             // the current job's error, and writing `lastError` from its thread races the job.
             guard let self, self.withQueueLock({ self.context === thrower }) else {
-                AppLogger.parse("Book source rule JS exception in a context a timeout abandoned", context: [
-                    "error": msg
-                ])
+                AppLogger.parse("Book source rule JS exception in a context a timeout abandoned")
                 return
             }
             self.lastError = msg
+            if self.sourcePropertiesJSON != nil {
+                self.errorHandler?(msg, "js exception")
+                return
+            }
             if msg.contains("eval() is disabled") {
                 AppLogger.security("Book source JS attempted to use disabled eval(); blocked", context: ["error": msg])
             }
@@ -1739,6 +1801,37 @@ class JSCoreEngine {
     /// Inject `source` as a Legado-compatible bridge object with methods and properties.
     private func injectSourceObject(_ sourceBridge: LegadoSourceBridge, into ctx: JSContext) {
         ctx.setObject(sourceBridge, forKeyedSubscript: "source" as NSString)
+        guard let sourcePropertiesJSON else { return }
+        ctx.setObject(String(decoding: sourcePropertiesJSON, as: UTF8.self), forKeyedSubscript: "__sourceProperties" as NSString)
+        // 元数据为JSON数据，不拼接成可执行代码；共享方法仍绑定同一个native桥。
+        ctx.evaluateScript("""
+        (function(native, raw) {
+            const fields = JSON.parse(raw);
+            const methods = new Set(['getVariable','setVariable','getLoginInfo','putLoginInfo',
+                'getLoginInfoMap','removeLoginInfo','putLoginHeader','getLoginHeader',
+                'getLoginHeaderMap','removeLoginHeader','getHeaderMap','login','put','get',
+                'evalJS','getKey','getTag']);
+            globalThis.source = new Proxy({}, {
+                get: function(_, key) {
+                    if (key === 'getTag' && typeof fields.sourceName === 'string') return function() { return fields.sourceName; };
+                    if (methods.has(key)) return native[key].bind(native);
+                    if (key === 'key') return native.getKey();
+                    if (Object.prototype.hasOwnProperty.call(fields, key)) return fields[key];
+                    if (typeof key === 'string' && key.startsWith('get')) {
+                        const field = key.charAt(3).toLowerCase() + key.slice(4);
+                        if (Object.prototype.hasOwnProperty.call(fields, field)) return function() { return fields[field]; };
+                    }
+                    return undefined;
+                },
+                ownKeys: function() { return Object.keys(fields); },
+                getOwnPropertyDescriptor: function(_, key) {
+                    if (Object.prototype.hasOwnProperty.call(fields, key))
+                        return { enumerable: true, configurable: true, value: fields[key] };
+                }
+            });
+        })(source, __sourceProperties);
+        delete globalThis.__sourceProperties;
+        """)
     }
 
     private func setResult(_ result: Any?) {

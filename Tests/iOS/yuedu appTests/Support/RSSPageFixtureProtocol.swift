@@ -2,12 +2,22 @@ import Foundation
 import os
 
 /// 仅接管显式登记的合成host，供RSS的URLSession固定响应测试复用；不是WebKit子资源拦截器。
-/// RSS现状会把HTTP升级到HTTPS，这里保留真实生成的请求，仅替代最后的网络响应。
-final class RSSPageFixtureProtocol: URLProtocol {
+/// 同时支持立即响应和显式释放的阻塞响应；不以sleep模拟状态同步。
+final class RSSPageFixtureProtocol: URLProtocol, @unchecked Sendable {
+    static func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RSSPageFixtureProtocol.self]
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        return URLSession(configuration: configuration)
+    }
+
     struct Response: Sendable {
         var body: Data
         var status = 200
         var contentType = "text/html; charset=utf-8"
+        var headers: [String: String] = [:]
+        var held = false
     }
 
     private struct Fixture {
@@ -15,7 +25,11 @@ final class RSSPageFixtureProtocol: URLProtocol {
         var sequences: [String: [Response]] = [:]
         var offsets: [String: Int] = [:]
         var requests: [URLRequest] = []
+        var requestTimes: [Date] = []
+        var pending: [(RSSPageFixtureProtocol, Response)] = []
+        var events: AsyncStream<URLRequest>.Continuation?
     }
+    private let lifecycle = OSAllocatedUnfairLock(initialState: false)
     private static let state = OSAllocatedUnfairLock(initialState: [String: Fixture]())
     // 常驻当前测试进程但只匹配仍登记的host；一个suite结束不能移除另一个suite的handler。
     private static let registered = URLProtocol.registerClass(RSSPageFixtureProtocol.self)
@@ -25,9 +39,19 @@ final class RSSPageFixtureProtocol: URLProtocol {
         state.withLock { $0[host] = Fixture(fallback: Response(body: body, contentType: contentType)) }
     }
 
-    static func serve(host: String, sequences: [String: [Response]]) {
+    static func serve(host: String, sequences: [String: [Response]], events: AsyncStream<URLRequest>.Continuation? = nil) {
         precondition(registered)
-        state.withLock { $0[host] = Fixture(sequences: sequences) }
+        state.withLock { $0[host] = Fixture(sequences: sequences, events: events) }
+    }
+
+    static func requestTimes(host: String) -> [Date] { state.withLock { $0[host]?.requestTimes ?? [] } }
+    static func release(host: String) {
+        let pending = state.withLock { fixtures in
+            let pending = fixtures[host]?.pending ?? []
+            fixtures[host]?.pending = []
+            return pending
+        }
+        for (loader, response) in pending { loader.deliver(response) }
     }
 
     static func requests(host: String) -> [URLRequest] { state.withLock { $0[host]?.requests ?? [] } }
@@ -48,6 +72,8 @@ final class RSSPageFixtureProtocol: URLProtocol {
         let result = Self.state.withLock { fixtures -> Response? in
             guard var fixture = fixtures[host], fixture.requests.count < 128 else { return nil }
             fixture.requests.append(request)
+            fixture.requestTimes.append(Date())
+            fixture.events?.yield(request)
             let response: Response
             if let sequence = fixture.sequences[url.path] {
                 let offset = fixture.offsets[url.path, default: 0]
@@ -63,12 +89,27 @@ final class RSSPageFixtureProtocol: URLProtocol {
                 fixtures[host] = fixture
                 return nil
             }
+            if response.held { fixture.pending.append((self, response)) }
             fixtures[host] = fixture
             return response
         }
-        guard let result,
+        guard let result else {
+            client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))
+            return
+        }
+        if !result.held { deliver(result) }
+    }
+
+    private func deliver(_ result: Response) {
+        let mayDeliver = lifecycle.withLock { finished in
+            guard !finished else { return false }
+            finished = true
+            return true
+        }
+        guard mayDeliver else { return }
+        guard let url = request.url,
               let response = HTTPURLResponse(url: url, statusCode: result.status, httpVersion: nil,
-                                             headerFields: ["Content-Type": result.contentType]) else {
+                                             headerFields: result.headers.merging(["Content-Type": result.contentType]) { existing, _ in existing }) else {
             client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))
             return
         }
@@ -76,6 +117,5 @@ final class RSSPageFixtureProtocol: URLProtocol {
         client?.urlProtocol(self, didLoad: result.body)
         client?.urlProtocolDidFinishLoading(self)
     }
-    // 响应是同步内存数据，不创建需要取消的异步工作。
-    override func stopLoading() {}
+    override func stopLoading() { lifecycle.withLock { $0 = true } }
 }

@@ -30,6 +30,7 @@ import JavaScriptCore
     func get(_ key: String) -> String
     func evalJS(_ js: String) -> String
     func getKey() -> String
+    func getTag() -> String
 
     var bookSourceUrl: String { get }
     var bookSourceName: String { get }
@@ -113,6 +114,7 @@ import JavaScriptCore
     /// `try {} catch {}` that discards the error, so the host list came out empty
     /// and the 發現頁 fell through to 「洋柿子发现页加载失败」 with no clue why.
     @objc func getKey() -> String { key }
+    @objc func getTag() -> String { bookSourceName }
 
     // MARK: Degates / Handlers (wired externally)
 

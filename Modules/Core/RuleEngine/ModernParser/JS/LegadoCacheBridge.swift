@@ -21,6 +21,7 @@ import JavaScriptCore
     private let memoryCache = LRUCache<String, String>(capacity: 128)
     private let persistentStore: UserDefaults
     private let keyPrefix: String
+    var accessAllowed: (() -> Bool)?
 
     init(sourceId: String) {
         self.keyPrefix = "cache_\(sourceId)"
@@ -29,28 +30,34 @@ import JavaScriptCore
     }
 
     func get(_ key: String) -> String? {
-        memoryCache.get(key) ?? persistentStore.string(forKey: "\(keyPrefix)_\(key)")
+        guard accessAllowed?() != false else { return nil }
+        return memoryCache.get(key) ?? persistentStore.string(forKey: "\(keyPrefix)_\(key)")
     }
 
     func put(_ key: String, _ value: String) {
+        guard accessAllowed?() != false else { return }
         memoryCache.put(key, value: value)
         persistentStore.set(value, forKey: "\(keyPrefix)_\(key)")
     }
 
     func delete(_ key: String) {
+        guard accessAllowed?() != false else { return }
         memoryCache.remove(key)
         persistentStore.removeObject(forKey: "\(keyPrefix)_\(key)")
     }
 
     func getFromMemory(_ key: String) -> String? {
+        guard accessAllowed?() != false else { return nil }
         return memoryCache.get(key)
     }
 
     func putMemory(_ key: String, _ value: String) {
+        guard accessAllowed?() != false else { return }
         memoryCache.put(key, value: value)
     }
 
     func deleteMemory(_ key: String) {
+        guard accessAllowed?() != false else { return }
         memoryCache.remove(key)
     }
 }

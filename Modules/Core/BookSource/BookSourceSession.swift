@@ -31,6 +31,10 @@ final class BookSourceSession: Sendable {
 
     let source: BookSource
     let host: SourceScriptHost<ModernParserBridge>
+    let runtimeOverrides: SourceRuntimeOverrides?
+    enum SessionFailure: Error { case invalidated }
+    var isActive: Bool { runtimeOverrides?.state.isActive ?? true }
+    func invalidate() { runtimeOverrides?.state.invalidate() }
     /// The source's `@js:` header rule as its engine last resolved it, readable without the
     /// host (`BookSource.parsedHeaders`, `resolvedHeaders()`).
     let headerSnapshot = SourceHeaderSnapshot()
@@ -38,14 +42,16 @@ final class BookSourceSession: Sendable {
 
     /// `requestSession` carries a test's URLProtocol; production sessions come from
     /// `session(for:)` with the bridge's default.
-    init(source: BookSource, requestSession: URLSession = LegadoJSBridge.requestSession) {
+    init(source: BookSource, requestSession: URLSession = LegadoJSBridge.requestSession,
+         runtimeOverrides: SourceRuntimeOverrides? = nil) {
         self.source = source
+        self.runtimeOverrides = runtimeOverrides
         // Cheap now: the bridge defers its JSContext until a rule actually runs JS,
         // so the `js.runtimeCreate` span lives on that lazy accessor instead. A
         // pure-CSS source should never emit one.
         self.host = SourceScriptHost(
-            ModernParserBridge(source: source, requestSession: requestSession, headerSnapshot: headerSnapshot),
-            label: source.bookSourceName
+            ModernParserBridge(source: source, requestSession: requestSession, headerSnapshot: headerSnapshot, runtimeOverrides: runtimeOverrides),
+            label: runtimeOverrides?.identity ?? source.bookSourceName
         )
     }
 
@@ -72,6 +78,15 @@ final class BookSourceSession: Sendable {
         try await gate.acquireUnlessCancelled(priority: Task.currentPriority)
         defer { gate.release() }
         return try await host.run(body)
+    }
+
+    /// 跨请求的完整源用例持有同一turn；其他源仍可并行，同源取消等待不执行旧脚本。
+    func operation<T: Sendable>(_ body: @Sendable (SourceScriptHost<ModernParserBridge>) async throws -> T) async throws -> T {
+        try await gate.acquireUnlessCancelled(priority: Task.currentPriority)
+        defer { gate.release() }
+        try Task.checkCancellation()
+        guard isActive else { throw SessionFailure.invalidated }
+        return try await body(host)
     }
 
     /// `parse` for the parsing pipeline's calls, which run once their turn comes even when the
@@ -161,8 +176,12 @@ final class BookSourceSession: Sendable {
         var lastUsed: UInt64
     }
 
+    private enum CacheKey: Hashable {
+        case book(String)
+        case scoped(String, ObjectIdentifier)
+    }
     private static let cacheLock = NSLock()
-    private nonisolated(unsafe) static var cache: [String: CacheEntry] = [:]
+    private nonisolated(unsafe) static var cache: [CacheKey: CacheEntry] = [:]
     private nonisolated(unsafe) static var accessClock: UInt64 = 0
 
     /// Sessions kept alive. Bounded because a session can own a JSContext, but wide
@@ -171,25 +190,28 @@ final class BookSourceSession: Sendable {
     /// capacity almost immediately.
     private static let cacheLimit = 32
 
-    static func session(for source: BookSource) -> BookSourceSession {
-        let key = "\(source.bookSourceUrl)#\(source.lastUpdateTime)"
+    static func session(for source: BookSource, runtimeOverrides: SourceRuntimeOverrides? = nil,
+                        requestSession: URLSession = LegadoJSBridge.requestSession) -> BookSourceSession {
+        let key: CacheKey = runtimeOverrides.map { .scoped($0.identity, ObjectIdentifier(requestSession)) }
+            ?? .book("\(source.bookSourceUrl)#\(source.lastUpdateTime)")
         cacheLock.lock()
-        if let existing = cache[key] {
+        if let existing = cache[key], existing.session.isActive {
             accessClock += 1
             cache[key]?.lastUsed = accessClock
             cacheLock.unlock()
             return existing.session
         }
+        cache[key] = nil
         cacheLock.unlock()
 
         // Construction is heavy (rule data +, on first JS use, a JSContext and its
         // shims) — never hold the global lock through it, or a 30-source search
         // fan-out serializes on init.
-        let session = BookSourceSession(source: source)
+        let session = BookSourceSession(source: source, requestSession: requestSession, runtimeOverrides: runtimeOverrides)
 
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        if let raced = cache[key] {
+        if let raced = cache[key], raced.session.isActive {
             // Another thread built the same source's session first; use theirs
             // so every caller converges on one bridge.
             return raced.session

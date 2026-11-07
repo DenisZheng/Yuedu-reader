@@ -69,6 +69,15 @@ final class CookieStore: Sendable {
         return store.withLock { $0[domain] ?? "" }
     }
 
+    /// 请求只用真实域/path匹配的Cookie；不能使用脚本getKey的兄弟域兼容回退。
+    func requestHeader(for url: URL) -> String {
+        let now = Date()
+        let cookies = (HTTPCookieStorage.shared.cookies(for: url) ?? []).filter {
+            (!$0.isSecure || url.scheme?.lowercased() == "https") && ($0.expiresDate == nil || $0.expiresDate! > now)
+        }
+        return cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+    }
+
     /// Stores `cookie` for the host of `url`.
     /// Writes to both `HTTPCookieStorage` and the persistent file.
     /// Always splits by `;` (Cookie-header style) rather than relying on
@@ -237,7 +246,7 @@ final class CookieStore: Sendable {
 
     /// Merge incoming `name=value` pairs into an existing cookie string.
     /// Incoming values overwrite existing ones with the same name.
-    private func merge(existing: String?, incoming: String) -> String {
+    func merge(existing: String?, incoming: String) -> String {
         var dict: [String: String] = [:]
         // Parse existing
         for segment in (existing ?? "").components(separatedBy: ";") {

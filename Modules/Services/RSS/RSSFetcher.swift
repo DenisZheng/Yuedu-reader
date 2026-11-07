@@ -108,6 +108,16 @@ func detectFeedType(data: Data, isPartialData: Bool = false) -> FeedType {
 // MARK: - Feed Parser Entry Point
 
 enum RSSFeedParser {
+    /// 共享请求已经按charset解码；只改开头声明的编码，不改Feed字段或CDATA内容。
+    static func data(fromDecodedText text: String) -> Data {
+        var text = text
+        if let range = text.range(of: #"^\uFEFF?\s*<\?xml[^?]*\?>"#, options: [.regularExpression, .caseInsensitive]) {
+            let declaration = String(text[range]).replacingOccurrences(of: #"\bencoding\s*=\s*([\"'])[^\"']*\1"#,
+                with: #"encoding="UTF-8""#, options: [.regularExpression, .caseInsensitive])
+            text.replaceSubrange(range, with: declaration)
+        }
+        return Data(text.utf8)
+    }
     static func parse(data: Data, url: String) -> ParsedFeedInfo? {
         let type = detectFeedType(data: data)
         switch type {
@@ -1101,7 +1111,7 @@ final class RSSFetcher: ObservableObject {
     /// page — the UI offers an "open as web page" fallback.
     @Published var webPageFallbackURL: InAppWebURL?
 
-    func fetchItems(from source: RSSSource, metadata: RSSFeedFetchMetadata? = nil, sortEntry: RSSSortEntry? = nil) async {
+    func fetchItems(from source: RSSSource, metadata: RSSFeedFetchMetadata? = nil, sortEntry: RSSSortEntry? = nil, owner: RSSStore? = nil) async {
         isLoading = true
         error = nil
         response = nil
@@ -1122,8 +1132,8 @@ final class RSSFetcher: ObservableObject {
             return
         }
 
-        if source.isLegadoRuleBased {
-            await fetchWithLegadoRules(source: source, sortEntry: sortEntry)
+        if source.usesLegadoRuntime {
+            await fetchWithLegadoRules(source: source, sortEntry: sortEntry, owner: owner, metadata: metadata)
             return
         }
 
@@ -1259,19 +1269,47 @@ final class RSSFetcher: ObservableObject {
         return nsError.domain == NSURLErrorDomain && nsError.code == -1022
     }
 
-    private func fetchWithLegadoRules(source: RSSSource, sortEntry: RSSSortEntry?) async {
+    private func fetchWithLegadoRules(source: RSSSource, sortEntry: RSSSortEntry?, owner: RSSStore? = nil,
+                                     metadata: RSSFeedFetchMetadata? = nil) async {
+      await SourceDiagnosticContext.$restrictedTask.withValue(true) {
         do {
-            let entries = await LegadoRSSScraper.resolveSortEntries(for: source)
+            let entries = try await LegadoRSSScraper.resolveSortEntries(for: source, owner: owner, requestSession: session)
             sortEntries = entries
 
             let entry = sortEntry ?? entries.first
-            let parsedItems = try await LegadoRSSScraper.scrape(source: source, entry: entry)
+            if !source.isLegadoRuleBased {
+                var validators: [String: String] = [:]
+                if let etag = metadata?.etag { validators["If-None-Match"] = etag }
+                if let modified = metadata?.lastModified { validators["If-Modified-Since"] = modified }
+                let headers = validators
+                let runtime = try await RSSRuntime.make(source: source, owner: owner, requestSession: session)
+                let page = try await runtime.run { host in
+                    try await host.fetchRulePage(ruleURL: LegadoRSSScraper.normalizedRequestURL(entry?.url ?? source.sourceKey),
+                                                 page: 1, isPrimaryRequest: true, additionalHeaders: headers)
+                }
+                if page.status == 304 { self.response = .notModified; items = []; return }
+                guard (200..<300).contains(page.status) else { throw ScraperError.httpStatus(page.status) }
+                var parserSource = source
+                parserSource.url = page.url // 仅用于解析相对链接，不改原始sourceKey。
+                let parsed = await Self.parseDecodedFeed(text: page.body, source: parserSource)
+                try Task.checkCancellation()
+                if let parseError = parsed.error { self.error = parseError; return }
+                let scope = source.hasSortCategories ? entry.map(RSSArticleScope.category) ?? .feed : .feed
+                let items = parsed.items.map { $0.identified(sourceID: source.id, scope: scope) }
+                self.items = items
+                self.response = .updated(items: items, metadata: .init(etag: page.header("ETag"), lastModified: page.header("Last-Modified"), lastFetchedAt: Date()), feedInfo: parsed.info)
+                return
+            }
+            let parsedItems = try await LegadoRSSScraper.scrape(source: source, entry: entry, owner: owner, requestSession: session)
+            try Task.checkCancellation()
             items = parsedItems
             let metadata = RSSFeedFetchMetadata(lastFetchedAt: Date())
             self.response = .updated(items: parsedItems, metadata: metadata, feedInfo: nil)
             if parsedItems.isEmpty {
                 error = localized("RSS 解析成功，但沒有找到文章。")
             }
+        } catch is CancellationError {
+            return
         } catch {
             if isATSBlockedError(error) {
                 self.error = localized("此來源使用不安全的 HTTP 連線，已被 iOS 安全政策阻擋。")
@@ -1281,6 +1319,15 @@ final class RSSFetcher: ObservableObject {
             // Rule scraping failed — at least let the user open the page itself.
             webPageFallbackURL = source.webPageURL.flatMap(InAppWebURL.init)
         }
+      }
+    }
+
+    private nonisolated static func parseDecodedFeed(text: String, source: RSSSource) async
+        -> (items: [RSSItem], info: RSSFeedInfo?, error: String?, isHTML: Bool) {
+        let data = SourcePerfTrace.span("rss.feed.reencode", "main=\(Thread.isMainThread) bytes=\(text.utf8.count)") {
+            RSSFeedParser.data(fromDecodedText: text)
+        }
+        return await parseFeed(data: data, source: source)
     }
 }
 

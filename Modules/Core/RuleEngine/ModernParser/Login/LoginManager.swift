@@ -565,20 +565,19 @@ final class LoginManager: Sendable {
     }
 
     /// Store the raw `putLoginHeader` payload verbatim (Legado semantics).
-    func storeLoginHeader(sourceUrl: String, raw: String) {
-        let changed = state.withLock { state in
+    @discardableResult
+    func storeLoginHeader(sourceUrl: String, raw: String, expectedRevision: UInt64? = nil) -> UInt64? {
+        let result = state.withLock { state -> (UInt64, Bool)? in
+            let current = state.loginInfoRevisions[sourceUrl, default: 0]
+            guard expectedRevision == nil || expectedRevision == current else { return nil }
             let changed = state.headerCache[sourceUrl] != raw
             state.headerCache[sourceUrl] = raw
             persistHeader(sourceUrl: sourceUrl, raw: raw)
-            return changed
+            if changed { state.loginInfoRevisions[sourceUrl, default: 0] &+= 1 }
+            return (state.loginInfoRevisions[sourceUrl, default: 0], changed)
         }
-        if changed {
-            // Source JS commonly calls `putLoginHeader()` and immediately issues
-            // `java.ajax()` in the same evaluation (书旗's Token/GetUrl flow).
-            // Keep the write synchronous and invalidate credential-dependent
-            // header rules before that next request is constructed.
-            markLoginInfoChanged(sourceUrl: sourceUrl)
-        }
+        if result?.1 == true { notifyLoginInfoChanged(sourceUrl: sourceUrl) }
+        return result?.0
     }
 
     /// Store a header dictionary (serialized to the JSON form Legado expects).
@@ -589,31 +588,34 @@ final class LoginManager: Sendable {
     }
 
     /// Remove all login data for a source (Legado `removeLoginHeader`).
-    func clearLogin(sourceUrl: String) {
-        state.withLock { state in
+    @discardableResult
+    func clearLogin(sourceUrl: String, expectedRevision: UInt64? = nil) -> UInt64? {
+        let revision = state.withLock { state -> UInt64? in
+            guard expectedRevision == nil || expectedRevision == state.loginInfoRevisions[sourceUrl, default: 0] else { return nil }
             state.headerCache.removeValue(forKey: sourceUrl)
-            defaults.removeObject(
-                forKey: LoginManager.loginHeaderPrefix + sourceUrl
-            )
-            // loginInfo is stored in Keychain; also clear any legacy UserDefaults entry
+            defaults.removeObject(forKey: LoginManager.loginHeaderPrefix + sourceUrl)
             KeychainHelper.delete(account: LoginManager.loginInfoPrefix + sourceUrl)
-            defaults.removeObject(
-                forKey: LoginManager.loginInfoPrefix + sourceUrl
-            )
+            defaults.removeObject(forKey: LoginManager.loginInfoPrefix + sourceUrl)
+            state.loginInfoRevisions[sourceUrl, default: 0] &+= 1
+            return state.loginInfoRevisions[sourceUrl]
         }
-        markLoginInfoChanged(sourceUrl: sourceUrl)
+        if revision != nil { notifyLoginInfoChanged(sourceUrl: sourceUrl) }
+        return revision
     }
 
     /// Removes only the stored login header payload for a source, keeping the
     /// credentials (Legado `source.removeLoginHeader()` — the 删除登录头 menu item).
-    func removeLoginHeader(sourceUrl: String) {
-        state.withLock { state in
+    @discardableResult
+    func removeLoginHeader(sourceUrl: String, expectedRevision: UInt64? = nil) -> UInt64? {
+        let revision = state.withLock { state -> UInt64? in
+            guard expectedRevision == nil || expectedRevision == state.loginInfoRevisions[sourceUrl, default: 0] else { return nil }
             state.headerCache.removeValue(forKey: sourceUrl)
-            defaults.removeObject(
-                forKey: LoginManager.loginHeaderPrefix + sourceUrl
-            )
+            defaults.removeObject(forKey: LoginManager.loginHeaderPrefix + sourceUrl)
+            state.loginInfoRevisions[sourceUrl, default: 0] &+= 1
+            return state.loginInfoRevisions[sourceUrl]
         }
-        markLoginInfoChanged(sourceUrl: sourceUrl)
+        if revision != nil { notifyLoginInfoChanged(sourceUrl: sourceUrl) }
+        return revision
     }
 
     /// Apply stored login headers to a URLRequest.
@@ -629,18 +631,20 @@ final class LoginManager: Sendable {
     /// Store user-provided login credentials in the **Keychain** (Legado `putLoginInfo`).
     /// Passwords are never stored in UserDefaults — Keychain is the only accepted location
     /// for sensitive data on iOS.
-    func storeLoginInfo(sourceUrl: String, info: [String: String]) {
+    @discardableResult
+    func storeLoginInfo(sourceUrl: String, info: [String: String], expectedRevision: UInt64? = nil) -> UInt64? {
         guard let data = try? JSONSerialization.data(withJSONObject: info),
-              let json = String(data: data, encoding: .utf8) else { return }
-        let previous = getLoginInfo(sourceUrl: sourceUrl)
-        guard KeychainHelper.save(
-            account: LoginManager.loginInfoPrefix + sourceUrl,
-            data: json,
-            accessibility: kSecAttrAccessibleAfterFirstUnlock
-        ) else { return }
-        if previous != info {
-            markLoginInfoChanged(sourceUrl: sourceUrl)
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        let result = state.withLock { state -> (UInt64, Bool)? in
+            guard expectedRevision == nil || expectedRevision == state.loginInfoRevisions[sourceUrl, default: 0] else { return nil }
+            let changed = getLoginInfo(sourceUrl: sourceUrl) != info
+            guard KeychainHelper.save(account: LoginManager.loginInfoPrefix + sourceUrl, data: json,
+                                      accessibility: kSecAttrAccessibleAfterFirstUnlock) else { return nil }
+            if changed { state.loginInfoRevisions[sourceUrl, default: 0] &+= 1 }
+            return (state.loginInfoRevisions[sourceUrl, default: 0], changed)
         }
+        if result?.1 == true { notifyLoginInfoChanged(sourceUrl: sourceUrl) }
+        return result?.0
     }
 
     /// Revision of the credentials used by a source's dynamic header rule.
@@ -649,8 +653,17 @@ final class LoginManager: Sendable {
         state.withLock { $0.loginInfoRevisions[sourceUrl] ?? 0 }
     }
 
-    private func markLoginInfoChanged(sourceUrl: String) {
-        state.withLock { $0.loginInfoRevisions[sourceUrl, default: 0] &+= 1 }
+    /// 源生命周期撤销只推进匹配的旧revision，不删除凭据，也不能撤销更新后的会话。
+    func invalidateRuntimeAccess(sourceUrl: String, expectedRevision: UInt64) {
+        state.withLock { state in
+            if state.loginInfoRevisions[sourceUrl, default: 0] == expectedRevision {
+                state.loginInfoRevisions[sourceUrl, default: 0] &+= 1
+            }
+        }
+    }
+
+    private func notifyLoginInfoChanged(sourceUrl: String) {
+        // 通知必须在状态锁外发送，避免观察者读取登录状态时重入。
         NotificationCenter.default.post(
             name: .bookSourceLoginInfoDidChange,
             object: nil,

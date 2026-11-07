@@ -244,7 +244,7 @@ struct LegadoRSSCompatTests {
         source.ruleImage = imageRule
         return try LegadoRSSScraper.parseArticles(
             body: body, finalURL: "https://site.example/list", listRule: "class.item",
-            reverse: false, source: source, jsEngine: JSCoreEngine()
+            reverse: false, source: source, bridge: ModernParserBridge(source: RSSRuntime.scriptSource(source))
         )
     }
 

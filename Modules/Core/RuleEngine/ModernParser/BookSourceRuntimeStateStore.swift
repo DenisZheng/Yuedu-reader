@@ -14,6 +14,44 @@ extension Notification.Name {
     )
 }
 
+/// 两类源复用同一脚本桥，但运行变量由各自的数据owner持有。
+protocol SourceRuntimeStateAccess: Sendable {
+    var isActive: Bool { get }
+    var isCurrent: Bool { get }
+    func invalidate()
+    func noteTimeout()
+    func addCancellation(_ action: @escaping @Sendable () -> Void) -> UUID?
+    func removeCancellation(_ id: UUID)
+    func mutateCredentials(_ mutation: (UInt64?) -> UInt64?)
+    func sourceVariableJSON(for sourceUrl: String) -> String?
+    func setSourceVariableJSON(_ json: String?, for sourceUrl: String)
+    func sourceVariables(for sourceUrl: String) -> [String: Any]
+    func sourceValue(for sourceUrl: String, key: String) -> String?
+    func setSourceValue(_ value: String, for sourceUrl: String, key: String)
+}
+
+extension SourceRuntimeStateAccess {
+    var isActive: Bool { true }
+    var isCurrent: Bool { isActive }
+    func invalidate() {}
+    func noteTimeout() { invalidate() }
+    func addCancellation(_ action: @escaping @Sendable () -> Void) -> UUID? { nil }
+    func removeCancellation(_ id: UUID) {}
+    func mutateCredentials(_ mutation: (UInt64?) -> UInt64?) { _ = mutation(nil) }
+}
+
+enum SourceRuntimeRequirement: Error { case interactionRequired }
+
+/// 非书源用例的适配边界；不改变URL/规则解析器或另建JS引擎。
+struct SourceRuntimeOverrides: Sendable {
+    var identity: String
+    var authenticationKey: String
+    var propertiesJSON: Data
+    var state: any SourceRuntimeStateAccess
+    var headerScope: SourceRequestHeaderScope? = nil
+    var scriptTimeout: TimeInterval = 30
+}
+
 /// Persistent runtime state owned by an imported Legado book source.
 ///
 /// Source variables are intentionally kept outside `BookSource`: imported rule
@@ -31,7 +69,7 @@ extension Notification.Name {
 /// All mutable `UserDefaults` access is serialized by `queue`; the remaining
 /// stored properties are immutable after initialization. This makes the shared
 /// instance safe to call from the detached search-presentation worker.
-final class BookSourceRuntimeStateStore: @unchecked Sendable {
+final class BookSourceRuntimeStateStore: SourceRuntimeStateAccess, @unchecked Sendable {
     static let shared = BookSourceRuntimeStateStore()
 
     private static let variableKey = "sourceVariableJSON"

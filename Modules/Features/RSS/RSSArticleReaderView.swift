@@ -236,7 +236,8 @@ struct RSSArticleReaderView: View {
             if let source, source.isLegadoRuleBased,
                source.ruleContent?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
                !article.link.isEmpty,
-               let html = try await LegadoRSSScraper.fetchArticleContent(source: source, articleLink: article.link) {
+               let html = try await LegadoRSSScraper.fetchArticleContent(source: source, articleLink: article.link, owner: store,
+                                                                        variables: article.variables ?? [:], categoryName: article.categoryName ?? "", articleTitle: article.title) {
                 guard !Task.isCancelled, store.accepts(ticket) else { return }
                 store.updateFullText(
                     articleId: article.id,

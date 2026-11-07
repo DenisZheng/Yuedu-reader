@@ -69,7 +69,7 @@ class ModernParserBridge {
     private var jsEngine: JSCoreEngine {
         if let existing = _jsEngine { return existing }
         let t0 = ProcessInfo.processInfo.systemUptime
-        let engine = JSCoreEngine()
+        let engine = JSCoreEngine(executionTimeout: runtimeOverrides?.scriptTimeout ?? 30)
         _jsEngine = engine
         engine.headerSnapshot = headerSnapshot
         wireJSEngine(engine)
@@ -81,17 +81,69 @@ class ModernParserBridge {
     private var _jsEngine: JSCoreEngine?
 
     private let loginManager: LoginManager
-    private let runtimeStateStore: BookSourceRuntimeStateStore
+    private let runtimeStateStore: any SourceRuntimeStateAccess
+    private let runtimeOverrides: SourceRuntimeOverrides?
     /// Where the source's own JS requests go (`java.ajax`, `java.connect`, …). Production
     /// shares `LegadoJSBridge.requestSession`; a test hands in a session whose configuration
     /// carries its URLProtocol, because only `URLSession.shared` consults
     /// `URLProtocol.registerClass`.
     private let requestSession: URLSession
+    private let requestExecutor: SourceRequestExecutor
     /// The session's published header resolutions (`BookSourceSession.headerSnapshot`).
     private let headerSnapshot: SourceHeaderSnapshot?
     let sourceRuleData: BookSourceRuleData
     private var runtimeBookScope: RuleData?
     private var runtimeChapterScope: RuleData?
+    private var runtimeRuleBindings: [String: Any] = [:]
+    private var scopedScriptFailure: String?
+    private var interactionWasRequested = false
+    private var runtimeStage = "rule"
+    private(set) var lastFetchStatus = 200
+    private(set) var lastFetchRequestURL = ""
+    private(set) var lastFetchHeaders: [String: String] = [:]
+
+    /// 每个同步规则段拥有自己的RuleData与bindings；不跨await保留当前文章上下文。
+    func withRuleContext<T>(content: Any, baseURL: String, scope: RuleData?, redirectURL: String? = nil,
+                            bindings: [String: Any] = [:], stage: String = "rule", _ body: (ModernRuleEngine) throws -> T) throws -> T {
+        guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
+        interactionWasRequested = false
+        let previousStage = runtimeStage
+        runtimeStage = stage
+        defer { runtimeStage = previousStage }
+        let previousBindings = runtimeRuleBindings
+        let previousFailure = scopedScriptFailure
+        runtimeRuleBindings = bindings
+        scopedScriptFailure = nil
+        _jsEngine?.clearTransientBindings(["page", "key", "header", "rssArticle", "src", "result"])
+        defer {
+            runtimeRuleBindings = previousBindings
+            scopedScriptFailure = previousFailure
+            // 不让最后一篇文章或setContent文档被回调闭包长期持有。
+            _jsEngine?.getStringHandler = nil
+            _jsEngine?.getStringListHandler = nil
+            _jsEngine?.getElementsHandler = nil
+            _jsEngine?.getStringWithContentHandler = nil
+            _jsEngine?.clearTransientBindings(["rssArticle", "src", "result", "page", "key"])
+        }
+        evaluateJsLibIfNeeded()
+        let generation = _jsEngine?.generation ?? 0
+        let previousScopes = (runtimeBookScope, runtimeChapterScope)
+        runtimeBookScope = scope
+        runtimeChapterScope = nil
+        defer { runtimeBookScope = previousScopes.0; runtimeChapterScope = previousScopes.1 }
+        return try { () throws -> T in
+            let engine = makeEngine()
+            if let scope { engine.ruleData = scope } else { engine.ruleData = sourceRuleData }
+            engine.setContent(content, baseUrl: baseURL)
+            if let redirectURL { engine.setRedirectUrl(redirectURL) }
+            let result = try body(engine)
+            guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
+            if (_jsEngine?.generation ?? 0) != generation { throw ModernParserBridgeError.timeout }
+            if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
+            if scopedScriptFailure != nil { throw ModernParserBridgeError.parseError("Source JavaScript failed") }
+            return result
+        }()
+    }
 
     /// When set, every `ModernRuleEngine` created by `makeEngine()` will have this
     /// observer attached, emitting pipeline events for diff-driven debugging against
@@ -103,12 +155,18 @@ class ModernParserBridge {
     init(
         source: BookSource,
         requestSession: URLSession = LegadoJSBridge.requestSession,
-        headerSnapshot: SourceHeaderSnapshot? = nil
+        headerSnapshot: SourceHeaderSnapshot? = nil,
+        runtimeOverrides: SourceRuntimeOverrides? = nil
     ) {
         self.sourceRuleData = BookSourceRuleData(source: source)
         self.loginManager = LoginManager.shared
-        self.runtimeStateStore = BookSourceRuntimeStateStore.shared
+        self.runtimeOverrides = runtimeOverrides
+        self.runtimeStateStore = runtimeOverrides?.state ?? BookSourceRuntimeStateStore.shared
         self.requestSession = requestSession
+        self.requestExecutor = SourceRequestExecutor(session: requestSession, rate: source.concurrentRate,
+                                                    rateKey: runtimeOverrides?.authenticationKey ?? source.bookSourceUrl,
+                                                    cookieJarEnabled: runtimeOverrides == nil ? nil : source.enabledCookieJar,
+                                                    runtimeState: runtimeOverrides?.state)
         self.headerSnapshot = headerSnapshot
         // No JSContext here on purpose — see `jsEngine`.
     }
@@ -187,6 +245,15 @@ class ModernParserBridge {
     private func recordJSNetwork(
         url: String?, statusCode: Int?, timedOut: Bool, body: String?
     ) {
+        if runtimeOverrides != nil {
+            networkExchange.latest = .init(url: "[redacted]", status: statusCode.map(String.init) ?? "error", length: body?.utf8.count ?? 0, bodyHead: "")
+            SourceAPIErrorLog.shared.record(sourceUrl: runtimeOverrides!.authenticationKey, statusCode: statusCode, body: nil, timedOut: timedOut)
+            if timedOut || statusCode.map({ !(200..<300).contains($0) }) != false {
+                AppLogger.network("RSS request failed", context: ["sourceID": runtimeOverrides!.authenticationKey,
+                    "statusCode": statusCode ?? -1, "timedOut": timedOut, "stage": "request"], level: .warning)
+            }
+            return
+        }
         if let body, !timedOut {
             reviewResponses.record(body)
         }
@@ -237,12 +304,20 @@ class ModernParserBridge {
     }
 
     private func applySourceAuthentication(to request: inout URLRequest) {
+        if let runtimeOverrides {
+            let headers = jsEngine.resolvedRequestHeaders()
+            let scoped = runtimeOverrides.headerScope?.inheritedHeaders(headers, for: request.url) ?? headers
+            for (key, value) in scoped where request.value(forHTTPHeaderField: key) == nil {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
+            return // Cookie在共用executor执行时按实际目标URL合并。
+        }
         for (key, value) in resolvedSourceHeaders() {
             if request.value(forHTTPHeaderField: key) == nil {
                 request.setValue(value, forHTTPHeaderField: key)
             }
         }
-        loginManager.applyLoginHeaders(to: &request, sourceUrl: sourceRuleData.source.bookSourceUrl)
+        loginManager.applyLoginHeaders(to: &request, sourceUrl: runtimeOverrides?.authenticationKey ?? sourceRuleData.source.bookSourceUrl)
         if request.value(forHTTPHeaderField: "Cookie") == nil,
            let url = request.url?.absoluteString {
             let jar = CookieStore.shared.get(url: url)
@@ -312,10 +387,9 @@ class ModernParserBridge {
             self.jsEngine.getStringWithContentHandler = { ruleStr, content in
                 engine.getString(ruleStr: ruleStr, mContent: content)
             }
-            var bindings: [String: Any] = [
-                "baseUrl": engine.baseUrl,
-                "baseURL": engine.baseUrl
-            ]
+            var bindings: [String: Any] = self.runtimeRuleBindings
+            bindings["baseUrl"] = engine.baseUrl
+            bindings["baseURL"] = engine.baseUrl
             if let nextChapterURL {
                 bindings["nextChapterUrl"] = nextChapterURL
             }
@@ -340,11 +414,27 @@ class ModernParserBridge {
     /// Takes the engine as a parameter rather than reading `self.jsEngine`, so what it
     /// installs does not depend on being called from inside that accessor.
     private func wireJSEngine(_ engine: JSCoreEngine) {
+        engine.sourcePropertiesJSON = runtimeOverrides?.propertiesJSON
+        engine.requestHeaderScope = runtimeOverrides?.headerScope
+        if let runtimeOverrides { engine.runtimeAccessAllowed = { runtimeOverrides.state.isCurrent } }
+        engine.authenticationKey = runtimeOverrides?.authenticationKey
         engine.bookSource = sourceRuleData.source
         let sourceName = sourceRuleData.source.bookSourceName
-        let requestSession = self.requestSession
+        let requestExecutor = self.requestExecutor
+        if runtimeOverrides != nil {
+            engine.interactionGuard = { [weak self] in self?.interactionWasRequested = true; return false }
+            engine.sourceBridge.loginHandler = { [weak self] in self?.interactionWasRequested = true; return "" }
+            engine.toastHandler = nil
+        }
 
         engine.errorHandler = { [weak self] msg, script in
+            self?.scopedScriptFailure = msg
+            if self?.runtimeOverrides != nil {
+                if script == "js timeout" { self?.runtimeOverrides?.state.noteTimeout() }
+                AppLogger.parse("RSS source JavaScript failed", context: ["stage": self?.runtimeStage ?? "rule",
+                    "sourceID": self?.runtimeOverrides?.authenticationKey ?? ""], level: .error)
+                return
+            }
             self?.debugObserver?(.jsExecuted(
                 segmentIndex: -1, script: String(script.prefix(200)),
                 inputPreview: "", result: "ERROR: \(msg)"
@@ -420,7 +510,7 @@ class ModernParserBridge {
 
         // ── Source Bridge Wiring ──
 
-        let sourceUrl = sourceRuleData.source.bookSourceUrl
+        let sourceUrl = runtimeOverrides?.authenticationKey ?? sourceRuleData.source.bookSourceUrl
 
         engine.sourceBridge.getVariableHandler = { [weak self] in
             guard let self else { return "" }
@@ -436,8 +526,10 @@ class ModernParserBridge {
             self?.runtimeStateStore.setSourceValue(value, for: sourceUrl, key: key)
         }
 
+        let runtimeState = runtimeStateStore
         engine.sourceBridge.getLoginInfoHandler = {
-            LoginManager.shared.getLoginInfo(sourceUrl: sourceUrl).flatMap { info in
+            guard runtimeState.isCurrent else { return nil }
+            return LoginManager.shared.getLoginInfo(sourceUrl: sourceUrl).flatMap { info in
                 if let data = try? JSONSerialization.data(withJSONObject: info),
                    let json = String(data: data, encoding: .utf8) {
                     return json
@@ -448,13 +540,14 @@ class ModernParserBridge {
         engine.sourceBridge.putLoginInfoHandler = { info in
             guard let data = info.data(using: .utf8),
                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return }
-            LoginManager.shared.storeLoginInfo(sourceUrl: sourceUrl, info: dict)
+            runtimeState.mutateCredentials { LoginManager.shared.storeLoginInfo(sourceUrl: sourceUrl, info: dict, expectedRevision: $0) }
         }
         engine.sourceBridge.getLoginInfoMapHandler = {
-            LoginManager.shared.getLoginInfo(sourceUrl: sourceUrl) ?? [:]
+            guard runtimeState.isCurrent else { return [:] }
+            return LoginManager.shared.getLoginInfo(sourceUrl: sourceUrl) ?? [:]
         }
         engine.sourceBridge.removeLoginInfoHandler = {
-            LoginManager.shared.clearLogin(sourceUrl: sourceUrl)
+            runtimeState.mutateCredentials { LoginManager.shared.clearLogin(sourceUrl: sourceUrl, expectedRevision: $0) }
         }
         // Legado stores whatever `putLoginHeader` was given verbatim and only sends
         // it as headers when it parses as a JSON object; a bare token (书山聚合's
@@ -462,24 +555,23 @@ class ModernParserBridge {
         // for it — guessing `X-Novel-Token` overwrote the constant token the source's
         // `header` rule sends and the server answered `{"error":"访问被拒绝"}`.
         engine.sourceBridge.putLoginHeaderHandler = { header in
-            LoginManager.shared.storeLoginHeader(sourceUrl: sourceUrl, raw: header)
+            runtimeState.mutateCredentials { LoginManager.shared.storeLoginHeader(sourceUrl: sourceUrl, raw: header, expectedRevision: $0) }
         }
         engine.sourceBridge.getLoginHeaderHandler = {
-            LoginManager.shared.getLoginHeader(sourceUrl: sourceUrl)
+            guard runtimeState.isCurrent else { return nil }
+            return LoginManager.shared.getLoginHeader(sourceUrl: sourceUrl)
         }
         engine.sourceBridge.removeLoginHeaderHandler = {
-            LoginManager.shared.clearLogin(sourceUrl: sourceUrl)
+            runtimeState.mutateCredentials { LoginManager.shared.removeLoginHeader(sourceUrl: sourceUrl, expectedRevision: $0) }
         }
         // The handlers below reach the runtime through the engine they are installed on.
         engine.sourceBridge.getHeaderMapHandler = { [weak engine] in
-            var merged = engine?.resolvedSourceHeaders() ?? [:]
-            if let loginHeaders = LoginManager.shared.getLoginHeaderMap(sourceUrl: sourceUrl) {
-                merged.merge(loginHeaders) { _, new in new }
-            }
-            return merged
+            guard runtimeState.isCurrent else { return [:] }
+            return engine?.resolvedRequestHeaders() ?? [:]
         }
         engine.sourceBridge.evalJSHandler = { [weak engine] js in
-            engine?.evaluate(js) ?? ""
+            guard runtimeState.isCurrent else { return "" }
+            return engine?.evaluate(js) ?? ""
         }
 
         // ── AnalyzeUrl handler for java.ajax() ──
@@ -500,6 +592,10 @@ class ModernParserBridge {
                 }
             )
 
+            if self.runtimeOverrides != nil, analyzeUrl.useWebView {
+                self.interactionWasRequested = true
+                return nil
+            }
             // Back on the JS thread once the response is in.
             let bodyJs = analyzeUrl.bodyJs
             let finish: (PreparedSourceRequest.Response) -> String? = { [weak self] response in
@@ -550,7 +646,7 @@ class ModernParserBridge {
                     timedOut: false,
                     body: result.body
                 )
-                return PreparedSourceRequest.Response(body: result.body, url: result.finalURL.absoluteString)
+                return PreparedSourceRequest.Response(body: result.body, url: result.finalURL.absoluteString, http: result)
             }
             return PreparedSourceRequest(fetch: fetch, finish: finish)
         }
@@ -576,8 +672,7 @@ class ModernParserBridge {
             jsEngine.getStringListHandler = { ruleStr in engine.getStringList(ruleStr: ruleStr) }
             jsEngine.getElementsHandler = { ruleStr in engine.getElements(ruleStr: ruleStr) }
             jsEngine.getStringWithContentHandler = { ruleStr, content in
-                engine.setContent(content, baseUrl: baseUrl ?? "")
-                return engine.getString(ruleStr: ruleStr)
+                engine.getString(ruleStr: ruleStr, mContent: content)
             }
         }
 
@@ -585,7 +680,7 @@ class ModernParserBridge {
         // semaphore here is intentional and safe (dedicated thread, not the global pool).
         engine.networkHandler = { [weak self] request, declaredCharset in
             let reviewSummaryCacheKey = self.map { "\(sourceUrl)#\($0.sourceRuleData.source.lastUpdateTime)" }
-            let isReviewSummaryRequest = Self.isChapterReviewSummaryRequest(request)
+            let isReviewSummaryRequest = self?.runtimeOverrides == nil && Self.isChapterReviewSummaryRequest(request)
             var ownsReviewRequest = false
             if isReviewSummaryRequest,
                let self,
@@ -634,20 +729,18 @@ class ModernParserBridge {
             // Pool at 16/host: this handler is ALWAYS set for the online reader, so plain 段評
             // ajaxAll requests land here — URLSession.shared would re-cap them at 6/host (why the
             // ajaxAll throttle raise alone left `⏱ chapter.jsNet` unchanged).
-            let task = requestSession.dataTask(with: request) { data, response, error in
-                // Decoded once: the failure log and the review-summary cache read the same text
-                // the source JS gets.
-                let responseResult = LegadoHTTPResult.make(
-                    request: request, data: data, response: response, declaredCharset: declaredCharset
-                )
-                pending.deliver(NetworkResponse(
-                    statusCode: (response as? HTTPURLResponse)?.statusCode,
-                    transportError: error,
-                    responseResult: responseResult,
-                    body: data == nil ? nil : responseResult.body
-                ))
+            let task = Task {
+              await SourceDiagnosticContext.$restrictedTask.withValue(requestExecutor.cookieJarEnabled != nil) {
+                do {
+                    let (data, response) = try await requestExecutor.data(for: request)
+                    let result = LegadoHTTPResult.make(request: request, data: data, response: response, declaredCharset: declaredCharset)
+                    pending.deliver(NetworkResponse(statusCode: result.statusCode, transportError: nil, responseResult: result, body: result.body))
+                } catch {
+                    let failed = LegadoHTTPResult.make(request: request, data: nil, response: nil)
+                    pending.deliver(NetworkResponse(statusCode: nil, transportError: error, responseResult: failed, body: nil))
+                }
+              }
             }
-            task.resume()
             // A response that arrives after the timeout is never read.
             let response = pending.wait(timeout: .now() + 30)
             let timedOut = response == nil
@@ -898,7 +991,7 @@ class ModernParserBridge {
         let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         evaluateJsLibIfNeeded()
-        return jsEngine.withExecutionStage("sourceScript") {
+        return jsEngine.withExecutionStage("sourceScript") { [self] in
             jsEngine.evaluate(trimmed, bindings: bindings)
         }
     }
@@ -937,7 +1030,7 @@ class ModernParserBridge {
             url: action.chapter.url,
             isVip: action.chapter.isVip
         ))
-        return jsEngine.withExecutionStage("sourceAction") {
+        return jsEngine.withExecutionStage("sourceAction") { [self] in
             jsEngine.evaluate(
                 action.script,
                 result: action.result,
@@ -956,7 +1049,7 @@ class ModernParserBridge {
     /// `infoMap` are the context's own.
     func evaluateExploreKindScript(_ script: String) -> String? {
         evaluateJsLibIfNeeded()
-        return jsEngine.withExecutionStage("exploreKind") {
+        return jsEngine.withExecutionStage("exploreKind") { [self] in
             jsEngine.evaluateIsolated(script, bindings: [
                 "baseUrl": sourceRuleData.source.bookSourceUrl,
                 "baseURL": sourceRuleData.source.bookSourceUrl,
@@ -2566,6 +2659,9 @@ class ModernParserBridge {
         let js = sourceRuleData.source.loginCheckJs
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !js.isEmpty else { return response }
+        let previousStage = runtimeStage
+        runtimeStage = "loginCheckJs"
+        defer { runtimeStage = previousStage }
         evaluateJsLibIfNeeded()
         return jsEngine.evaluateResponseScript(
             js,
@@ -2643,15 +2739,22 @@ class ModernParserBridge {
         ruleUrl: String, key: String? = nil, page: Int? = nil,
         runtimeVariables: [String: String]? = nil,
         pageScope: RuleData? = nil,
+        isPrimaryRequest: Bool = false,
+        additionalHeaders: [String: String] = [:],
         on host: isolated SourceScriptHost<ModernParserBridge>
     ) async throws -> (String, String) {
+        lastFetchStatus = 200
+        lastFetchHeaders = [:]
+        runtimeStage = "request"
+        interactionWasRequested = false
+        lastFetchRequestURL = ruleUrl
         // Building the request runs source JS (jsLib, cloud settings, `@js:` URLs and
         // templates) and so does reading the response (`loginCheckJs`, `bodyJs`). Both run
         // here on the host — a script may stop for the reader — and only the network
         // round-trip leaves it.
         let prepared = try prepareFetch(
             ruleUrl: ruleUrl, key: key, page: page, runtimeVariables: runtimeVariables,
-            pageScope: pageScope
+            pageScope: pageScope, isPrimaryRequest: isPrimaryRequest, additionalHeaders: additionalHeaders
         )
         let analyzeUrl: AnalyzeUrl
         let request: URLRequest
@@ -2661,35 +2764,16 @@ class ModernParserBridge {
         case .network(let preparedURL, let preparedRequest):
             analyzeUrl = preparedURL
             request = preparedRequest
+            lastFetchRequestURL = preparedRequest.url?.absoluteString ?? ruleUrl
         }
 
         let (data, response): (Data, URLResponse)
         // The source's own request session, like its JS requests: `URLSession.shared` wrote
         // every cacheable page to `URLCache.shared`'s Cache.db, and capped a host at 6
         // connections.
-        let requestSession = self.requestSession
         do {
-            // Honor the source's `concurrentRate` budget (per-source anti-ban
-            // throttle) around the actual network round-trip only.
-            (data, response) = try await SourceRateLimit.run(source: sourceRuleData.source) {
-                try await withThrowingTaskGroup(
-                    of: (Data, URLResponse).self
-                ) { group in
-                    group.addTask {
-                        try await requestSession.data(for: request)
-                    }
-                    group.addTask {
-                        try await Task.sleep(nanoseconds: 30_000_000_000)
-                        throw ModernParserBridgeError.timeout
-                    }
-                    guard let result = try await group.next() else {
-                        throw CancellationError()
-                    }
-                    group.cancelAll()
-                    return result
-                }
-            }
-        } catch is ModernParserBridgeError {
+            (data, response) = try await requestExecutor.data(for: request)
+        } catch let error as URLError where error.code == .timedOut {
             SourceAPIErrorLog.shared.record(
                 sourceUrl: sourceRuleData.source.bookSourceUrl,
                 requestUrl: request.url?.absoluteString,
@@ -2711,7 +2795,7 @@ class ModernParserBridge {
     /// `fetch`'s script half before the network: the rule URL resolved into a request.
     private func prepareFetch(
         ruleUrl: String, key: String?, page: Int?, runtimeVariables: [String: String]?,
-        pageScope: RuleData?
+        pageScope: RuleData?, isPrimaryRequest: Bool, additionalHeaders: [String: String]
     ) throws -> PreparedFetch {
         // A book's request is built against its variables, as Legado's `AnalyzeUrl(ruleData =
         // book)` builds it: a detail, TOC or content URL can read back what the book's search
@@ -2722,7 +2806,10 @@ class ModernParserBridge {
         // bridge is built, but a JS timeout resets the engine and only the paths that ask
         // get it back; this one never did, so the call evaluated to nothing and surfaced
         // as "Invalid URL: @js:getApiUrl(…)". Hash-guarded, so it is a no-op once loaded.
+        guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
         evaluateJsLibIfNeeded()
+        if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
+        if runtimeOverrides != nil, _jsEngine?.lastError != nil { throw ModernParserBridgeError.parseError("Source JavaScript failed") }
         ensureCloudSettingsIfNeeded()
         // A search or explore page's URL puts into that page's own `RuleData`, which its list
         // then starts from (`pageScope`): Legado's `WebBook.searchBookAwait`/`exploreBookAwait`
@@ -2763,6 +2850,7 @@ class ModernParserBridge {
             return .dataURI(body: body, finalURL: finalURL)
         }
 
+        if runtimeOverrides != nil, analyzeUrl.useWebView { throw SourceRuntimeRequirement.interactionRequired }
         guard var request = analyzeUrl.toURLRequest() else {
             throw ModernParserBridgeError.invalidURL(ruleUrl)
         }
@@ -2774,7 +2862,14 @@ class ModernParserBridge {
                   request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? "nil")
         }
 
+        for (key, value) in additionalHeaders where request.value(forHTTPHeaderField: key) == nil {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        if isPrimaryRequest, let url = request.url { runtimeOverrides?.headerScope?.admitPrimaryURL(url) }
         applySourceAuthentication(to: &request)
+        if runtimeOverrides != nil { request.httpShouldHandleCookies = sourceRuleData.source.enabledCookieJar }
+        if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
+        if runtimeOverrides != nil, _jsEngine?.lastError != nil { throw ModernParserBridgeError.parseError("Source JavaScript failed") }
 
         // Use a cooperative timeout so a hanging server never blocks the search/reader
         // indefinitely. The per-source search already has its own timeout in the
@@ -2796,11 +2891,17 @@ class ModernParserBridge {
         // names one, as in Legado, and otherwise the charset is detected from the header, the
         // document and the bytes. This used to assume UTF-8 without the option, which turned
         // every GBK page that did not name its charset into "".
+        guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
         let capturedResult = LegadoHTTPResult.make(
             request: request, data: data, response: response, declaredCharset: analyzeUrl.charset
         )
         let sourceResponse = LegadoStrResponse(result: capturedResult)
         let checkedResponse = applyLoginCheck(to: sourceResponse)
+        if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
+        if runtimeOverrides != nil, _jsEngine?.lastError != nil { throw ModernParserBridgeError.parseError("Source JavaScript failed") }
+        lastFetchStatus = checkedResponse.code()
+        lastFetchHeaders = checkedResponse.httpResult.headers
+        if checkedResponse.code() == 304 { return ("", checkedResponse.url()) }
         let body = checkedResponse.body()
         let finalUrl = checkedResponse.url()
         if sourceRuleData.source.exploreUrl.contains("_csrfToken"),
@@ -2855,10 +2956,12 @@ class ModernParserBridge {
               !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return body }
 
-        guard let transformed = jsEngine.evaluateIsolated(
-            script,
-            bindings: ["result": body, "baseUrl": baseURL]
-        ) else {
+        let previousStage = runtimeStage
+        runtimeStage = "bodyJs"
+        defer { runtimeStage = previousStage }
+        let value = jsEngine.evaluateIsolated(script, bindings: ["result": body, "baseUrl": baseURL])
+        if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
+        guard let transformed = value else {
             throw ModernParserBridgeError.parseError(
                 "bodyJs failed: \(jsEngine.lastError ?? "script returned no value")"
             )
@@ -3041,6 +3144,9 @@ class ModernParserBridge {
 
         let newHash = jsLib.md5Hash
         guard newHash != evaluatedJsLibHash else { return }
+        let previousStage = runtimeStage
+        runtimeStage = "jsLib"
+        defer { runtimeStage = previousStage }
 
         // jsLib is the source's own script whichever stage first needs it — the runtime is
         // built lazily, so that can be a search row's or a TOC's first `@js:`. A top-level
@@ -3065,7 +3171,7 @@ class ModernParserBridge {
                 engine.lastError ?? "none"
             )
         }
-        evaluatedJsLibHash = newHash
+        evaluatedJsLibHash = engine.lastError == nil ? newHash : nil
     }
 
     /// Re-evaluate jsLib on next use (e.g. after source variable reset).

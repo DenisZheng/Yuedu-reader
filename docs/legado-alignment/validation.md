@@ -12,7 +12,8 @@
 | S1 | 本地阶段通过：iPhone/iPad最终各54项通过，固定流程、图片解码、资源约束见[媒体PoC](media-poc.md) |
 | S2 | 本地阶段通过：iPhone/iPad各101项，307项离线导入/重载/导出0字段差异；[细节与限制](s2-import.md) |
 | S3 | 本地阶段通过：iPhone/iPad120项，iPad导入UI2项；[S3身份与状态记录](s3-identity.md) |
-| S4–S8 | 按依赖顺序继续；媒体时钟、Feed搜索AX和云端archive问题分别在S5/S6/S8验收前解决 |
+| S4 | 本地阶段通过：iPhone/iPad各233项、33 suites、0失败/跳过；[S4共享运行时记录](s4-runtime.md) |
+| S5–S8 | 按依赖顺序继续；Feed搜索AX、媒体时钟、真机/iOS17和云端archive问题须在对应验收前解决 |
 
 ## S0-01：模拟器环境
 
@@ -351,3 +352,19 @@ IPA仍仅允许手动运行。修正配置的Push不会启动IPA归档；云端2
 - `git diff --check` 通过。v1.0原文既有尾随空白按归档保真要求保留。
 
 App/扩展编译、S0相关RSS回归和上述UI操作已有实际通过证据；用户代表源联网、RSS网页媒体完整闭环与真机播放尚未验证。
+
+## S4：共享源运行时、请求和撤销闭环
+
+本地阶段通过，完整输入/断点与边界见 [S4记录](s4-runtime.md)。新增 `scripts/validate_reader_fork_s4.sh`，强制 Reader-Fork-Dev、检查所有选定 suite/用例真实执行以及最终零失败/跳过，不能以总数掩盖未执行的合同。
+
+- `YUEDU_EVIDENCE_DIR=/tmp/readerfork-s4-final-iphone bash scripts/validate_reader_fork_s4.sh`：iPhone 17 Pro Max / iOS26.2，233项、33 suites，0失败/跳过。
+- 通过 `YUEDU_DEST="$(bash scripts/sim.sh dest iPad)"` 切换目标，`YUEDU_EVIDENCE_DIR=/tmp/readerfork-s4-final-ipad bash scripts/validate_reader_fork_s4.sh`：iPad Pro 13-inch (M5) / iOS26.2，相同233项、0失败/跳过。
+- 工具链由 `scripts/sim.sh xcode` 解析，本次 Xcode27.2 / SDK27.2；App 实际编译仍为 Swift6，不修改语言/并发配置。
+- 共享会话/RuleData、跨请求jsLib、文章变量与字段时序；URL options/编码/登录检查/无规则Feed/304；域/path Cookie、实际HTTP重定向、源限流；取消排队/LRU淘汰/超时与旧结果拒写均已行为覆盖。
+- jsLib阶段包装和header解析的超时绕过由故障注入复现（5个失败断言），修复后进入完整回归。未来状态文件阻止执行而不覆盖；外部变量更新撤销旧票据。
+- 原 PoC 后台注册失败在 Dev scheme 保留原断言后通过。首次扩大门槛遇到默认禁用的私有书源实服务用例，门槛拒绝；最终只选择同文件3项合成认证回归，实服务未验证。
+- 五语本地化、shell语法、文档链接/编码和 `git diff --check` 通过；原始253书源/307RSS包哈希未变，不纳入提交。
+
+未解决/未验证：偶发 test module emission 超时（未修改代码或DerivedData的重跑通过，不宣称根因已修复）；队列/Keychain QoS警告；JavaScriptCore不保证杀死纯JS无限循环；真人登录、S5分页/S6网页媒体、iOS17/真机、正式iCloud签名及Xcode26.6 archive。S4不构成这些门槛或整体RSS可用性通过。
+
+回滚必须整体撤回本阶段RSS适配及对应共享修改，保留 `rss_runtime_variables.json` 数据；旧S3版本不能直接读取新的封装，若降级需要显式转换并保留opaque变量备份，不清空用户数据。不自动push/release。

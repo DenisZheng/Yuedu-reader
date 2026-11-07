@@ -62,7 +62,8 @@ final class SourceAPIErrorLog: @unchecked Sendable {
         statusCode: Int?, body: String?, timedOut: Bool = false
     ) {
         guard !sourceUrl.isEmpty else { return }
-        let endpoint = Self.endpoint(of: requestUrl)
+        let body = SourceDiagnosticContext.isRestricted ? nil : body
+        let endpoint = SourceDiagnosticContext.isRestricted ? nil : Self.endpoint(of: requestUrl)
         let failure: Failure?
         if timedOut {
             failure = Failure(
