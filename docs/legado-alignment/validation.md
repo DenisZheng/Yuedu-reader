@@ -9,7 +9,7 @@
 | 最终方案/执行计划 | Q1–Q13 已确认；移除 Google/收费，保留 iCloud/WebDAV，备份先保证 Fork 自身恢复 |
 | 项目代理指南 | 根目录 AGENTS.md 已生成，格式/相对链接已校验 |
 | S0 独立构建与基线 | 本地阶段通过：独立 App/扩展构建、203项相关验收、2项阅读器导入UI及4项iPad UI通过；签名/真实iCloud和最低系统验收留发布门槛 |
-| S1 | 进行中：固定输入/媒体PoC子集24项通过，缺项与安全约束见[媒体PoC](media-poc.md)；未放行 |
+| S1 | 进行中：最终隔离宿主在iPhone/iPad各36项通过，常规S0再回归203项通过；缺项与资源限制见[媒体PoC](media-poc.md)，未放行 |
 | S2–S8 | 待前置阶段完成 |
 
 ## S0-01：模拟器环境
@@ -255,9 +255,48 @@ YUEDU_EVIDENCE_DIR=/tmp/readerfork-s0-final-acceptance \
 
 回滚：删除S1新增fixture/测试/PoC文档，并将仅为复用抽出的VideoStillFixtureServer从Support移回原测试文件；保留S0实现、既有媒体文件与用户原包。不要整库reset。
 
+## S1-02：网页媒体、Cookie、custom-scheme与隔离宿主
+
+在 `bd6b0076` 提交后继续实现。网页MP4、iframe HLS、合成JS动态地址、AES-128 HLS key/分片及Cookie、脚本时机、baseURL、跨host/path Cookie与注销、白名单custom-scheme媒体和取消等，已新增实际行为验证。自定义scheme仅测试内存白名单，未新增生产代理或播放器。
+
+新增 `Reader-Fork-RSS-PoC` scheme、`ReaderAppMain` 提前选择轻量宿主，避免构造原App及其自动服务。正常App实现仅移动 `@main` 标记，初始化/页面/通知/同步逻辑原样保留。正常Debug/Release仍调用原SwiftUI入口，不用PoC结果代替正常冷启动验收。
+
+最终命令：
+
+```bash
+YUEDU_EVIDENCE_DIR=/tmp/readerfork-s1-iphone-final-green bash scripts/validate_reader_fork_s1.sh
+YUEDU_DEST="$(bash scripts/sim.sh dest iPad)" \
+  YUEDU_EVIDENCE_DIR=/tmp/readerfork-s1-ipad-final-green bash scripts/validate_reader_fork_s1.sh
+YUEDU_EVIDENCE_DIR=/tmp/readerfork-s0-final-host bash scripts/validate_reader_fork_s0.sh
+```
+
+结果分别为 **36/36、36/36、203/203**，最终xcresult均Passed且0失败/0跳过；日志/结果包位于对应目录。
+
+保留失败事实：1px fixture受3x屏幕倍率影响，固定renderer.scale后解决；一次iPad actool裁剪阶段超时、未开始测试；独立宿主iPad音频重复3次失败，显式激活/恢复测试音频会话后重复3次及完整回归通过。详情与日志见[媒体PoC](media-poc.md)。
+
+当前资源限制：现有asset自定义头可跨host传播；custom-scheme MP4在一个合成片段产生84次本地小Range请求，不可直接放大为外网请求。图片脚本解码/资源过滤/流程输入等S1余项未结束，S2仍不放行。
+
+回滚范围：仅移除本批新增PoC测试、scheme、支持文件和ReaderAppMain，并把 `@main` 标记放回原App；RSSMediaPoCTests的测试辅助提取也一起还原。不要撤回 `bd6b0076` 的S0改造，不碰原始样本和用户数据。
+
+## 手动IPA构建工作流
+
+按用户要求新增 `.github/workflows/build-ios.yml`：仅 `workflow_dispatch`，没有PR、Push、Tag或schedule触发。参考指定legado-ios工作流的未签名archive→Payload→artifact方式，不复制其自动触发或模拟器/UI测试流程。使用稳定 `macos-26` runner所选Xcode，不把本机27.x作为硬性要求。
+
+源码/依赖核查：本地LNPopupUI/LNPopupController声明Swift tools 6.2；CoreText依赖是Swift 6.0源码包，并非要求27.x的预编译二进制。发现 `ReaderViewportReporting.swift` 的27.1 `ReservedRegion` 只有运行时检查，补上与项目既有新SDK分支一致的编译器保护。旧工具链保留窗口safe-area路径，不更改Swift语言模式、并发设置或最低iOS17。SDK27.0这一不含27.1 API但会进入新编译分支的组合明确拒绝，不影响默认26.x runner。
+
+实际验证：
+
+- `python3 -B -m unittest discover -s scripts/tests -p 'test_*ipa*.py' -v`：**16项通过**。包含YAML解析、仅手动触发、权限/Action SHA、依赖缓存边界、工具链预检分支，以及合成archive的Payload、权限/符号链接、扩展、平台、SHA-256和失败合同。
+- `ReaderWindowObstructionsTests`、`ReaderViewportFollowsWindowTests`：**18项/2个suite通过**，使用本机动态解析的Xcode27.2/iOS26.2模拟器；日志 `/tmp/readerfork-ci-viewport-regression.log` 与同名xcresult。
+- `xcodebuild -showBuildSettings -configuration Release -destination 'generic/platform=iOS' ... CODE_SIGNING_ALLOWED=NO` 成功，确认独立Bundle ID、Release真机SDK和关闭签名；记录 `/tmp/readerfork-ci-device-build-settings.json`。
+
+**未验证：** 未触发GitHub构建，未执行完整Release archive；本机没有26.x Xcode。工具链预检的模拟输入及27.x本地回归不能冒充26.x云端编译成功。首次手动运行后必须补记实际archive/IPA结果。使用方式、较旧SDK的能力边界、未签名与发布限制见[手动IPA指南](../manual-ipa-build.md)。
+
+工作流不会自行commit/push或发布Release，不包含原始源包。回滚只移除本次workflow/打包脚本/测试/指南并撤回viewport编译保护，保留S0及其他S1改动。
+
 ## 提交前复核
 
-本次提交包含S0独立Fork改造、参考文档和已通过的S1子集，不把S1整体写成完成。原始书源/RSS包、`.codegraph/`和Python缓存不纳入提交。
+已按用户授权提交 `bd6b0076`（建立独立 Fork，移除账号收费体系并补齐验收基线），未push。提交包含S0独立Fork改造、参考文档和首批已通过的S1子集，不把S1整体写成完成。原始书源/RSS包、`.codegraph/`和Python缓存不纳入提交。
 
 历史方案v1.0按既定SHA-256原样归档，原文的行尾空格不改动；`.gitattributes`仅对该文件放宽行尾空格检查，其余文件仍使用默认检查。提交前重新核验原文哈希、暂存区格式、配置/反馈移除/测试包装器合同与本地化。
 

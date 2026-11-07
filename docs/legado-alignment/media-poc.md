@@ -41,7 +41,7 @@ S0已通过；本页记录S1已执行的子集和仍缺的验收。**不代表RS
 | 跨origin fetch | 无CORS响应被浏览器拒绝；显式允许响应成功 | 未关闭WebKit安全检查，跨origin不携带主文档自定义头 |
 | 现有asset跨host重定向 | 127.0.0.1重定向到localhost，目标仍收到合成的X-Fixture-Auth | **安全约束**：现有HeaderedMediaAsset不能直接作为RSS私有认证传播策略 |
 
-本轮总结果：**24 tests passed，0 failed，0 skipped**，`/tmp/readerfork-s1-fixed-input-media-2.xcresult`。
+首批结果：**24 tests passed，0 failed，0 skipped**，`/tmp/readerfork-s1-fixed-input-media-2.xcresult`。后续扩展及最终入口见下节。
 
 重放：
 
@@ -72,12 +72,52 @@ bash scripts/xctest.sh -t 300 -- \
 
 建议继续复用原生AVPlayer，但RSS私有认证必须按目标域/路径重新核准；任意头部不可直接附到整个asset后跨站传播。**本轮仅测量，不新增生产资源代理，不扩大权限。**
 
+## 后续扩展：网页、资源通路与隔离宿主
+
+当前自动入口：
+
+```bash
+bash scripts/validate_reader_fork_s1.sh
+# iPad同样动态解析：
+export YUEDU_DEST="$(bash scripts/sim.sh dest iPad)"
+bash scripts/validate_reader_fork_s1.sh
+```
+
+使用专用 `Reader-Fork-RSS-PoC` scheme。新增 `ReaderAppMain.swift` 在构造App之前选择测试宿主；只有Debug模拟器且显式传入 `-rss-poc-isolated-host` 才使用空白窗口。常规Debug/Release仍调用原有 `yuedu_appApp.main()`，原App初始化、页面和生命周期代码不改。这样不是“关闭首页请求后其他后台任务仍运行”，也不读取/迁移用户书库后再跳过界面。
+
+- `RSSWebResourcePoCTests` 新增7项：网页MP4、iframe内HLS、JS请求动态媒体地址；脚本禁用；preload→页面脚本→finished时机与主frame边界；base URL；CSS/脚本/图片实际加载；Cookie的host/path和注销；带Cookie的AES-128 HLS playlist/init/segment/key真实请求及解码播放。
+- 加密HLS在测试中以既有CryptoSwift从原合成分片生成，不新增依赖、不加入新二进制素材；密钥仅为固定测试数据，不是DRM绕过。
+- `RSSSchemeResourcePoCTests` 新增4项：custom-scheme HTML/图片、未列入白名单的资源拒绝、真实stop回调与晚到交付抑制、MP4/HLS实际播放。scheme handler只服务内存白名单，无任意文件访问或外站代理。
+- 共享导航等待器对超时、失败和WebContent进程终止抛错；媒体等待仍以播放事件、加载事件为准，不用sleep稳定状态。
+- `RSSPoCTestHostTests` 新增1项，验证专用宿主启用及未安装通知启动链路。验收脚本要求至少36项、0失败、0跳过，不能漏掉宿主验证仍成功。
+
+### 最新实际结果
+
+| 验收 | 结果 | 证据 |
+| --- | --- | --- |
+| iPhone模拟器，最终隔离宿主 | **36通过，0失败，0跳过** | `/tmp/readerfork-s1-iphone-final-green/tests.xcresult` |
+| iPad模拟器，最终隔离宿主 | **36通过，0失败，0跳过** | `/tmp/readerfork-s1-ipad-final-green/tests.xcresult` |
+| 常规App启动及S0回归 | **203通过，0失败，0跳过** | `/tmp/readerfork-s0-final-host/tests.xcresult` |
+
+当前运行时均为iOS26.2，设备由脚本解析。PoC宿主日志未出现原首页的 `home.row`、`publicLibrary.opds.load` 等启动记录，测试所有业务资源来自loopback或内存白名单；这不是OS级防火墙/系统网络流量抓包结论。
+
+### 失败复现与修正
+
+- 位图fixture最初未固定UIGraphics renderer.scale，在3x设备生成了3像素而非1像素，三个测试因此失败。固定输出scale=1后通过，没有把断言改成某一机型的3。
+- 一次切换iPad目的地在actool资源裁剪阶段耗尽外部命令预算，未开始测试，不算通过。S1脚本现沿用仓库900秒构建预算；各播放器/导航的5/8/10秒等待上限不变。
+- 独立入口不再带普通App的音频初始化副作用，iPad音频出现ready超时或播放停在2秒。单项重复3次均失败，日志 `/tmp/readerfork-s1-ipad-audio-repeat.log`。只增加显式AVAudioSession.playback激活并在测试后还原，3次重跑及两种设备完整36项随后全部通过，日志 `/tmp/readerfork-s1-ipad-audio-session.log`。同步会话调用在后台Task执行并等待结果；未改生产播放器、未加长媒体截止时间。
+
+### 资源方案约束
+
+在当前模拟器，公开WKURLSchemeHandler可以完成合成MP4/HLS播放；此前仅凭API说明不能断言“所有custom-scheme媒体都不可用”。但它仍不能接管http/https，也不能改变外站CORS。
+
+一次记录中，custom-scheme MP4播放到0.24秒产生**84次本地handler请求**（大量小Range），HLS为**7次**；这是callback计数，不是外网请求数。详见 `/tmp/readerfork-s1-final-artifacts/` 中记录。不能直接把每次callback映射成一次上游网络请求，更不能据这段小视频承诺生产内存/带宽表现。
+
+后续选择：普通网页优先原生http(s)+受域/路径约束的Cookie；需要解码或逐请求认证的受限资源可评估custom-scheme路径，但不全量改写外站URL，也不把任意认证头附到整个AVURLAsset。真正接入和资源预算约束在S6完成。
+
 ## S1仍待完成
 
-- 网页内MP4/HLS、iframe与JS播放器的实际运行；允许/禁止JS、preload/inject生命周期、相对base URL。
-- Cookie按host/path/登录状态、图片解码、CSS/脚本资源、资源过滤与取消的PoC。
-- 受限资源通路/自定义scheme的真实媒体请求，明确选择与不支持项；不能用URLProtocol的宿主请求测试代替WebKit子资源。
-- 对DASH/DRM、跨站认证、视频全屏/画中画列清限制；设备实测单列。
-- 分页失败/重复/刷新竞态、源/文章变量隔离的后续固定输入扩充。
-- 严格网络隔离：上述PoC业务请求都为loopback；当前App测试宿主启动仍可能加载已有公共书库预览，不能称为整进程完全离线。
-- S1全面自动验收前不得标完成或进入S2。真机、iOS17运行时、后台音频/DRM不包含在这24项结论中。
+- 源脚本图片bytes解码到实际图像加载的PoC，以及Android黑/白名单语义对应的资源过滤输入。
+- 分页失败/重复/刷新竞态、源/文章变量隔离、登录检查和配置更新的固定流程输入扩充。
+- DASH/DRM、全屏/画中画与跨站认证的限制清单收敛；真机、iOS17运行时、后台音频仍单列未验证。
+- S1全面自动验收前不得标完成或进入S2。当前36项证明平台PoC与现状基线，不是RSS生产功能闭环或任意第三方网页播放器兼容。

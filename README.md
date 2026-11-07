@@ -78,17 +78,17 @@ Storage (local-first) · Sync (iCloud / WebDAV)
 
 ## Build
 
-**Requirements:** Xcode 27.1 or later · iOS 17.0+ · Swift 6
+**Requirements:** iOS 17.0+ · Swift 6 language mode · a Swift 6.2+ toolchain for the local packages. CI targets the stable `macos-26` runner's default Xcode; it is not pinned to the developer's local Xcode 27.x. See the [manual IPA build guide](docs/manual-ipa-build.md) for SDK compatibility and validation limits.
 
 ```bash
-git clone https://github.com/CHANG-JUI-LIN/Yuedu-reader.git
+git clone https://github.com/DenisZheng/Yuedu-reader.git
 cd Yuedu-reader
 open Yuedu-Reader.xcodeproj
 ```
 
-The project expects a `GoogleService-Info.plist` at the repository root. It is not in the repository (it is gitignored), and the build stops without it: add an iOS app to your own Firebase project and put its plist there.
+Select the `Reader-Fork-Dev` scheme and a simulator (or your device). This Fork no longer needs `GoogleService-Info.plist`, Google/Firebase accounts, or purchase entitlements. Device installation and iCloud capabilities still require your own signing configuration.
 
-Then select a simulator (or your device) and run. Self-built versions need their own signing configuration and bundle identifier. Publicly redistributed forks must use distinct app names, icons, and branding and must not imply official endorsement.
+The **Build unsigned iOS IPA** GitHub Action is manual-only (`workflow_dispatch`): no PR or Push builds. It archives a Release device build and produces an unsigned IPA for later signing; it does not publish a release or replace the staged RSS tests. Publicly redistributed forks must use distinct branding and must not imply official endorsement.
 
 ## Official App Store build
 

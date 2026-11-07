@@ -48,7 +48,27 @@ final class RSSMediaPoCTests: XCTestCase {
     }
 
     func testAudioActuallySeeksAndAdvances() async throws {
-        try await play("video-still-audio-only.m4a")
+        // 独立宿主没有普通App的音频会话；显式建立播放条件，并在队列外等待成功。
+        let previous = try await Task.detached {
+            let session = AVAudioSession.sharedInstance()
+            let previous = (session.category, session.mode, session.categoryOptions)
+            try session.setCategory(.playback)
+            try session.setActive(true)
+            return previous
+        }.value
+        let result: Result<Void, Error>
+        do {
+            try await play("video-still-audio-only.m4a")
+            result = .success(())
+        } catch { result = .failure(error) }
+        do {
+            try await Task.detached {
+                let session = AVAudioSession.sharedInstance()
+                try session.setActive(false)
+                try session.setCategory(previous.0, mode: previous.1, options: previous.2)
+            }.value
+        } catch { XCTFail("测试音频会话恢复失败：\(error)") }
+        try result.get()
     }
 
     @discardableResult
@@ -60,6 +80,12 @@ final class RSSMediaPoCTests: XCTestCase {
         let asset = HeaderedMediaAsset.make(url: base.appendingPathComponent(name), headers: ["Referer": referer])
         let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)
+        defer {
+            let trace = XCTAttachment(string: "status=\(item.status.rawValue) time=\(player.currentTime().seconds)\n" + server.requests.map(\.description).joined(separator: "\n"))
+            trace.name = "\(name)-transport"
+            trace.lifetime = .keepAlways
+            add(trace)
+        }
         // 当前模拟器无显示consumer时HLS seek不完成；PoC使用真实显示层，而非只查ready状态。
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
@@ -179,28 +205,8 @@ final class RSSMediaPoCTests: XCTestCase {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 240), configuration: configuration)
-        let waiter = RSSPoCNavigationWaiter(test: self)
+        let waiter = RSSPoCNavigationWaiter()
         view.navigationDelegate = waiter
         return (view, waiter)
     }
-}
-
-@MainActor
-private final class RSSPoCNavigationWaiter: NSObject, WKNavigationDelegate {
-    private let test: XCTestCase
-    private var finished: XCTestExpectation?
-    private var failure: Error?
-    init(test: XCTestCase) { self.test = test }
-    func load(_ start: () -> WKNavigation?) async throws {
-        let done = XCTestExpectation(description: "WKWebView完成或明确失败")
-        finished = done
-        failure = nil
-        _ = start()
-        await test.fulfillment(of: [done], timeout: 10)
-        finished = nil
-        if let failure { throw failure }
-    }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finished?.fulfill() }
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failure = error; finished?.fulfill() }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failure = error; finished?.fulfill() }
 }

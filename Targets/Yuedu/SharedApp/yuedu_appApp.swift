@@ -1,7 +1,6 @@
 import YueduCoreText
 import SwiftUI
 
-@main
 struct yuedu_appApp: App {
     @UIApplicationDelegateAdaptor(RSSAppNotificationDelegate.self) private var rssNotificationDelegate
     // The app's own store is the only one that takes over the reading modes older builds

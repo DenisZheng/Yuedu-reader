@@ -160,6 +160,7 @@ final class VideoStillFixtureServer: @unchecked Sendable {
         var extra = response.headers
         extra["Content-Type"] = response.type
         extra["Accept-Ranges"] = "bytes"
+        extra["Cache-Control"] = "no-store"
         if method == "GET", response.status == "200 OK", let range = headers["range"] {
             guard let bounds = Self.bounds(range, count: response.body.count) else {
                 extra["Content-Range"] = "bytes */\(response.body.count)"
@@ -171,7 +172,8 @@ final class VideoStillFixtureServer: @unchecked Sendable {
         send(connection, status: response.status, body: response.body, headers: extra, headOnly: method == "HEAD")
     }
 
-    private static func bounds(_ range: String, count: Int) -> Range<Int>? {
+    /// HTTP与custom-scheme PoC使用同一Range解释，避免因fixture差异误判平台支持。
+    static func bounds(_ range: String, count: Int) -> Range<Int>? {
         guard range.hasPrefix("bytes="), count > 0 else { return nil }
         let parts = range.dropFirst(6).split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 2 else { return nil }

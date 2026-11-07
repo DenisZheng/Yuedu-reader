@@ -1,0 +1,134 @@
+name: Build unsigned iOS IPA
+run-name: 手动 IPA · ${{ github.ref_name }}
+
+# 只手动触发；不因PR、Push、Tag或定时任务启动昂贵构建。
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reader-fork-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      PROJECT: Yuedu-Reader.xcodeproj
+      SCHEME: Reader-Fork-Dev
+      SOURCE_PACKAGES: ${{ runner.temp }}/ReaderForkSourcePackages
+      ARCHIVE: ${{ runner.temp }}/ReaderFork.xcarchive
+      IPA_OUTPUT: ${{ runner.temp }}/ReaderForkIPA
+
+    steps:
+      - name: Checkout selected branch or tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Check selected toolchain
+        id: toolchain
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, subprocess
+          def run(*args):
+              return subprocess.check_output(args, text=True).strip()
+          developer = run('xcode-select', '-p')
+          os.environ['DEVELOPER_DIR'] = developer
+          xcode = run('xcodebuild', '-version')
+          swift = run('xcrun', 'swiftc', '--version')
+          sdk = run('xcrun', '--sdk', 'iphoneos', '--show-sdk-version')
+          print(xcode, swift, 'iPhoneOS SDK: ' + sdk, sep='\n')
+          compiler = re.search(r'Swift version (\d+)\.(\d+)', swift)
+          sdk_version = tuple(map(int, sdk.split('.')[:2]))
+          if not compiler or tuple(map(int, compiler.groups())) < (6, 2):
+              raise SystemExit('本地Swift包要求Swift 6.2+；请使用兼容的Xcode，不自动下载/升级工具链。')
+          if sdk_version < (26, 0) or sdk_version == (27, 0):
+              raise SystemExit('需要26.x稳定SDK或27.1+；27.0 SDK缺少当前新API分支的ReservedRegion。')
+          build = re.search(r'Build version ([A-Za-z0-9]+)', xcode)
+          if not build:
+              raise SystemExit('无法识别Xcode build version')
+          with open(os.environ['GITHUB_ENV'], 'a') as file:
+              file.write('DEVELOPER_DIR=' + developer + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as file:
+              file.write('build=' + build.group(1) + '\n')
+          PY
+
+      - name: Check workflow and packaging contracts
+        run: python3 -B -m unittest discover -s scripts/tests -p 'test_*ipa*.py'
+
+      - name: Cache SwiftPM dependencies only
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.SOURCE_PACKAGES }}
+          key: reader-fork-spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-${{ hashFiles('Yuedu-Reader.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'Packages/**/Package.swift', 'Yuedu-Reader.xcodeproj/project.pbxproj') }}
+          restore-keys: |
+            reader-fork-spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.build }}-
+
+      - name: Resolve locked dependencies
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project "$PROJECT" -scheme "$SCHEME" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            -onlyUsePackageVersionsFromResolvedFile \
+            2>&1 | tee "$RUNNER_TEMP/readerfork-resolve.log"
+          git diff --exit-code -- "$PROJECT/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+
+      - name: Archive unsigned device app
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "$PROJECT" -scheme "$SCHEME" \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE" \
+            -resultBundlePath "$RUNNER_TEMP/ReaderForkArchive.xcresult" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            -disableAutomaticPackageResolution \
+            -onlyUsePackageVersionsFromResolvedFile \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
+            2>&1 | tee "$RUNNER_TEMP/readerfork-archive.log"
+
+      - name: Package IPA and checksum
+        run: python3 -B scripts/package_unsigned_ipa.py --archive "$ARCHIVE" --output "$IPA_OUTPUT"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reader-fork-dev-unsigned-ipa-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.IPA_OUTPUT }}/Reader-Fork-Dev-unsigned.ipa
+            ${{ env.IPA_OUTPUT }}/Reader-Fork-Dev-unsigned.ipa.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload build failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reader-fork-build-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/readerfork-resolve.log
+            ${{ runner.temp }}/readerfork-archive.log
+            ${{ runner.temp }}/ReaderForkArchive.xcresult
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Describe artifact limits
+        run: |
+          printf '%s\n' \
+            '## Reader Fork Dev 未签名 IPA' \
+            '- 这是Release真机架构的未签名产物；安装前需要自行签名。' \
+            '- 不包含Apple证书或provisioning profile，不发布Release或上传TestFlight。' \
+            '- 本工作流只编译/打包，不执行RSS实源或替代阶段行为验收。' \
+            '- 签名后的iCloud/App Group能力仍取决于你自己的账号和授权。' \
+            >> "$GITHUB_STEP_SUMMARY"

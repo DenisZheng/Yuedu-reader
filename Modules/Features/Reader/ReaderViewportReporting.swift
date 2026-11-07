@@ -165,6 +165,8 @@ private struct ReaderWindowObstructionsReporter: ViewModifier {
                         ? ReaderSideInsets(left: insets.trailing, right: insets.leading)
                         : ReaderSideInsets(left: insets.leading, right: insets.trailing)
                 )
+                // 运行时available检查不足以在旧SDK中隐藏未知类型；26.x工具链保留既有safe-area路径。
+                #if compiler(>=6.4)
                 if #available(iOS 27.1, *) {
                     // In the proxy's own space, which starts where the safe area does; the
                     // reader's surfaces draw from the window's corner.
@@ -180,6 +182,7 @@ private struct ReaderWindowObstructionsReporter: ViewModifier {
                         .reservedRegions(kind: .division, options: .includeInactive, layoutDirectionBehavior: .fixed)
                         .map(toWindow)
                 }
+                #endif
                 return obstructions
             } action: { obstructions in
                 report(obstructions)

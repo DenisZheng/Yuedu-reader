@@ -41,7 +41,7 @@ Dict、AutoTask/Cron 暂按原方案排除。不新增通用后台任务系统�
 
 ### 当前环境事实
 
-已运行 `scripts/sim.sh doctor`，当前安装的 iOS 模拟器可由本机 Xcode 构建；未发现 iOS 17 runtime。根目录缺少 GoogleService-Info.plist，而项目资源阶段仍引用它。尚未完成 App 构建与 RSS 测试，因此第一个实施阶段是独立本地启动与可重复验证，不是索取原版 Firebase 凭据或伪造配置。
+已运行 `scripts/sim.sh doctor`，当前iOS26.2模拟器可由本机Xcode构建；未安装iOS17 runtime。S0已完成独立App/扩展构建和相关回归，GoogleService资源引用及相关依赖已移除；原TLS下载故障不称为已修复。S1在隔离宿主继续固定输入与媒体验证，实际结果以[验证记录](validation.md)为准，不索取原版凭据或伪造配置。
 
 开发验证使用独立测试数据和独立开发 Bundle Identifier，临时显示名不作为公开品牌。正式名称、图标、签名和发布渠道在发布前确认，不阻塞本地工程验证，也不得复用原版云端身份。
 
