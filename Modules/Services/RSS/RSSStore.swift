@@ -137,6 +137,7 @@ final class RSSStore: ObservableObject {
                 ensureFolderExists(named: groupName)
             }
             guard sources[index] != normalized else { return }
+            clearFeedMetadata(for: source.id)
             sources[index] = normalized
             save([.sources, .folders])
         }
@@ -293,6 +294,7 @@ final class RSSStore: ObservableObject {
                 record.fullText = oldRecord.fullText
                 record.fullTextHTML = oldRecord.fullTextHTML
                 record.fullTextFetchedAt = oldRecord.fullTextFetchedAt
+                record.fullTextIsPartial = oldRecord.fullTextIsPartial
 
                 if articleStatuses[item.id] == nil {
                     record.isRead = oldRecord.isRead
@@ -308,6 +310,14 @@ final class RSSStore: ObservableObject {
             !seenIDs.contains(record.id) && ((record.scope ?? .feed) != scope || append
                 || (articleStatuses[record.id]?.isFavorite ?? record.isFavorite))
         }
+        if append {
+            // 下一页更新已存在条目但不把它搬到最前；追加的新条目保持响应顺序。
+            let values = Dictionary(mergedRecords.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            var orderedIDs = Set<String>()
+            mergedRecords = (existingRecords.map(\.id) + mergedRecords.map(\.id)).compactMap { id in
+                orderedIDs.insert(id).inserted ? values[id] : nil
+            }
+        }
         let changedScope = mergedRecords.filter { ($0.scope ?? .feed) == scope }
         let previousScope = existingRecords.filter { ($0.scope ?? .feed) == scope }
         if changedScope != previousScope {
@@ -322,10 +332,12 @@ final class RSSStore: ObservableObject {
     }
 
     @discardableResult
-    func applyFeedResponse(_ response: RSSFeedResponse, for sourceID: String) -> [RSSArticleRecord] {
+    func applyFeedResponse(_ response: RSSFeedResponse, for sourceID: String,
+                           scope: RSSArticleScope = .feed, append: Bool = false) -> [RSSArticleRecord] {
         guard source(id: sourceID) != nil else { return [] }
         switch response {
         case .notModified:
+            guard scope == .feed else { return [] }
             var metadata = feedMetadataBySource[sourceID] ?? RSSFeedFetchMetadata()
             metadata.lastFetchedAt = Date()
             feedMetadataBySource[sourceID] = metadata
@@ -333,10 +345,20 @@ final class RSSStore: ObservableObject {
             return []
 
         case .updated(let items, let metadata, let feedInfo):
-            feedMetadataBySource[sourceID] = metadata
-            saveRefreshResult(.feedMetadata)
-            applyFeedInfo(feedInfo, to: sourceID)
-            return mergeFetchedItems(items, for: sourceID)
+            if scope == .feed {
+                feedMetadataBySource[sourceID] = metadata
+                saveRefreshResult(.feedMetadata)
+                applyFeedInfo(feedInfo, to: sourceID)
+            }
+            return mergeFetchedItems(items, for: sourceID, scope: scope, append: append)
+        }
+    }
+
+    /// 分类/查询列表以持久owner的源顺序展示；空作用域绝不回退为全源缓存。
+    func articles(for sourceID: String, scope: RSSArticleScope) -> [RSSArticleRecord] {
+        (cachedArticlesBySource[sourceID] ?? []).enumerated().compactMap { index, record in
+            guard (record.scope ?? .feed) == scope, articleLocations[record.id]?.index == index else { return nil }
+            return record.applying(status: articleStatuses[record.id])
         }
     }
 
@@ -576,6 +598,7 @@ final class RSSStore: ObservableObject {
     }
 
     func authenticationChanged(for sourceID: String) {
+        clearFeedMetadata(for: sourceID)
         authenticationRevisions[sourceID, default: 0] &+= 1
         invalidateRuntimes(for: sourceID)
     }
@@ -606,13 +629,16 @@ final class RSSStore: ObservableObject {
     func setVariables(_ values: [String: String], for sourceID: String) {
         guard source(id: sourceID) != nil, (sourceVariables[sourceID] ?? [:]) != values else { return }
         sourceVariables[sourceID] = values
+        clearFeedMetadata(for: sourceID)
         configurationRevision &+= 1
         invalidateRuntimes()
         save(.variables)
     }
 
-    func updateFullText(articleId: String, text: String, html: String? = nil, fetchedAt: Date = Date()) {
-        guard let existing = article(id: articleId), existing.fullText != text || existing.fullTextHTML != html else { return }
+    func updateFullText(articleId: String, text: String, html: String? = nil, fetchedAt: Date = Date(),
+                        isPartial: Bool = false, variables: [String: String]? = nil) {
+        guard let existing = article(id: articleId), existing.fullText != text || existing.fullTextHTML != html
+                || (existing.fullTextIsPartial ?? false) != isPartial || (variables != nil && existing.variables != variables) else { return }
         let articleId = existing.id
         for sourceID in cachedArticlesBySource.keys {
             guard let index = cachedArticlesBySource[sourceID]?.firstIndex(where: { $0.id == articleId }) else {
@@ -621,6 +647,8 @@ final class RSSStore: ObservableObject {
             cachedArticlesBySource[sourceID]?[index].fullText = text
             cachedArticlesBySource[sourceID]?[index].fullTextHTML = html
             cachedArticlesBySource[sourceID]?[index].fullTextFetchedAt = fetchedAt
+            cachedArticlesBySource[sourceID]?[index].fullTextIsPartial = isPartial
+            if let variables { cachedArticlesBySource[sourceID]?[index].variables = variables }
         }
         save(.articles)
     }

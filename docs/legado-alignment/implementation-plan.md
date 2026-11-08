@@ -229,7 +229,7 @@ bash scripts/xctest.sh -- -only-testing:'yuedu appTests/LegadoRSSCompatTests'
 | S2 | 本地阶段通过 | 导入/比较/更新/保存及独立刷新闭环，iPhone/iPad各101项；307项原包离线逐字段保真。剩余平台/媒体回归限制见[S2记录](s2-import.md) |
 | S3 | 本地阶段通过 | 作用域身份、状态/变量、失效票据与WebDAV快照接入；iPhone/iPad120项通过，[S3记录](s3-identity.md) |
 | S4 | 本地补充验收通过 | 修正前台owner漏传；系统JSC地址截断定位后，经批准新增官方27.2 runtime，正常Dev宿主两设备各238项/35 suites/0失败跳过，[S4记录](s4-runtime.md) |
-| S5 | 补充提交后恢复 | 搜索AX已识别为旧测试漏枚举原生searchField；打开优先级/分类搜索分页尚未完成 |
-| S6–S8 | 待前置完成 | 媒体时钟、真机/iOS17与Xcode26.x archive仍须对应门槛解决 |
+| S5 | 本地阶段通过 | 打开优先级、分类/远程搜索、列表/正文分页及metadata隔离接入；修复WebKit跨origin私有头和重定向基址问题，正常Dev宿主两设备各268项/38 suites/0失败跳过，[S5记录](s5-browsing.md) |
+| S6–S8 | 待执行后续门槛 | S5提交后进入规则网页/媒体；媒体时钟、真机/iOS17与Xcode26.x archive仍须对应门槛解决 |
 
 遇到事实与方案不符，应先修订相应合同和依据。只在新增依赖、扩大权限/支持范围、破坏数据兼容或改变已确认产品选择时回到决策，不重复询问已确认事项。

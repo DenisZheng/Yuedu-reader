@@ -4,6 +4,19 @@ import Foundation
 /// Foreground and background refresh share the same fetch, merge, and notification path.
 @MainActor
 enum RSSFeedRefreshService {
+    /// 前后台共用提交点；调用者先验证其分页generation，本方法再验证源配置/认证票据。
+    @discardableResult
+    static func apply(_ fetcher: RSSFetcher, source: RSSSource, ticket: RSSRequestTicket, store: RSSStore,
+                      scope: RSSArticleScope = .feed, append: Bool = false,
+                      notify: @MainActor ([RSSArticleRecord], RSSSource) -> Void = { RSSNotificationManager.shared.notifyNewArticles($0, source: $1) }) -> Bool {
+        guard !Task.isCancelled, fetcher.error == nil, store.accepts(ticket), store.source(id: source.id) == source,
+              let response = fetcher.response else { return false }
+        store.applyResolvedFeedURL(fetcher.resolvedFeedURL, homepageURL: fetcher.resolvedHomepageURL, to: source.id)
+        let added = store.applyFeedResponse(response, for: source.id, scope: scope, append: append)
+        notify(added, store.source(id: source.id) ?? source)
+        return true
+    }
+
     @discardableResult
     static func refreshAll(
         store: RSSStore = .shared,
@@ -39,7 +52,9 @@ enum RSSFeedRefreshService {
             }
             guard let ticket = store.requestTicket(for: source.id) else { continue }
             let fetcher = makeFetcher()
-            await fetcher.fetchItems(from: current, metadata: store.feedMetadata(for: source.id), owner: store)
+            await fetcher.fetchItems(from: current,
+                                     metadata: current.hasSortCategories || current.isLegadoRuleBased ? nil : store.feedMetadata(for: source.id),
+                                     owner: store, resolveEntry: false)
             guard !Task.isCancelled else { return false }
             guard store.accepts(ticket), let refreshedSource = store.source(id: source.id), refreshedSource == current else {
                 onProgress(index + 1, sources.count)
@@ -48,16 +63,10 @@ enum RSSFeedRefreshService {
             if let error = fetcher.error {
                 succeeded = false
                 AppLogger.network("RSS refresh failed", context: ["source": source.id, "error": DiagnosticRedactor.redact(error)], level: .warning)
-            } else {
-                store.applyResolvedFeedURL(fetcher.resolvedFeedURL, homepageURL: fetcher.resolvedHomepageURL, to: source.id)
-                let newArticles: [RSSArticleRecord]
-                if let response = fetcher.response {
-                    newArticles = store.applyFeedResponse(response, for: source.id)
-                } else {
-                    newArticles = store.mergeFetchedItems(fetcher.items, for: source.id)
-                }
-                notify(newArticles, refreshedSource)
-            }
+            } else if fetcher.response != nil {
+                if !apply(fetcher, source: current, ticket: ticket, store: store,
+                          scope: fetcher.listPage?.scope ?? .feed, notify: notify) { succeeded = false }
+            } else { succeeded = false }
             onProgress(index + 1, sources.count)
         }
         return succeeded && !Task.isCancelled

@@ -13,16 +13,13 @@ struct RSSFlowFixtureTests {
         #expect(try await LegadoRSSScraper.resolveSortEntries(for: source) == [RSSSortEntry(name: "One", url: "https://fixture.invalid/one")])
     }
 
-    @Test("现状差异：合法空列表被解析层作为noArticlesFound抛出")
-    func validEmptyListIsStillAnError() async throws {
+    @Test("S5：合法空列表是成功的空页")
+    func validEmptyListSucceeds() async throws {
         let source = rules(url: "https://fixture.invalid/empty")
-        var rejectedAsEmpty = false
-        do {
-            _ = try await SourceScriptThread.run {
-                try LegadoRSSScraper.parseArticles(body: "<main>No new items</main>", finalURL: source.url, listRule: "class.item", reverse: false, source: source, bridge: ModernParserBridge(source: RSSRuntime.scriptSource(source)))
-            }
-        } catch ScraperError.noArticlesFound { rejectedAsEmpty = true }
-        #expect(rejectedAsEmpty, "S1记录现状错误；实现合法空页后需更新此基线")
+        let items = try await SourceScriptThread.run {
+            try LegadoRSSScraper.parseArticles(body: "<main>No new items</main>", finalURL: source.url, listRule: "class.item", reverse: false, source: source, bridge: ModernParserBridge(source: RSSRuntime.scriptSource(source)))
+        }
+        #expect(items.isEmpty)
     }
 
     @Test("固定响应序列：第二页失败后可重试同一页；重复页仍返回同一身份")

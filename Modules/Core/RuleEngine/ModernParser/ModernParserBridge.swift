@@ -100,6 +100,7 @@ class ModernParserBridge {
     private var runtimeStage = "rule"
     private(set) var lastFetchStatus = 200
     private(set) var lastFetchRequestURL = ""
+    private(set) var lastFetchRequestFingerprint: String?
     private(set) var lastFetchHeaders: [String: String] = [:]
 
     /// 每个同步规则段拥有自己的RuleData与bindings；不跨await保留当前文章上下文。
@@ -2741,9 +2742,11 @@ class ModernParserBridge {
         pageScope: RuleData? = nil,
         isPrimaryRequest: Bool = false,
         additionalHeaders: [String: String] = [:],
+        validators: SourceRequestValidators? = nil,
         on host: isolated SourceScriptHost<ModernParserBridge>
     ) async throws -> (String, String) {
         lastFetchStatus = 200
+        lastFetchRequestFingerprint = nil
         lastFetchHeaders = [:]
         runtimeStage = "request"
         interactionWasRequested = false
@@ -2772,7 +2775,9 @@ class ModernParserBridge {
         // every cacheable page to `URLCache.shared`'s Cache.db, and capped a host at 6
         // connections.
         do {
-            (data, response) = try await requestExecutor.data(for: request)
+            let result = try await requestExecutor.response(for: request, validators: validators)
+            (data, response) = (result.data, result.response)
+            lastFetchRequestFingerprint = result.requestFingerprint
         } catch let error as URLError where error.code == .timedOut {
             SourceAPIErrorLog.shared.record(
                 sourceUrl: sourceRuleData.source.bookSourceUrl,
@@ -2793,9 +2798,18 @@ class ModernParserBridge {
     }
 
     /// `fetch`'s script half before the network: the rule URL resolved into a request.
+    /// 只准备显式打开的网页请求；复用AnalyzeUrl/源认证，不发起网络或另一套URL解析。
+    func prepareRuleWebRequest(_ ruleURL: String) throws -> URLRequest {
+        switch try prepareFetch(ruleUrl: ruleURL, key: nil, page: nil, runtimeVariables: nil,
+                                pageScope: nil, isPrimaryRequest: true, additionalHeaders: [:], allowsWebView: true) {
+        case .network(_, let request): return request
+        case .dataURI: throw ModernParserBridgeError.invalidURL(ruleURL)
+        }
+    }
+
     private func prepareFetch(
         ruleUrl: String, key: String?, page: Int?, runtimeVariables: [String: String]?,
-        pageScope: RuleData?, isPrimaryRequest: Bool, additionalHeaders: [String: String]
+        pageScope: RuleData?, isPrimaryRequest: Bool, additionalHeaders: [String: String], allowsWebView: Bool = false
     ) throws -> PreparedFetch {
         // A book's request is built against its variables, as Legado's `AnalyzeUrl(ruleData =
         // book)` builds it: a detail, TOC or content URL can read back what the book's search
@@ -2850,7 +2864,7 @@ class ModernParserBridge {
             return .dataURI(body: body, finalURL: finalURL)
         }
 
-        if runtimeOverrides != nil, analyzeUrl.useWebView { throw SourceRuntimeRequirement.interactionRequired }
+        if runtimeOverrides != nil, analyzeUrl.useWebView, !allowsWebView { throw SourceRuntimeRequirement.interactionRequired }
         guard var request = analyzeUrl.toURLRequest() else {
             throw ModernParserBridgeError.invalidURL(ruleUrl)
         }

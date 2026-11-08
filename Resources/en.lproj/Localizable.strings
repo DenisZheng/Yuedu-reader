@@ -1,4 +1,7 @@
 "CSS 選擇器示例：ul.book-list li\\n屬性提取：a@href、img@src" = "CSS selector example: ul.book-list li\\nAttribute extraction: a@href, img@src";
+"正文尚未完整載入，已保留部分內容" = "The article is only partially loaded. Loaded content has been kept.";
+"已達分頁上限，已保留部分文章" = "Page limit reached. The loaded articles have been kept.";
+"分頁連結形成循環，已停止載入" = "A pagination loop was detected. Loading has stopped.";
 "Cookie 驗證登入" = "Sign In with Cookie";
 "HTTP TTS URL 模板" = "HTTP TTS URL Template";
 "RSS 網址" = "RSS URL";

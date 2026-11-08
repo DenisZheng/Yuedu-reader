@@ -9,6 +9,8 @@ struct RSSArticleReaderView: View {
     @State private var readerMode: RSSArticleReaderMode = .reader
     @State private var isLoadingFullText = false
     @State private var fullTextError: String?
+    @State private var originalTarget: RSSOpenTarget?
+    @State private var originalPageLoading = true
     @State private var selectedURL: InAppWebURL?
     @Environment(\.openURL) private var openURL
     /// 分享 payload waiting for this page's own share sheet. This view is a
@@ -30,23 +32,31 @@ struct RSSArticleReaderView: View {
 
     private var source: RSSSource? {
         guard let article else { return nil }
-        return store.sources.first { $0.id == article.sourceId }
+        return store.source(id: article.sourceId)
     }
 
     var body: some View {
         Group {
             if let article {
-                RSSArticleWebReaderView(
-                    document: document(for: article),
-                    restoreScrollY: article.readerScrollY,
-                    findRequestID: $findRequestID,
-                    onScrollYChange: { scrollY in
-                        store.updateReaderScrollY(articleId: article.id, scrollY: scrollY)
-                    },
-                    onOpenLink: { route in
-                        open(route)
+                Group {
+                    if let originalTarget, let source {
+                        RSSSourcePageWebView(source: source, target: originalTarget, error: $fullTextError, loading: $originalPageLoading, owner: store, findRequestID: $findRequestID)
+                            .overlay(alignment: .top) {
+                                if originalPageLoading { ProgressView().padding(DSSpacing.md) }
+                                if let fullTextError { Text(fullTextError).padding(DSSpacing.md).background(DSColor.surface) }
+                            }
+                    } else {
+                        RSSArticleWebReaderView(
+                            document: document(for: article),
+                            restoreScrollY: article.readerScrollY,
+                            findRequestID: $findRequestID,
+                            onScrollYChange: { scrollY in
+                                store.updateReaderScrollY(articleId: article.id, scrollY: scrollY)
+                            },
+                            onOpenLink: { route in open(route) }
+                        )
                     }
-                )
+                }
                 .ignoresSafeArea(.container, edges: .bottom)
                 .navigationTitle(navigationTitle(for: article))
                 .toolbarTitleDisplayMode(.inline)
@@ -70,6 +80,9 @@ struct RSSArticleReaderView: View {
                         }
 
                         Menu {
+                            if fullTextError != nil || article.fullTextIsPartial == true {
+                                Button(localized("重試")) { Task { await loadFullTextIfNeeded(article) } }
+                            }
                             Button {
                                 toggleReaderMode()
                             } label: {
@@ -171,7 +184,7 @@ struct RSSArticleReaderView: View {
             fallbackText: fallbackText(for: article),
             sourceFaviconURLs: sourceFaviconURLs,
             isLoading: readerMode == .reader && isLoadingFullText,
-            errorMessage: readerMode == .reader ? fullTextError : nil
+            errorMessage: readerMode == .reader ? fullTextError ?? (article.fullTextIsPartial == true ? localized("正文尚未完整載入，已保留部分內容") : nil) : nil
         )
     }
 
@@ -218,39 +231,35 @@ struct RSSArticleReaderView: View {
     }
 
     private func loadFullTextIfNeeded(_ article: RSSArticleRecord) async {
+        if let source, RSSArticleContentService.needsOriginalPage(article, source: source) {
+            guard !isLoadingFullText, originalTarget == nil else { return }
+            isLoadingFullText = true
+            defer { isLoadingFullText = false }
+            do {
+                let target = try await RSSOpenTarget.originalArticle(article, source: source, owner: store)
+                try Task.checkCancellation()
+                if case .external(let url) = target { open(.system(url)) }
+                else { originalTarget = target }
+            } catch is CancellationError { return }
+            catch { fullTextError = error.localizedDescription }
+            return
+        }
         guard readerMode == .reader,
               !shouldPreferFeedContent(article),
-              article.fullTextHTML?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+              (article.fullTextHTML?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false || article.fullTextIsPartial == true),
               !isLoadingFullText else {
             return
         }
 
-        guard let ticket = store.requestTicket(for: article.sourceId) else { return }
         isLoadingFullText = true
         fullTextError = nil
         defer { isLoadingFullText = false }
 
         do {
-            // Legado sources with ruleContent extract the article body from the
-            // article page using the source's own rule (Rss.getContent semantics).
-            if let source, source.isLegadoRuleBased,
-               source.ruleContent?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
-               !article.link.isEmpty,
-               let html = try await LegadoRSSScraper.fetchArticleContent(source: source, articleLink: article.link, owner: store,
-                                                                        variables: article.variables ?? [:], categoryName: article.categoryName ?? "", articleTitle: article.title) {
-                guard !Task.isCancelled, store.accepts(ticket) else { return }
-                store.updateFullText(
-                    articleId: article.id,
-                    text: RSSContentSanitizer.cleanText(html),
-                    html: html
-                )
-                return
-            }
-
-            let extracted = try await RSSArticleContentLoader.loadFullText(for: article)
-            guard !Task.isCancelled, store.accepts(ticket) else { return }
-            store.updateFullText(articleId: article.id, text: extracted.text, html: extracted.html)
-        } catch {
+            let complete = try await RSSArticleContentService.load(article, source: source, store: store)
+            if !complete { fullTextError = localized("正文尚未完整載入，已保留部分內容") }
+        } catch is CancellationError { return }
+        catch {
             fullTextError = fullTextErrorMessage(for: error)
         }
     }
@@ -264,10 +273,7 @@ struct RSSArticleReaderView: View {
     }
 
     private func shouldPreferFeedContent(_ article: RSSArticleRecord) -> Bool {
-        RSSArticleHTMLSanitizer.hasSubstantialStructuredContent(
-            article.contentHTML,
-            fallbackText: article.summary
-        )
+        RSSArticleContentService.prefersDescription(article, source: source)
     }
 
     private func sourceFaviconLoadKey(for article: RSSArticleRecord) -> String {

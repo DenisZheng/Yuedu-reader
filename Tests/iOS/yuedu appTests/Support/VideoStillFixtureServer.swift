@@ -8,6 +8,7 @@ final class VideoStillFixtureServer: @unchecked Sendable {
         let method: String
         let path: String
         let headers: [String: String]
+        let body: Data
         var referer: String? { headers["referer"] }
         var description: String { "\(method) \(path)" }
     }
@@ -18,6 +19,7 @@ final class VideoStillFixtureServer: @unchecked Sendable {
         var status = "200 OK"
         var headers: [String: String] = [:]
         var requiredHeaders: [String: String] = [:]
+        var allowedMethods: Set<String> = ["GET", "HEAD"]
     }
 
     private let directory: URL
@@ -105,14 +107,22 @@ final class VideoStillFixtureServer: @unchecked Sendable {
             guard error == nil, request.count < 64 * 1024 else { self.close(connection); return }
             if let boundary = request.range(of: Data("\r\n\r\n".utf8)),
                let text = String(data: request[..<boundary.lowerBound], encoding: .utf8) {
-                self.respond(connection, headers: text)
+                let lengthLine = text.components(separatedBy: "\r\n").first { $0.lowercased().hasPrefix("content-length:") }
+                let length = lengthLine.flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? 0
+                guard length >= 0, length <= 32 * 1024 else { self.close(connection); return }
+                let bodyStart = boundary.upperBound
+                if request.count - bodyStart < length, !complete {
+                    self.receiveHeaders(connection, accumulated: request)
+                } else if request.count - bodyStart >= length {
+                    self.respond(connection, headers: text, body: request.subdata(in: bodyStart..<(bodyStart + length)))
+                } else { self.close(connection) }
             } else if !complete {
                 self.receiveHeaders(connection, accumulated: request)
             } else { self.close(connection) }
         }
     }
 
-    private func respond(_ connection: NWConnection, headers raw: String) {
+    private func respond(_ connection: NWConnection, headers raw: String, body: Data) {
         let lines = raw.components(separatedBy: "\r\n")
         let first = lines[0].split(separator: " ")
         guard first.count == 3 else { close(connection); return }
@@ -125,11 +135,10 @@ final class VideoStillFixtureServer: @unchecked Sendable {
         }
         let withinBudget = lock.withLock {
             guard received.count < 128 else { return false }
-            received.append(Request(method: method, path: path, headers: headers))
+            received.append(Request(method: method, path: path, headers: headers, body: body))
             return true
         }
         guard withinBudget else { return send(connection, status: "429 Too Many Requests", body: Data()) }
-        guard method == "GET" || method == "HEAD" else { return send(connection, status: "405 Method Not Allowed", body: Data()) }
 
         let response: Response
         if let route = routes[path] {
@@ -154,6 +163,7 @@ final class VideoStillFixtureServer: @unchecked Sendable {
                 return send(connection, status: "404 Not Found", body: Data())
             }
         }
+        guard response.allowedMethods.contains(method) else { return send(connection, status: "405 Method Not Allowed", body: Data()) }
         guard response.requiredHeaders.allSatisfy({ headers[$0.key.lowercased()] == $0.value }) else {
             return send(connection, status: "403 Forbidden", body: Data())
         }

@@ -1,4 +1,7 @@
 "CSS 選擇器示例：ul.book-list li\\n屬性提取：a@href、img@src" = "CSS 选择器示例：ul.book-list li\\\n属性提取：a@href、img@src";
+"正文尚未完整載入，已保留部分內容" = "正文尚未完整加载，已保留部分内容";
+"已達分頁上限，已保留部分文章" = "已达到分页上限，已保留部分文章";
+"分頁連結形成循環，已停止載入" = "分页链接形成循环，已停止加载";
 "Cookie 驗證登入" = "Cookie 验证登录";
 "HTTP TTS URL 模板" = "HTTP TTS URL 模板";
 "RSS 網址" = "RSS 网址";

@@ -25,11 +25,11 @@ struct RSSAlignmentFixtureTests {
         #expect(roundTrip.map(\.url) == sources.map(\.url))
     }
 
-    @Test("S1差异记录：singleUrl混合规则当前误入列表，S5必须改为动态单页入口")
+    @Test("S5：singleUrl混合规则仍使用单页入口")
     func mixedSingleURLBaseline() throws {
         let source = try #require(LegadoSourceJSONParser.parse(data: JSONSerialization.data(withJSONObject: fixture())).first)
         #expect(source.singleUrl)
-        #expect(!source.opensAsWebPage)
+        #expect(source.opensAsWebPage)
         #expect(source.isLegadoRuleBased)
     }
 

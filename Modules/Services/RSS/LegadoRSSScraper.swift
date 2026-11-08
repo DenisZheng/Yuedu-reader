@@ -21,21 +21,30 @@ enum LegadoRSSScraper {
 
     static func scrape(source: RSSSource, entry: RSSSortEntry? = nil, page: Int = 1, owner: RSSStore? = nil,
                        requestSession: URLSession = LegadoJSBridge.requestSession) async throws -> [RSSItem] {
+        try await fetchListPage(source: source, entry: entry, page: page, owner: owner, requestSession: requestSession).items
+    }
+
+    static func fetchListPage(source: RSSSource, entry: RSSSortEntry? = nil, page: Int = 1, key: String? = nil,
+                              requestURL: String? = nil, owner: RSSStore? = nil,
+                              requestSession: URLSession = LegadoJSBridge.requestSession) async throws -> RSSListPage {
         var rule = source.ruleArticles?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !rule.isEmpty else { throw ScraperError.invalidRule("ruleArticles") }
         let reverse = rule.hasPrefix("-")
         if reverse { rule.removeFirst() }
         let listRule = rule
+        let target = requestURL ?? (key == nil ? entry?.url ?? source.sourceKey : source.searchUrl ?? "")
+        guard !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ScraperError.invalidURL }
+        let scope = key.map(RSSArticleScope.search) ?? entry.map(RSSArticleScope.category) ?? .feed
         let runtime = try await RSSRuntime.make(source: source, owner: owner, requestSession: requestSession)
         return try await runtime.run { host in
-            let response = try await host.fetchRulePage(ruleURL: normalizedRequestURL(entry?.url ?? source.sourceKey), page: page, isPrimaryRequest: true)
+            let response = try await host.fetchRulePage(ruleURL: normalizedRequestURL(target), key: key, page: page, isPrimaryRequest: true)
             guard (200..<300).contains(response.status) else { throw ScraperError.httpStatus(response.status) }
             try Task.checkCancellation()
             return try await host.run { bridge in
-                try parseArticles(body: response.body, finalURL: response.url, listRule: listRule, reverse: reverse,
+                try parseListPage(body: response.body, finalURL: response.url, listRule: listRule, reverse: reverse,
                                   source: source, bridge: bridge, variables: response.variables,
-                                  scope: entry.map(RSSArticleScope.category) ?? .feed, sortName: entry?.name ?? "",
-                                  requestURL: response.requestURL)
+                                  scope: scope, sortName: entry?.name ?? key ?? "",
+                                  requestURL: response.requestURL, ruleURL: target)
             }
         }
     }
@@ -44,14 +53,33 @@ enum LegadoRSSScraper {
     static func parseArticles(body: String, finalURL: String, listRule: String, reverse: Bool,
                               source: RSSSource, bridge: ModernParserBridge, variables: [String: String] = [:],
                               scope: RSSArticleScope = .feed, sortName: String = "", requestURL: String? = nil) throws -> [RSSItem] {
-        return try SourcePerfTrace.span("rss.rules.list", "main=\(Thread.isMainThread) bytes=\(body.utf8.count)") { () throws -> [RSSItem] in
+        try parseListPage(body: body, finalURL: finalURL, listRule: listRule, reverse: reverse,
+                          source: source, bridge: bridge, variables: variables, scope: scope,
+                          sortName: sortName, requestURL: requestURL ?? finalURL, ruleURL: requestURL ?? finalURL).items
+    }
+
+    private static func parseListPage(body: String, finalURL: String, listRule: String, reverse: Bool,
+                                     source: RSSSource, bridge: ModernParserBridge, variables: [String: String],
+                                     scope: RSSArticleScope, sortName: String, requestURL: String, ruleURL: String) throws -> RSSListPage {
+        return try SourcePerfTrace.span("rss.rules.list", "main=\(Thread.isMainThread) bytes=\(body.utf8.count)") { () throws -> RSSListPage in
+        guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ScraperError.httpError }
         let page = RuleData()
         page.variableMap = variables
-        let baseURL = requestURL ?? finalURL
-        let elements = try bridge.withRuleContext(content: body, baseURL: baseURL, scope: page, redirectURL: finalURL, stage: "rss.list") {
-            $0.getElements(ruleStr: listRule)
+        let baseURL = requestURL
+        var nextURL: String?
+        let elements = try bridge.withRuleContext(content: body, baseURL: baseURL, scope: page, redirectURL: finalURL, stage: "rss.list") { engine in
+            let elements = engine.getElements(ruleStr: listRule)
+            let nextRule = source.ruleNextPage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if nextRule.uppercased() == "PAGE" { nextURL = ruleURL }
+            else if !nextRule.isEmpty {
+                // 列表next以本次请求地址为基址；文章链接仍使用真实redirectURL。
+                _ = engine.setRedirectUrl(baseURL)
+                let raw = engine.getString(ruleStr: nextRule).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !raw.isEmpty { nextURL = engine.resolveURL(raw) }
+                _ = engine.setRedirectUrl(finalURL)
+            }
+            return elements
         }
-        guard !elements.isEmpty else { throw ScraperError.noArticlesFound }
         var items: [RSSItem] = []
         items.reserveCapacity(elements.count)
         for element in elements {
@@ -70,12 +98,11 @@ enum LegadoRSSScraper {
                 article.link = link
                 let finalTitle = RSSContentSanitizer.cleanText(article.title)
                 guard !finalTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-                var html = description
-                if !image.isEmpty { html = "<img src=\"\(image)\" style=\"max-width:100%;height:auto;margin-bottom:1em;\" />" + html }
                 var item = RSSItem(id: link.isEmpty ? finalTitle : link, title: finalTitle, link: link, pubDate: date,
                                    description: description.isEmpty ? "" : RSSContentSanitizer.summary(from: description),
-                                   contentHTML: html, imageURL: image.isEmpty ? nil : image, sourceId: source.id)
+                                   contentHTML: description, imageURL: image.isEmpty ? nil : image, sourceId: source.id)
                     .identified(sourceID: source.id, scope: scope)
+                item.contentType = source.contentType ?? .web
                 item.variables = row.variableMap
                 item.categoryName = sortName.isEmpty ? nil : sortName
                 return item
@@ -83,32 +110,97 @@ enum LegadoRSSScraper {
             if let item { items.append(item) }
         }
         if reverse { items.reverse() }
-        guard !items.isEmpty else { throw ScraperError.noArticlesFound }
-        return items
+        return RSSListPage(items: items, nextURL: nextURL, requestURL: requestURL,
+                           finalURL: finalURL, variables: page.variableMap, scope: scope)
         }
     }
 
     static func fetchArticleContent(source: RSSSource, articleLink: String, owner: RSSStore? = nil,
                                     variables: [String: String] = [:], categoryName: String = "", articleTitle: String = "",
                                     requestSession: URLSession = LegadoJSBridge.requestSession) async throws -> String? {
+        let value = try await fetchArticleContentResult(source: source, articleLink: articleLink, owner: owner,
+            variables: variables, categoryName: categoryName, articleTitle: articleTitle, requestSession: requestSession)
+        guard !value.isPartial else { throw ScraperError.contentIncomplete }
+        return value.html.isEmpty ? nil : value.html
+    }
+
+    static func fetchArticleContentResult(source: RSSSource, articleLink: String, owner: RSSStore? = nil,
+                                          variables: [String: String] = [:], categoryName: String = "", articleTitle: String = "",
+                                          articleType: RSSContentType? = nil, maxPages: Int = 50,
+                                          requestSession: URLSession = LegadoJSBridge.requestSession) async throws -> RSSContentResult {
         let rule = source.ruleContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !rule.isEmpty else { return nil }
+        guard !rule.isEmpty else { return .init(html: "", variables: variables, pageCount: 0, stop: .complete) }
         let runtime = try await RSSRuntime.make(source: source, owner: owner, requestSession: requestSession)
         return try await runtime.run { host in
-            let response = try await host.fetchRulePage(ruleURL: normalizedRequestURL(articleLink), variables: variables)
-            guard (200..<300).contains(response.status) else { throw ScraperError.httpStatus(response.status) }
-            try Task.checkCancellation()
-            return try await host.run { bridge in
-                let data = RuleData()
-                data.variableMap = response.variables
-                let article = RSSArticleScriptObject(source: source, sortName: categoryName, data: data)
-                article.link = articleLink
-                article.title = articleTitle
-                let html = try bridge.withRuleContext(content: response.body, baseURL: response.requestURL, scope: data,
-                                                     redirectURL: response.url, bindings: ["rssArticle": article], stage: "rss.content") {
-                    $0.getString(ruleStr: rule)
+            let textPages = (source.contentType ?? .web) == .web && (articleType ?? source.contentType ?? .web) == .web
+            let first = try await contentPage(host: host, source: source, link: articleLink, rule: rule, variables: variables,
+                categoryName: categoryName, articleTitle: articleTitle, getNext: textPages)
+            var parts = [first.content]
+            var currentVariables = first.variables
+            var visited: Set<String> = [articleLink, first.finalURL]
+            var bodies: Set<String> = [RSSIdentity.digest([first.content])]
+            var pending = first.nextURLs
+            // Android：首个结果为多链接则逐链接合并，不再追它们的nextContentUrl；单链接顺序追踪。
+            let multiple = pending.count > 1
+            var stop: RSSContentResult.Stop = .complete
+            var totalBytes = first.content.utf8.count
+            while !pending.isEmpty {
+                try Task.checkCancellation()
+                guard parts.count < max(1, maxPages), totalBytes < 8 * 1024 * 1024 else { stop = .budget; break }
+                let next = pending.removeFirst()
+                guard visited.insert(next).inserted else { stop = .loop; if multiple { continue }; break }
+                do {
+                    let page = try await contentPage(host: host, source: source, link: next, rule: rule,
+                        variables: multiple ? first.variables : currentVariables, categoryName: categoryName,
+                        articleTitle: articleTitle, getNext: !multiple)
+                    if page.finalURL != next, visited.contains(page.finalURL) { stop = .loop; if multiple { continue }; break }
+                    visited.insert(page.finalURL)
+                    guard bodies.insert(RSSIdentity.digest([page.content])).inserted else {
+                        stop = .duplicate; if multiple { continue }; break
+                    }
+                    guard totalBytes + page.content.utf8.count <= 8 * 1024 * 1024 else { stop = .budget; break }
+                    parts.append(page.content)
+                    totalBytes += page.content.utf8.count
+                    currentVariables = page.variables
+                    if !multiple { pending = Array(page.nextURLs.prefix(1)) }
+                } catch is CancellationError { throw CancellationError() }
+                catch let requirement as SourceRuntimeRequirement { throw requirement }
+                catch {
+                    // 原始失败保留诊断类型，不记录私密请求/正文；已得到的页作为部分结果交回owner。
+                    AppLogger.parse("RSS content pagination failed", context: ["stage": "rss.content", "count": parts.count], level: .warning)
+                    stop = .failed
+                    break
                 }
-                return html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : html
+            }
+            return RSSContentResult(html: parts.joined(separator: "\n"), variables: currentVariables, pageCount: parts.count, stop: stop)
+        }
+    }
+
+    private struct ContentPage: Sendable {
+        var content: String
+        var nextURLs: [String]
+        var finalURL: String
+        var variables: [String: String]
+    }
+
+    private static func contentPage(host: SourceScriptHost<ModernParserBridge>, source: RSSSource, link: String,
+                                    rule: String, variables: [String: String], categoryName: String,
+                                    articleTitle: String, getNext: Bool) async throws -> ContentPage {
+        let response = try await host.fetchRulePage(ruleURL: normalizedRequestURL(link), variables: variables)
+        guard (200..<300).contains(response.status) else { throw ScraperError.httpStatus(response.status) }
+        try Task.checkCancellation()
+        return try await host.run { bridge in
+            let data = RuleData()
+            data.variableMap = response.variables
+            let article = RSSArticleScriptObject(source: source, sortName: categoryName, data: data)
+            article.link = link
+            article.title = articleTitle
+            return try bridge.withRuleContext(content: response.body, baseURL: response.requestURL, scope: data,
+                                               redirectURL: response.url, bindings: ["rssArticle": article], stage: "rss.content") { engine in
+                let content = engine.getString(ruleStr: rule)
+                let next = getNext ? engine.getStringList(ruleStr: source.nextContentUrl, isUrl: true) : []
+                return ContentPage(content: content, nextURLs: next.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
+                                   finalURL: response.url, variables: data.variableMap)
             }
         }
     }
@@ -154,7 +246,7 @@ enum LegadoRSSScraper {
 }
 
 enum ScraperError: LocalizedError {
-    case invalidURL, invalidRule(String), httpError, httpStatus(Int), encodingError, noArticlesFound, atsBlocked, scriptFailure, interactionRequired, runtimeStateUnavailable, executionTimedOut
+    case invalidURL, invalidRule(String), httpError, httpStatus(Int), encodingError, noArticlesFound, atsBlocked, scriptFailure, interactionRequired, runtimeStateUnavailable, executionTimedOut, contentIncomplete
     var errorDescription: String? {
         switch self {
         case .invalidURL: localized("RSS URL 無效")
@@ -168,6 +260,7 @@ enum ScraperError: LocalizedError {
         case .interactionRequired: localized("此 RSS 來源需要前台網頁或登入驗證")
         case .runtimeStateUnavailable: localized("RSS 執行狀態無法讀取，已停止執行來源")
         case .executionTimedOut: localized("RSS 來源執行逾時")
+        case .contentIncomplete: localized("正文尚未完整載入，已保留部分內容")
         }
     }
 }

@@ -1,10 +1,11 @@
 import Foundation
 import SwiftSoup
 
-struct RSSFeedFetchMetadata: Codable, Equatable {
+struct RSSFeedFetchMetadata: Codable, Equatable, Sendable {
     var etag: String?
     var lastModified: String?
     var lastFetchedAt: Date?
+    var requestFingerprint: String?
 }
 
 struct RSSFeedInfo: Codable, Equatable {

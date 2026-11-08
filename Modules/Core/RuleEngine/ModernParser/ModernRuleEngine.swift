@@ -50,6 +50,8 @@ final class ModernRuleEngine {
 
     /// Base URL for resolving relative URLs
     private(set) var baseUrl: String = ""
+    /// 部分extractor会在提取href/src时就绝对化，必须在这里使用最终文档地址。
+    private var extractionBaseURL: String { redirectUrl?.absoluteString ?? baseUrl }
 
     /// Redirect URL used for URL resolution (matching Legado)
     private(set) var redirectUrl: URL?
@@ -819,7 +821,7 @@ final class ModernRuleEngine {
         }
         let contentStr = extractorContentString(content, usesJSON: extractor is JsonExtractor)
         return try? extractor.extractValue(
-            from: contentStr, rule: rule, baseURL: baseUrl
+            from: contentStr, rule: rule, baseURL: extractionBaseURL
         )
     }
 
@@ -837,9 +839,9 @@ final class ModernRuleEngine {
             // A string list reads its last `@` step as a value, as Legado's does; the
             // extractor's `extractList` also serves `getElements` and cannot tell.
             if let jsoup = extractor as? JsoupDefaultExtractor {
-                return try jsoup.extractValueList(from: contentStr, rule: rule, baseURL: baseUrl)
+                return try jsoup.extractValueList(from: contentStr, rule: rule, baseURL: extractionBaseURL)
             }
-            return try extractor.extractList(from: contentStr, rule: rule, baseURL: baseUrl)
+            return try extractor.extractList(from: contentStr, rule: rule, baseURL: extractionBaseURL)
         } catch {
             AppLogger.parse("getStringList extraction failed", context: [
                 "rule": String(rule.prefix(120)),
@@ -934,7 +936,7 @@ final class ModernRuleEngine {
         }
 
         return try? extractor.extractList(
-            from: contentStr, rule: elementRule, baseURL: baseUrl
+            from: contentStr, rule: elementRule, baseURL: extractionBaseURL
         )
     }
 
@@ -1027,7 +1029,7 @@ final class ModernRuleEngine {
     /// Legado's `BookChapter.getAbsoluteURL` does. Java's `URL` leaves them where they are;
     /// `URL(string:relativeTo:)` percent-encodes them into the path, so a chapter or next page
     /// written `/p2,{"method":"POST"}` reached AnalyzeUrl without its options.
-    private func resolveURL(_ url: String) -> String {
+    func resolveURL(_ url: String) -> String {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         let lowered = trimmed.lowercased()

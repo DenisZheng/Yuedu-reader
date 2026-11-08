@@ -121,23 +121,23 @@ struct LegadoRSSCompatTests {
         #expect(!source.opensAsWebPage)
     }
 
-    @Test("singleUrl source with ruleArticles stays a rule-based list")
+    @Test("singleUrl优先于同时存在的ruleArticles")
     func ruleBasedSourceNotWebPage() throws {
         let json = """
         [{"sourceName":"列表","sourceUrl":"https://x.example/","singleUrl":true,"ruleArticles":"$.data[*]"}]
         """.data(using: .utf8)!
         let source = try #require(try LegadoSourceJSONParser.parse(data: json).first)
-        #expect(!source.opensAsWebPage)
+        #expect(source.opensAsWebPage)
         #expect(source.isLegadoRuleBased)
     }
 
-    @Test("source with sortUrl categories is not a web page")
+    @Test("singleUrl优先于同时存在的分类")
     func sortURLSourceNotWebPage() throws {
         let json = """
         [{"sourceName":"仓库","sourceUrl":"https://x.example/","singleUrl":true,"sortUrl":"a::https://x.example/a","ruleArticles":"$.data[*]"}]
         """.data(using: .utf8)!
         let source = try #require(try LegadoSourceJSONParser.parse(data: json).first)
-        #expect(!source.opensAsWebPage)
+        #expect(source.opensAsWebPage)
         #expect(source.hasSortCategories)
     }
 
@@ -281,6 +281,6 @@ struct LegadoRSSCompatTests {
         )
 
         #expect(items.first?.imageURL == "https://site.example/img/1.jpg")
-        #expect(items.first?.contentHTML.contains(#"<img src="https://site.example/img/1.jpg""#) == true)
+        #expect(items.first?.contentHTML.isEmpty == true, "列表封面不能伪造description，阻止后续正文规则")
     }
 }

@@ -22,14 +22,14 @@ struct RSSToolbarVoiceOverTests {
     /// order. Where the bars sit varies: on iOS 17 the items are in `UINavigationBar`; from iOS 26
     /// in a floating bar beside it, which runs down the side on iPhone Duo. The bars are UIKit's
     /// and join the tree after the sheet's SwiftUI content, so this waits for the buttons themselves.
-    private func barButtons(in window: UIWindow, count: Int) async throws -> [NSObject] {
+    private func barButtons(in window: UIWindow, count: Int, includingSearch: Bool = false) async throws -> [NSObject] {
         func navigationController(in controller: UIViewController) -> UINavigationController? {
             controller as? UINavigationController ?? controller.children.lazy.compactMap(navigationController(in:)).first
         }
         func buttons(in object: NSObject, outside page: UIView) -> [NSObject] {
             if object === page { return [] }
             if object.isAccessibilityElement {
-                return object.accessibilityTraits.contains(.button) ? [object] : []
+                return object.accessibilityTraits.contains(.button) || (includingSearch && object.accessibilityTraits.contains(.searchField)) ? [object] : []
             }
             if let children = object.accessibilityElements as? [NSObject] {
                 return children.flatMap { buttons(in: $0, outside: page) }
@@ -99,20 +99,28 @@ struct RSSToolbarVoiceOverTests {
         return (source, item.id)
     }
 
-    /// From iOS 26 a feed's search field folds into the system's search button in the bottom bar
-    /// (`RSSFeedSearchBar`), which VoiceOver reaches first.
-    private var feedToolbar: [String] {
-        if #available(iOS 26.0, *) { [localized("搜索"), localized("篩選")] } else { [localized("篩選")] }
+    /// 系统可能展开为输入框，而不是搜索按钮；按实际搜索语义验证，不能漏掉可用控件。
+    private func spokenFeedControls(of view: some View) async throws {
+        try await withAutomation {
+            let window = try host(view)
+            defer { window.isHidden = true; window.rootViewController = nil }
+            let controls = try await barButtons(in: window, count: 2, includingSearch: true)
+            let fields = controls.filter { $0.accessibilityTraits.contains(.searchField) }
+            #expect(fields.map(\.accessibilityLabel) == [localized("搜尋文章")])
+            expectSpoken(controls.filter { $0.accessibilityTraits.contains(.button) }, [localized("篩選")])
+            let field = try #require(fields.first as? UITextField)
+            #expect(field.becomeFirstResponder(), "原生搜索输入必须能获得键盘焦点")
+            field.insertText("fixture query")
+            #expect(field.text == "fixture query")
+            field.resignFirstResponder()
+        }
     }
 
     @Test("今日 feed: filter")
     func smartFeed() async throws {
         try await withStore { store in
             _ = try seedFeed(in: store)
-            try await spokenBarButtons(
-                of: NavigationStack { RSSSmartFeedView(kind: .today, store: store) },
-                expected: feedToolbar
-            )
+            try await spokenFeedControls(of: NavigationStack { RSSSmartFeedView(kind: .today, store: store) })
         }
     }
 
@@ -120,10 +128,7 @@ struct RSSToolbarVoiceOverTests {
     func feed() async throws {
         try await withStore { store in
             let (source, _) = try seedFeed(in: store)
-            try await spokenBarButtons(
-                of: NavigationStack { RSSFeedView(source: source, store: store) },
-                expected: feedToolbar
-            )
+            try await spokenFeedControls(of: NavigationStack { RSSFeedView(source: source, store: store) })
         }
     }
 

@@ -181,335 +181,216 @@ struct RSSSmartFeedView: View {
 
 struct RSSFeedView: View {
     let source: RSSSource
-
-    @StateObject private var fetcher = RSSFetcher()
+    @Environment(\.openURL) private var openURL
     @StateObject private var store: RSSStore
-
+    @State private var session: RSSFeedSession
     @State private var filter: RSSArticleTimelineFilter = .all
     @State private var searchText = ""
-    @State private var selectedArticleID: String?
-
-    // Legado compatibility state
+    @State private var submittedSearch: String?
     @State private var selectedSortEntry: RSSSortEntry?
-    @State private var presentedWebPageURL: InAppWebURL?
+    @State private var selectedArticleID: String?
+    private struct PagePresentation: Identifiable {
+        let id = UUID()
+        var target: RSSOpenTarget
+    }
+    @State private var presentation: PagePresentation?
     @State private var autoOpenedWebPage = false
-    /// IDs fetched for the currently selected category; nil = show everything.
-    @State private var currentCategoryIDs: Set<String>?
 
     init(source: RSSSource, store: RSSStore = .shared) {
         self.source = source
         _store = StateObject(wrappedValue: store)
+        _session = State(initialValue: RSSFeedSession(source: source, store: store))
     }
 
     private let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .none
-        f.timeStyle = .short
-        return f
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
     }()
 
-    private var currentSource: RSSSource {
-        store.sources.first { $0.id == source.id } ?? source
+    private struct LoadKey: Hashable {
+        var revision: UInt64
+        var category: String?
+        var search: String?
     }
-
+    private var loadKey: LoadKey {
+        .init(revision: store.configurationRevision, category: selectedSortEntry?.id, search: submittedSearch)
+    }
+    private var currentSource: RSSSource { store.source(id: source.id) ?? source }
+    private var supportsRemoteSearch: Bool {
+        currentSource.searchUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
     private var articles: [RSSArticleRecord] {
-        var records = store.articles(for: currentSource.id)
-        if let ids = currentCategoryIDs, !ids.isEmpty {
-            records = records.filter { ids.contains($0.id) }
-        }
-        return filter.apply(to: records, query: searchText)
+        let records = store.articles(for: source.id, scope: session.scope)
+        return filter.apply(to: records, query: supportsRemoteSearch ? "" : searchText)
     }
+    private var unreadCount: Int { store.unreadCount(for: source.id) }
 
-    private var unreadCount: Int {
-        store.unreadCount(for: currentSource.id)
-    }
-
-    private var showsCategoryPicker: Bool {
-        fetcher.sortEntries.count > 1
-    }
     var body: some View {
         List {
-            if let webPageURL = fetcher.webPageURL {
-                webPageSourceContent(url: webPageURL)
-
-            } else if fetcher.isLoading && articles.isEmpty {
-                HStack {
-                    Spacer()
-                    ProgressView()
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, minHeight: 300)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-
-            } else if let errorMsg = fetcher.error, articles.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(DSFont.largeTitle)
-                        .foregroundColor(DSColor.textSecondary)
-
-                    Text(errorMsg)
-                        .foregroundColor(DSColor.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-
-                    if let fallbackURL = fetcher.webPageFallbackURL {
-                        Button {
-                            presentedWebPageURL = fallbackURL
-                        } label: {
-                            Label(localized("以網頁開啟"), systemImage: "safari")
-                                .font(DSFont.subheadline.weight(.semibold))
-                        }
-                        .buttonStyle(.onAccentProminent)
-                        .padding(.top, 4)
+            if session.entries.count > 1 {
+                Picker(localized("分類"), selection: Binding(
+                    get: { selectedSortEntry ?? session.entries.first },
+                    set: { selectedSortEntry = $0; submittedSearch = nil; searchText = "" }
+                )) {
+                    ForEach(session.entries) { entry in
+                        Text(entry.name.isEmpty ? localized("全部") : entry.name).tag(Optional(entry))
                     }
                 }
-                .frame(maxWidth: .infinity, minHeight: 300)
+                .pickerStyle(.menu)
                 .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
+            }
 
+            if let target = session.openTarget {
+                webPageSourceContent(target: target)
             } else if articles.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "newspaper")
-                        .font(DSFont.largeTitle)
-                        .foregroundColor(DSColor.textSecondary)
-
-                    Text(emptyMessage)
-                        .foregroundColor(DSColor.textSecondary)
+                if session.isLoading {
+                    ProgressView().frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                } else {
+                    ContentUnavailableView {
+                        UnavailableLabel(session.error == nil ? localized("目前沒有文章") : localized("重新載入"),
+                                         systemImage: session.error == nil ? "newspaper" : "exclamationmark.triangle")
+                    } description: {
+                        if let error = session.error { Text(error) }
+                    } actions: {
+                        if session.canRetry {
+                            Button(localized("重試")) { Task { await session.retry() } }
+                        }
+                        if let url = session.webPageFallbackURL {
+                            Button(localized("以網頁開啟")) { show(.request(URLRequest(url: url.url))) }
+                        }
+                    }
+                    .listRowBackground(Color.clear)
                 }
-                .frame(maxWidth: .infinity, minHeight: 300)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-
             } else {
                 ForEach(articles) { article in
                     Button {
                         store.markRead(articleId: article.id, isRead: true)
                         selectedArticleID = article.id
                     } label: {
-                        RSSArticleRow(
-                            source: currentSource,
-                            article: article,
-                            timeFormatter: timeFormatter
-                        )
+                        RSSArticleRow(source: currentSource, article: article, timeFormatter: timeFormatter)
                     }
+                    .accessibilityIdentifier("rss.article.\(article.id)")
                     .buttonStyle(.plain)
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .swipeActions(edge: .leading) {
-                        Button {
-                            store.toggleFavorite(articleId: article.id)
-                        } label: {
-                            Label(
-                                article.isFavorite ? localized("取消收藏") : localized("收藏"),
-                                systemImage: article.isFavorite ? "star.slash" : "star"
-                            )
-                        }
-                        .tint(.yellow)
+                        Button { store.toggleFavorite(articleId: article.id) } label: {
+                            Label(article.isFavorite ? localized("取消收藏") : localized("收藏"),
+                                  systemImage: article.isFavorite ? "star.slash" : "star")
+                        }.tint(DSColor.accent)
                     }
                     .swipeActions(edge: .trailing) {
-                        Button {
-                            store.markRead(articleId: article.id, isRead: !article.isRead)
-                        } label: {
-                            Label(
-                                article.isRead ? localized("標為未讀") : localized("標為已讀"),
-                                systemImage: article.isRead ? "envelope.badge" : "envelope.open"
-                            )
-                        }
-                        .tint(DSColor.swipeAction)
+                        Button { store.markRead(articleId: article.id, isRead: !article.isRead) } label: {
+                            Label(article.isRead ? localized("標為未讀") : localized("標為已讀"),
+                                  systemImage: article.isRead ? "envelope.badge" : "envelope.open")
+                        }.tint(DSColor.swipeAction)
                     }
                 }
             }
-        }
-        .softScrollEdges()
-        .listStyle(.plain)
-        .refreshable {
-            await refresh()
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if showsCategoryPicker {
-                categoryPicker
+
+            if session.isLoading {
+                Button(localized("取消")) { session.cancel() }
+                    .accessibilityIdentifier("rss.page.cancel")
+                    .listRowBackground(Color.clear)
+            } else if !articles.isEmpty, let error = session.error {
+                Section {
+                    Button(localized("重試")) { Task { await session.retry() } }
+                        .accessibilityIdentifier("rss.page.retry")
+                } footer: { Text(error).dsSectionFooter() }
+                .listRowBackground(Color.clear)
+            } else if session.canLoadMore {
+                Button(localized("載入更多")) { Task { await session.nextPage() } }
+                    .accessibilityIdentifier("rss.page.next")
+                    .listRowBackground(Color.clear)
+            }
+            if session.wasCancelled {
+                Text(localized("已取消")).foregroundStyle(DSColor.textSecondary)
+                    .listRowBackground(Color.clear)
+                if session.canRetry {
+                    Button(localized("重試")) { Task { await session.retry() } }
+                        .listRowBackground(Color.clear)
+                }
+            }
+            if session.end == .budget || session.end == .loop {
+                Text(session.end == .budget ? localized("已達分頁上限，已保留部分文章") : localized("分頁連結形成循環，已停止載入"))
+                    .font(DSFont.footnote)
+                    .foregroundStyle(DSColor.textSecondary)
+                    .listRowBackground(Color.clear)
             }
         }
-        .sheet(item: $presentedWebPageURL) { url in
-            SafariView(url: url)
-        }
+        .listStyle(.plain)
+        .softScrollEdges()
         .toolbarTitleDisplayMode(.inline)
         .themedAppSurface(for: .rss)
         .hidesRootTabBar()
         .navigationDestination(item: $selectedArticleID) { articleID in
-            RSSArticleReaderView(articleID: articleID)
+            RSSArticleReaderView(articleID: articleID, store: store)
         }
+        .sheet(item: $presentation) { RSSSourcePageSheet(source: currentSource, target: $0.target, owner: store) }
         .rssFeedSearchBarIfAvailable(searchText: $searchText)
+        .onSubmit(of: .search) {
+            if supportsRemoteSearch { submittedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
+        .onChange(of: searchText) { _, value in
+            if value.isEmpty { submittedSearch = nil }
+        }
+        .refreshable { await refresh() }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text(currentSource.name)
-                        .font(DSFont.headline.weight(.semibold))
-                        .foregroundColor(DSColor.textPrimary)
-                        .lineLimit(1)
-
-                    Text(String(format: localized("%d 未讀"), unreadCount))
-                        .font(DSFont.caption)
-                        .foregroundColor(DSColor.textSecondary)
+                VStack(spacing: DSSpacing.xs) {
+                    Text(currentSource.name).font(DSFont.headline).lineLimit(1)
+                    Text(String(format: localized("%d 未讀"), unreadCount)).font(DSFont.caption)
                 }
             }
-
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Picker("", selection: $filter) {
-                        ForEach(RSSArticleTimelineFilter.allCases) { filter in
-                            Label(filter.title, systemImage: filter.systemImage)
-                                .tag(filter)
+                    Picker(localized("篩選"), selection: $filter) {
+                        ForEach(RSSArticleTimelineFilter.allCases) { value in
+                            Label(value.title, systemImage: value.systemImage).tag(value)
                         }
                     }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-
-                    Divider()
-
                     Button {
                         Task { await refresh() }
                     } label: {
                         Label(localized("刷新訂閱"), systemImage: "arrow.clockwise")
-                    }
-                    .disabled(fetcher.isLoading)
+                    }.disabled(session.isLoading)
                 } label: {
                     Label(localized("篩選"), systemImage: "line.3.horizontal.decrease")
                         .labelStyle(.iconOnly)
-                        .font(DSFont.toolbarIcon)
-                }
-                .foregroundColor(DSColor.textPrimary)
-                .id("\(Locale.autoupdatingCurrent.identifier)_rss_filter")
-            }
-        }
-        .task(id: source.id) {
-            // Sources with category tabs or web-page semantics need a fetch to
-            // resolve their entries even when cached articles exist.
-            if store.articles(for: source.id).isEmpty
-                || currentSource.hasSortCategories
-                || currentSource.opensAsWebPage {
-                await refresh()
-            }
-        }
-    }
-
-    private var emptyMessage: String {
-        switch filter {
-        case .all:
-            return localized("目前沒有文章")
-        case .unread:
-            return localized("沒有未讀文章")
-        case .read:
-            return localized("沒有已讀文章")
-        case .favorite:
-            return localized("沒有收藏文章")
-        }
-    }
-
-    // MARK: - Legado web-page source
-
-    @ViewBuilder
-    private func webPageSourceContent(url: InAppWebURL) -> some View {
-        VStack(spacing: 14) {
-            RSSFaviconView(source: currentSource, size: 48)
-
-            Text(currentSource.name)
-                .font(DSFont.headline)
-                .foregroundColor(DSColor.textPrimary)
-
-            Text(localized("此訂閱源以網頁方式瀏覽"))
-                .font(DSFont.subheadline)
-                .foregroundColor(DSColor.textSecondary)
-                .multilineTextAlignment(.center)
-
-            Button {
-                presentedWebPageURL = url
-            } label: {
-                Label(localized("開啟網頁"), systemImage: "safari")
-                    .font(DSFont.subheadline.weight(.semibold))
-            }
-            .buttonStyle(.onAccentProminent)
-        }
-        .frame(maxWidth: .infinity, minHeight: 300)
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-    }
-
-    // MARK: - Legado category tabs (sortUrl)
-
-    private var categoryPicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: DSSpacing.sm) {
-                ForEach(fetcher.sortEntries) { entry in
-                    let isSelected = (selectedSortEntry ?? fetcher.sortEntries.first) == entry
-                    Button {
-                        guard selectedSortEntry != entry else { return }
-                        selectedSortEntry = entry
-                        Task { await refresh() }
-                    } label: {
-                        Text(entry.name.isEmpty ? localized("全部") : entry.name)
-                            .font(DSFont.subheadline.weight(.medium))
-                            .padding(.horizontal, DSSpacing.md)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule().fill(isSelected ? DSColor.accent : DSColor.neutralControlFill)
-                            )
-                            .foregroundStyle(isSelected ? AnyShapeStyle(DSColor.textOnAccent) : AnyShapeStyle(DSColor.textPrimary))
-                    }
-                    .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, DSSpacing.lg)
-            .padding(.vertical, DSSpacing.sm)
         }
-        .background(.bar)
+        .task(id: loadKey) {
+            if currentSource.usesLegadoRuntime || articles.isEmpty || submittedSearch != nil { await refresh() }
+        }
+        .onChange(of: session.openTarget) { _, target in
+            if let target, !autoOpenedWebPage { autoOpenedWebPage = true; show(target) }
+        }
+        .onDisappear { session.cancel() }
     }
 
     private func refresh() async {
-        let requestedSource = currentSource
-        let requestedEntry = selectedSortEntry
-        guard let ticket = store.requestTicket(for: requestedSource.id) else { return }
-        await fetcher.fetchItems(
-            from: requestedSource,
-            metadata: store.feedMetadata(for: requestedSource.id),
-            sortEntry: requestedEntry,
-            owner: store
-        )
-        guard !Task.isCancelled, store.accepts(ticket),
-              store.source(id: requestedSource.id) == requestedSource,
-              selectedSortEntry == requestedEntry else { return }
+        await session.refresh(entry: selectedSortEntry, key: submittedSearch)
+    }
 
-        if selectedSortEntry == nil, fetcher.sortEntries.count > 1 {
-            selectedSortEntry = fetcher.sortEntries.first
-        }
+    private func show(_ target: RSSOpenTarget) {
+        if case .external(let url) = target {
+            openURL(url) { accepted in if !accepted { RSSLinkRoute.logUnhandled(url) } }
+        } else { presentation = PagePresentation(target: target) }
+    }
 
-        if fetcher.error == nil {
-            store.applyResolvedFeedURL(fetcher.resolvedFeedURL, homepageURL: fetcher.resolvedHomepageURL, to: currentSource.id)
-            let notificationSource = store.source(id: currentSource.id) ?? currentSource
-            let newArticles: [RSSArticleRecord]
-            if let response = fetcher.response {
-                newArticles = store.applyFeedResponse(response, for: currentSource.id)
-            } else {
-                newArticles = store.mergeFetchedItems(fetcher.items, for: currentSource.id,
-                                                      scope: selectedSortEntry.map(RSSArticleScope.category) ?? .feed)
-            }
-            RSSNotificationManager.shared.notifyNewArticles(newArticles, source: notificationSource)
+    private func webPageSourceContent(target: RSSOpenTarget) -> some View {
+        VStack(spacing: DSSpacing.md) {
+            Text(currentSource.name).font(DSFont.headline)
+            Text(localized("此訂閱源以網頁方式瀏覽")).foregroundStyle(DSColor.textSecondary)
+            Button(localized("開啟網頁")) { show(target) }.buttonStyle(.onAccentProminent)
         }
-
-        // Category tabs show only the articles fetched for the selected tab.
-        if fetcher.sortEntries.count > 1, !fetcher.items.isEmpty {
-            currentCategoryIDs = Set(fetcher.items.map(\.id))
-        } else {
-            currentCategoryIDs = nil
-        }
-
-        // Legado singleUrl sources jump straight into the web page on first entry.
-        if let url = fetcher.webPageURL, !autoOpenedWebPage {
-            autoOpenedWebPage = true
-            presentedWebPageURL = url
-        }
+        .frame(maxWidth: .infinity)
+        .listRowBackground(Color.clear)
     }
 }
 

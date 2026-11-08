@@ -197,17 +197,15 @@ struct RSSSource: Codable, Identifiable, Equatable, Sendable {
 
     /// 即使条目由XML/JSON Feed解析，Legado请求的jsLib/认证/选项仍由共享运行时执行。
     var usesLegadoRuntime: Bool {
-        hasLegadoSignature || hasSortCategories || jsLib?.isEmpty == false || loginCheckJs?.isEmpty == false
+        hasLegadoSignature || hasSortCategories || isLegadoRuleBased || startHtml?.isEmpty == false || searchUrl?.isEmpty == false || jsLib?.isEmpty == false || loginCheckJs?.isEmpty == false
             || concurrentRate?.isEmpty == false || url.lowercased().hasPrefix("@js:")
             || url.hasPrefix("<js>") || AnalyzeUrl.stripOptions(from: url) != url
     }
 
-    /// Legado semantics: singleUrl sources open sourceUrl directly as a web page
-    /// (no feed fetch, no article list). Restricted to Legado-flavored sources so
-    /// hand-added feeds whose stored singleUrl was polluted by the old default
-    /// (true) keep their normal feed behavior.
+    /// singleUrl优先于列表规则/分类；具体启动URL交由RSSOpenTarget动态求值。
+    /// 保留对旧默认值污染的普通手工Feed的兼容，不能把它们误当规则网页。
     var opensAsWebPage: Bool {
-        singleUrl && !isLegadoRuleBased && !hasSortCategories && hasLegadoSignature
+        singleUrl && usesLegadoRuntime
     }
 
     /// Best-effort URL for opening this source as a web page.
@@ -253,7 +251,7 @@ struct RSSSource: Codable, Identifiable, Equatable, Sendable {
 // MARK: - Legado sortUrl entries
 
 /// One Legado RSS category tab: `名称::URL` from sortUrl.
-struct RSSSortEntry: Equatable, Identifiable {
+struct RSSSortEntry: Hashable, Identifiable, Sendable {
     var name: String
     var url: String
     var id: String { "\(name)::\(url)" }
@@ -350,6 +348,7 @@ struct RSSItem: Codable, Identifiable, Sendable {
     private(set) var id: String
     private(set) var rawKey: String?
     private(set) var scope: RSSArticleScope?
+    var contentType: RSSContentType?
     var categoryName: String?
     var variables: [String: String]?
     var media: [RSSMediaReference]?
@@ -475,6 +474,7 @@ struct RSSArticleRecord: Codable, Identifiable, Equatable, Sendable {
     var legacyID: String?
     var rawKey: String?
     var scope: RSSArticleScope?
+    var contentType: RSSContentType?
     var categoryName: String?
     var variables: [String: String]?
     var media: [RSSMediaReference]?
@@ -491,13 +491,14 @@ struct RSSArticleRecord: Codable, Identifiable, Equatable, Sendable {
     var fullText: String?
     var fullTextHTML: String?
     var fullTextFetchedAt: Date?
+    var fullTextIsPartial: Bool?
     var isRead: Bool = false
     var isFavorite: Bool = false
     var lastOpenedAt: Date?
     var readerScrollY: Double = 0
 
     private enum CodingKeys: String, CodingKey {
-        case id, identityVersion, legacyID, rawKey, scope, categoryName, variables, media
+        case id, identityVersion, legacyID, rawKey, scope, contentType, categoryName, variables, media, fullTextIsPartial
         case sourceId
         case title
         case link
@@ -527,6 +528,8 @@ struct RSSArticleRecord: Codable, Identifiable, Equatable, Sendable {
         }
         rawKey = try container.decodeIfPresent(String.self, forKey: .rawKey)
         scope = try container.decodeIfPresent(RSSArticleScope.self, forKey: .scope)
+        contentType = try container.decodeIfPresent(RSSContentType.self, forKey: .contentType)
+        fullTextIsPartial = try container.decodeIfPresent(Bool.self, forKey: .fullTextIsPartial)
         categoryName = try container.decodeIfPresent(String.self, forKey: .categoryName)
         variables = try container.decodeIfPresent([String: String].self, forKey: .variables)
         media = try container.decodeIfPresent([RSSMediaReference].self, forKey: .media)
@@ -561,6 +564,7 @@ struct RSSArticleRecord: Codable, Identifiable, Equatable, Sendable {
         identityVersion = RSSIdentity.version
         rawKey = item.rawKey ?? item.id
         scope = item.scope ?? .feed
+        contentType = item.contentType
         categoryName = item.categoryName
         variables = item.variables
         media = item.media

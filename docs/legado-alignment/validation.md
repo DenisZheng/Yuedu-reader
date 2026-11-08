@@ -383,3 +383,19 @@ App/扩展编译、S0相关RSS回归和上述UI操作已有实际通过证据；
 - `RSSForegroundRuntimeTests`、`RSSArticleScriptObjectTests`进入S4门槛，原同源取消/重建使用100次循环。五语文案、shell/Python解析、文档链接与`git diff --check`通过。
 
 本地补充验收恢复通过，中文提交后继续S5。**旧26.2系统二进制没有被修复；26.2真机/最低iOS和发布兼容仍未放行。** 本次没有生产JSC补丁或初始化/安全策略绕过，所有诊断探针已撤回。
+
+## S5：打开优先级、分类/远程搜索与分页
+
+完整合同、RED/GREEN和边界见[S5记录](s5-browsing.md)。新增 `scripts/validate_reader_fork_s5.sh`，沿用正常Reader-Fork-Dev、动态设备/工具链和零失败/跳过门槛；每个选定suite/指定用例必须实际执行。
+
+- `YUEDU_EVIDENCE_DIR=/tmp/readerfork-s5-accepted-iphone bash scripts/validate_reader_fork_s5.sh`：iPhone18 Pro Max / iOS27.2(24B8117)，**268项、38 suites、0失败/跳过**。
+- `YUEDU_DEST="$(bash scripts/sim.sh dest iPad)" YUEDU_EVIDENCE_DIR=/tmp/readerfork-s5-accepted-ipad bash scripts/validate_reader_fork_s5.sh`：iPad Pro13-inch(M5) / 同runtime，**268项、38 suites、0失败/跳过**。
+- 工具链由 `scripts/sim.sh xcode` 解析，Xcode27.2 / SDK27.2，Swift6；没有更换DerivedData、清除模拟器数据或使用ASan/隔离宿主替代门槛。
+- 覆盖14项浏览合同、6项实际页面合同、10项搜索/工具栏VoiceOver，以及S2–S4的238项共享运行时、导入、状态/备份回归。实际搜索Return与加载更多产生了对应HTTP请求及作用域内容，不只检查控件存在。
+- 合法空页、singleUrl优先、正文分页、动态URL validator、WebKit跨origin私有头、redirectURL提取基址均先复现再修复。私有头通过共享请求执行器隔离，响应送入WebKit，不重复POST或建立不受限代理。部分正文持久保存且保留未完成标记。
+- iPad旧测试事件错误在首次267项门槛中失败，改用UITextField原生主动作后重新完整验收；后续补充redirect基址用例发现并修复真实提取层问题，最终以268项结果为准。
+- 五语Localizable各4013键通过；新页面有Preview。提交前检查shell/内嵌Python、文档链接/编码、源包哈希和 `git diff --check`。
+
+未验证/后续：完整交互规则网页、charset/bodyJs/登录与子资源认证、Cookie回写、网页桥/黑白名单和媒体状态仍属S6；真实站点、音频时钟、iOS17/真机、DRM、iCloud签名及Xcode26.x archive尚未通过。首文档能显示不替代这些门槛。
+
+回滚保持S4基线及RSS数据：整体撤回S5路由/分页与共享层修改；新增可选字段兼容旧文件，降级前保留备份并只处理被partial标记的全文缓存，不能把部分结果当完整文章，也不清空来源/阅读状态。原始源包、Android基准和签名配置未修改；不push或启动云构建。
