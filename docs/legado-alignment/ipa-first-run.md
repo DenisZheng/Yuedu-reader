@@ -39,3 +39,19 @@ note: task-isolated 'prepare' is captured by a main actor-isolated closure
 - 修正版仍需下一轮云归档、IPA结构和checksum验证；本小节不把#35标为完成。
 
 该修正回滚只涉及回调actor标注及说明，不改变签名、最低系统、包版本或App数据。
+
+### Swift6.3.3 IRGen崩溃
+
+前述修正已提交并Push为 `79b170a5`。后续 [run 42456748792](https://github.com/DenisZheng/Yuedu-reader/actions/runs/42456748792) 不再出现prepare隔离诊断，但Swift6.3.3在Release IR生成时崩溃。完整证据在 `/tmp/readerfork-ipa-42456748792/failure/`：
+
+```text
+While emitting IR SIL function "@$sSdScA_pSgIeAghyg_SdIeAghn_TR"
+SyncCallEmission::setArgs
+llvm::SmallVectorBase<unsigned int>::grow_pod
+```
+
+`swift-demangle`说明该符号是Double参数、isolated(any)/Sendable函数从直接参数到泛型间接参数的reabstraction thunk。仓库唯一直接透传getter/setter的 `Binding(get: get, set: set)` 位于ChapterTitleInspectorView.doubleBinding。最小示例对比显示：直接透传会产生这一类isolated(any)转换thunk，而 `Binding(get: { get() }, set: { value in set(value) })` 不产生它。保留原来的MainActor/Sendable合同和同步调用，不添加actor跳转或不安全隔离豁免。
+
+- 原生字号UISlider的valueChanged事件验证Double绑定的读取、更新及恢复：与标题字重AX、模型回归一起9项/2 suites通过，`/tmp/readerfork-ipa-binding-native.xcresult`。
+- 首版新增测试用NSObject默认accessibilityIncrement未发原生控件事件而失败，修正为实际UISlider值和valueChanged；没有修改生产交互来迁就测试。该项不冒充VoiceOver手势回归。
+- 这是针对明确IRGen转换的最小代码修正；本机工具链不能复现Swift6.3.3崩溃，仍须修正后真实云archive证明，不能仅以SIL对比或9项测试关闭#35。

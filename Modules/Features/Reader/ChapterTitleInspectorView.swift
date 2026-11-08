@@ -656,7 +656,8 @@ struct ChapterTitleInspectorView: View {
     }
 
     private func doubleBinding(get: @escaping @MainActor @Sendable () -> Double, set: @escaping @MainActor @Sendable (Double) -> Void) -> Binding<Double> {
-        Binding(get: get, set: set)
+        // 保留MainActor调用，不直接把函数值转交给Binding，避开Swift 6.3的isolated(any)泛型转换崩溃。
+        Binding(get: { get() }, set: { value in set(value) })
     }
 
     private func colorBinding(hex: UInt32, update: @escaping (UInt32) -> Void) -> Binding<Color> {

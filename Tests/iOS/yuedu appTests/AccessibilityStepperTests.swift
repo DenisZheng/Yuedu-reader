@@ -240,6 +240,38 @@ struct StepperRowVoiceOverTests {
         try await expectStepper(localized("字重"), in: ChapterTitleInspectorView(model: model), height: 6000)
     }
 
+    @Test("章节标题Double绑定经原生字号滑块读写，保持主actor模型更新")
+    func chapterTitleFontSizeBinding() async throws {
+        let model = ChapterTitleDesignerModel(initial: .default, onSave: { _ in })
+        let layer = try #require(model.draft.layers.first)
+        model.selectedLayerID = layer.id
+        func fontSize() -> Double {
+            let current = model.draft.layers.first { $0.id == layer.id } ?? layer
+            let style = model.activeAppearance == .light ? current.lightStyle : current.darkStyle
+            return style.ruleStyle.text.fontSize ?? 24
+        }
+        let initial = fontSize()
+        try await withAccessibilityHost(in: ChapterTitleInspectorView(model: model), height: 6000) { host in
+            var slider: NSObject?
+            #expect(await eventually(host) {
+                slider = steppers(named: localized("字號"), in: host).first
+                return slider != nil
+            })
+            let control = try #require(slider as? UISlider)
+            let oldValue = control.accessibilityValue
+            // 原生Slider的值变更通过valueChanged提交；NSObject默认accessibilityIncrement不发控件事件。
+            control.setFraction((initial + 1 - 8) / (96 - 8))
+            control.sendActions(for: .valueChanged)
+            #expect(await eventually(host) { fontSize() == initial + 1 })
+            #expect(await eventually(host) {
+                steppers(named: localized("字號"), in: host).first?.accessibilityValue != oldValue
+            })
+            control.setFraction((initial - 8) / (96 - 8))
+            control.sendActions(for: .valueChanged)
+            #expect(await eventually(host) { fontSize() == initial })
+        }
+    }
+
     @MainActor @Observable
     final class Chapter {
         var index = 2
