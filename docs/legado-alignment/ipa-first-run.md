@@ -54,4 +54,24 @@ llvm::SmallVectorBase<unsigned int>::grow_pod
 
 - 原生字号UISlider的valueChanged事件验证Double绑定的读取、更新及恢复：与标题字重AX、模型回归一起9项/2 suites通过，`/tmp/readerfork-ipa-binding-native.xcresult`。
 - 首版新增测试用NSObject默认accessibilityIncrement未发原生控件事件而失败，修正为实际UISlider值和valueChanged；没有修改生产交互来迁就测试。该项不冒充VoiceOver手势回归。
-- 这是针对明确IRGen转换的最小代码修正；本机工具链不能复现Swift6.3.3崩溃，仍须修正后真实云archive证明，不能仅以SIL对比或9项测试关闭#35。
+- 这是针对明确IRGen转换的最小代码修正；本机工具链不能复现Swift6.3.3崩溃，不能仅以SIL对比或9项测试关闭#35。修正已提交并Push为 `f25a18af`，随后完成下列真实云验收。
+
+## 最终云归档与产物验收通过
+
+[run 42460767989](https://github.com/DenisZheng/Yuedu-reader/actions/runs/42460767989)，head=`f25a18af03dc51fd258924078e13496ccff3dd16`：Xcode26.6(17F113)、Swift6.3.3、iPhoneOS SDK26.5，最终 **success**。依赖解析、17项工作流/打包合同、Release真机archive、IPA打包/checksum、artifact上传全部成功；没有关闭并发检查、修改优化级别/Swift版本、更换DerivedData或升级云端Xcode。
+
+下载artifact `reader-fork-dev-unsigned-ipa-42460767989-1`（ID `13610428055`），到 `/tmp/readerfork-ipa-42460767989/ipa/`，执行并通过：
+
+- `shasum -a 256 -c Reader-Fork-Dev-unsigned.ipa.sha256`。
+- ZIP全包CRC、Payload唯一App、可执行权限、主App及两个扩展的iPhoneOS平台与Fork Bundle ID。扩展使用项目既有 `.widget` / `.shareextension`，不是临时检查脚本最初误写的 `.share`。
+- Mach-O `LC_BUILD_VERSION`：`platform IOS`、`minos 17.0`、`sdk 26.5`；`codesign -dv`确认未签名，无embedded provisioning profile。
+
+IPA大小 **35,348,658字节**，SHA-256：
+
+```text
+08befc70818be381c83ec3d266eda31916ed14e3f9c55e2b7b16489749292dc4
+```
+
+#35至此按真实失败路径修复并验证完成。产物按工作流保留14天，未上传Release/TestFlight，不把大二进制加入源码提交。它仍是需要用户自行签名的IPA，不能证明真机安装、iCloud/App Group授权、最低系统实际运行或RSS媒体行为通过。
+
+修复记录归档后按用户顺序继续#36音频时钟前置，通过后自动进入S6；不把归档成功代替媒体门槛。

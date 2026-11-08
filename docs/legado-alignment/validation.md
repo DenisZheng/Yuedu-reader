@@ -398,4 +398,15 @@ App/扩展编译、S0相关RSS回归和上述UI操作已有实际通过证据；
 
 未验证/后续：完整交互规则网页、charset/bodyJs/登录与子资源认证、Cookie回写、网页桥/黑白名单和媒体状态仍属S6；真实站点、音频时钟、iOS17/真机、DRM、iCloud签名及Xcode26.x archive尚未通过。首文档能显示不替代这些门槛。
 
-回滚保持S4基线及RSS数据：整体撤回S5路由/分页与共享层修改；新增可选字段兼容旧文件，降级前保留备份并只处理被partial标记的全文缓存，不能把部分结果当完整文章，也不清空来源/阅读状态。原始源包、Android基准和签名配置未修改；不push或启动云构建。
+回滚保持S4基线及RSS数据：整体撤回S5路由/分页与共享层修改；新增可选字段兼容旧文件，降级前保留备份并只处理被partial标记的全文缓存，不能把部分结果当完整文章，也不清空来源/阅读状态。原始源包、Android基准和签名配置未修改；S5验收时未push或启动云构建，后续用户授权的Push/云归档见下节。
+
+## S5后置：Push与手动IPA归档修复
+
+用户明确授权将S5 Push，随后按需手动运行云归档，完成相关前置并归档后自动进入S6。origin/main已从37379c37推进至a60f9d45，之后推送两个归档兼容修正79b170a5和f25a18af。原始源包、索引和临时二进制未纳入提交。
+
+- run42455851293：WorkIndexService旧错误消失，ReaderViewportFragmentHost.prepare actor隔离诊断失败；显式MainActor参数修正，本机23项阅读器绘制回归通过。
+- run42456748792：上述隔离诊断消失，但Swift6.3.3在Double的isolated(any) reabstraction thunk IRGen崩溃；ChapterTitleInspectorView把Binding函数值透传改为同步包装，保留MainActor/Sendable。原生Slider及模型9项通过。
+- [run42460767989](https://github.com/DenisZheng/Yuedu-reader/actions/runs/42460767989)：head=f25a18af，Xcode26.6/Swift6.3.3/SDK26.5，17项合同、完整Release真机archive、打包与上传成功。下载IPA的checksum/ZIP/身份/扩展/Mach-O平台与未签名属性已实测验证，#35完成。
+- 产物：`reader-fork-dev-unsigned-ipa-42460767989-1`，本地 `/tmp/readerfork-ipa-42460767989/ipa/`，35,348,658字节，SHA-256 `08befc70818be381c83ec3d266eda31916ed14e3f9c55e2b7b16489749292dc4`；细节及失败证据见[归档记录](ipa-first-run.md)。
+
+没有修改Swift/并发检查、优化级别、最低系统、依赖/签名或云工具链，没有清用户数据或更换DerivedData。#36音频时钟/媒体仍须下一步验证，云归档不替代其门槛；IPA不等于可直接安装或真机行为通过。

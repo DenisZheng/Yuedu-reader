@@ -25,7 +25,7 @@ IPA保留14天；失败时仅上传本次依赖解析/归档日志和xcresult，
 - SwiftPM按锁文件解析；缓存只包含依赖源码/下载产物，并区分Xcode build与架构。不缓存App的DerivedData，不更新依赖版本，不通过新DerivedData绕过错误。
 - 此任务只做Release真机归档和打包，不启动模拟器、不跑全量测试或RSS实源。因此成功仅说明这次构建/包装成功，不替代S0–S8行为验收。
 
-**验证边界：** 本机只有Xcode27.2。26.6云端archive已经实际执行，但仍在修复编译诊断，尚无成功IPA；具体运行、错误和修正见[归档记录](legado-alignment/ipa-first-run.md)。必须以修正版真实云归档、打包及checksum结果为准，不能用预检、模拟器测试或本机27.x编译冒充。
+**已验证：** [run 42460767989](https://github.com/DenisZheng/Yuedu-reader/actions/runs/42460767989)（提交 `f25a18af`）已在Xcode26.6 / Swift6.3.3 / SDK26.5完成Release真机archive、未签名IPA打包和上传。下载后的checksum、ZIP、Fork主App/扩展身份、Mach-O平台/最低iOS17均通过核验，详见[归档记录](legado-alignment/ipa-first-run.md)。这不代表签名安装、真机运行、iCloud或媒体验收通过；后续代码仍需对自己的提交再次手动构建。
 
 ## 签名与身份
 
