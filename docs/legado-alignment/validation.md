@@ -13,7 +13,10 @@
 | S2 | 本地阶段通过：iPhone/iPad各101项，307项离线导入/重载/导出0字段差异；[细节与限制](s2-import.md) |
 | S3 | 本地阶段通过：iPhone/iPad120项，iPad导入UI2项；[S3身份与状态记录](s3-identity.md) |
 | S4 | 本地补充验收通过：前台owner修正，官方27.2 runtime的正常Dev宿主两设备各238项/35 suites/0失败跳过；旧26.2系统JSC失败保留，[S4记录](s4-runtime.md) |
-| S5–S8 | 按依赖顺序继续；Feed搜索AX、媒体时钟、真机/iOS17和云端archive问题须在对应验收前解决 |
+| S5 | 本地阶段通过并Push：两设备各268项/38 suites/0失败跳过，见[S5记录](s5-browsing.md) |
+| IPA/#35 | 实际26.6云归档与产物校验通过，run42460767989，见[归档记录](ipa-first-run.md) |
+| 媒体前置/#36 | 当前27.2环境恢复：正常Dev两设备各36项，S1各55项；系统底层机制未唯一定位，见[音频记录](../../Technotes/RSSSimulatorAudioClock.md) |
+| S6–S8 | 自动进入S6实现；真机/iOS17、DRM、正式签名/iCloud及完整生产行为仍须对应验收 |
 
 ## S0-01：模拟器环境
 
@@ -409,4 +412,14 @@ App/扩展编译、S0相关RSS回归和上述UI操作已有实际通过证据；
 - [run42460767989](https://github.com/DenisZheng/Yuedu-reader/actions/runs/42460767989)：head=f25a18af，Xcode26.6/Swift6.3.3/SDK26.5，17项合同、完整Release真机archive、打包与上传成功。下载IPA的checksum/ZIP/身份/扩展/Mach-O平台与未签名属性已实测验证，#35完成。
 - 产物：`reader-fork-dev-unsigned-ipa-42460767989-1`，本地 `/tmp/readerfork-ipa-42460767989/ipa/`，35,348,658字节，SHA-256 `08befc70818be381c83ec3d266eda31916ed14e3f9c55e2b7b16489749292dc4`；细节及失败证据见[归档记录](ipa-first-run.md)。
 
-没有修改Swift/并发检查、优化级别、最低系统、依赖/签名或云工具链，没有清用户数据或更换DerivedData。#36音频时钟/媒体仍须下一步验证，云归档不替代其门槛；IPA不等于可直接安装或真机行为通过。
+没有修改Swift/并发检查、优化级别、最低系统、依赖/签名或云工具链，没有清用户数据或更换DerivedData。云归档不替代媒体门槛；IPA不等于可直接安装或真机行为通过。#36复验结果见下节。
+
+## S6前置：模拟器音频时钟恢复与媒体复验
+
+#36在本轮官方27.2正常Dev宿主中先复现：HTTP音频10秒未ready；本地AVURLAsset可ready但时钟停0，MP4对照通过。证据 `/tmp/readerfork-media-clock-iphone.xcresult`、`/tmp/readerfork-media-clock-controls.xcresult`。宿主/模拟器环境检查、bootstatus及同文件宿主afplay后，两种音频实际推进，后续冷启动原用例也通过；不能唯一归因于某一步，也不宣称修好了系统引擎。完整原始诊断/边界见[音频时钟记录](../../Technotes/RSSSimulatorAudioClock.md)。
+
+- 正常Dev宿主 `scripts/validate_reader_fork_media.sh`：iPhone/iPad各36项/5 suites/0失败跳过；包括本地音频、带认证头的HTTP音频seek/推进、MP4/HLS真实播放、WebKit资源与安全边界、图片/媒体fixture。证据 `/tmp/readerfork-media-prerequisite-iphone/tests.xcresult`、`/tmp/readerfork-media-prerequisite-ipad/tests.xcresult`。
+- S1完整PoC `scripts/validate_reader_fork_s1.sh`：两设备各55项/0失败跳过，证据 `/tmp/readerfork-media-s1-iphone/tests.xcresult`、`/tmp/readerfork-media-s1-ipad/tests.xcresult`。新本地音频使原54项增加1项；隔离宿主不代替上述正常宿主。
+- 新门槛只等待bootstatus真实信号，不自动重试或改路由；新增用例保留原媒体超时与实际时钟断言，不静音、不推进伪造进度。失败状态在播放器拆除前采集。
+
+#36当前环境前置恢复通过，归档后自动开始S6。仍有底层环境机制未确认的风险；旧26.2、iOS17/真机、DRM与S6生产资源/媒体闭环未被本轮放行。若再次失败需保留RED，不可当成环境已知问题跳过。无生产音频修改，回滚仅撤回新测试/脚本并保留用户数据。
