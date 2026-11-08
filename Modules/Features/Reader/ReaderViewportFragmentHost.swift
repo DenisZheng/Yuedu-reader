@@ -224,8 +224,9 @@ final class ReaderViewportFragmentHost: UIView {
         /// Paint-window fragments get a surface now and are shown. Ahead of the
         /// paint window only an existing surface is prepared; a new one waits for
         /// spare budget below, and neither is shown or protected from the budget.
+        // 回调只在本次主actor更新中执行；显式保留隔离，避免旧Swift将延后候选视为跨域发送。
         func place(_ key: Key, global: CGRect, renderingRect: CGRect, in ownerView: UIView,
-                   prepare: @escaping (Entry) -> Void) {
+                   prepare: @escaping @MainActor (Entry) -> Void) {
             let inPaintWindow = global.intersects(paintWindow)
             guard let entry = entries[key] ?? (inPaintWindow ? makeEntry(key, in: ownerView) : nil) else {
                 prepaintCandidates.append((global, backingPixels(renderingRect) * 4,

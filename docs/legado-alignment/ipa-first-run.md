@@ -19,3 +19,23 @@ let series = sidecar.flatMap { series(in: $0.values, for: record) }
 后续：提交进入远端后仍需手动构建检验，再核验IPA及checksum。未自动重跑云构建或发布。本页及S2提交只记录实测结果，不把构建配置预检、模拟器编译或显式限定调用当作完整archive成功。
 
 回滚：仅撤回方法调用的 `Self.` 限定；不触及锁定依赖、身份或签名配置。
+
+## S5 Push后的归档修复
+
+用户批准先Push S5、按需触发手动云归档，再处理前置并进入S6。远端main已更新为 `a60f9d45`，包括前述 `Self.series` 修正。
+
+[run 42455851293](https://github.com/DenisZheng/Yuedu-reader/actions/runs/42455851293) 使用Xcode26.6(17F113)、Swift6.3.3、iPhoneOS SDK26.5。17项工作流/打包合同和依赖解析通过；archive仍失败，没有IPA。原WorkIndexService诊断不再出现，完整artifact中的当前唯一编译错误为：
+
+```text
+ReaderViewportFragmentHost.swift:232:83:
+error: sending 'prepare' risks causing data races
+note: task-isolated 'prepare' is captured by a main actor-isolated closure
+```
+
+`update`及其Entry/UI状态均在MainActor；`place`把prepare延后到同次update的候选队列，但参数函数类型没有保留该隔离。最小修正为 `prepare: @escaping @MainActor (Entry) -> Void`，不添加Task/队列，不移动绘制工作，不降低Swift6并发检查。Xcode27.2上的最小示例不能复现旧编译器诊断，因此只能把实际26.6 archive作为最终修复反馈，不能用本机编译冒充。
+
+- 完整失败日志/xcresult：`/tmp/readerfork-ipa-42455851293/failure/`。
+- 本机正常Dev宿主的CoreText/Browser viewport回归：`/tmp/readerfork-ipa-fragment-isolation.xcresult`，23项/2 suites通过，覆盖提前绘制、预算/复用、像素及绘制不在主线程。
+- 修正版仍需下一轮云归档、IPA结构和checksum验证；本小节不把#35标为完成。
+
+该修正回滚只涉及回调actor标注及说明，不改变签名、最低系统、包版本或App数据。
