@@ -9,7 +9,7 @@ export YUEDU_SCHEME=Reader-Fork-Dev
 EVIDENCE="${YUEDU_EVIDENCE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/readerfork-s4-acceptance.XXXXXX")}"
 mkdir -p "$EVIDENCE"
 suites=(
-  RSSRuntimeIntegrationTests RSSSharedBridgeTests
+  RSSRuntimeIntegrationTests RSSSharedBridgeTests RSSForegroundRuntimeTests RSSArticleScriptObjectTests
   LegadoRhinoNormalizerTests LegadoConnectionResponseTests LegadoJavaInteropRuntimeTests
   UnsupportedLegadoAPITests LegadoParserBridgeContractTests
   BookSourceSessionQueueTests StageLoginCheckTests SourceVariableOverlayTests

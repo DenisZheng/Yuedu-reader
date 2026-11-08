@@ -12,7 +12,7 @@
 | S1 | 本地阶段通过：iPhone/iPad最终各54项通过，固定流程、图片解码、资源约束见[媒体PoC](media-poc.md) |
 | S2 | 本地阶段通过：iPhone/iPad各101项，307项离线导入/重载/导出0字段差异；[细节与限制](s2-import.md) |
 | S3 | 本地阶段通过：iPhone/iPad120项，iPad导入UI2项；[S3身份与状态记录](s3-identity.md) |
-| S4 | 本地阶段通过：iPhone/iPad各233项、33 suites、0失败/跳过；[S4共享运行时记录](s4-runtime.md) |
+| S4 | 本地补充验收通过：前台owner修正，官方27.2 runtime的正常Dev宿主两设备各238项/35 suites/0失败跳过；旧26.2系统JSC失败保留，[S4记录](s4-runtime.md) |
 | S5–S8 | 按依赖顺序继续；Feed搜索AX、媒体时钟、真机/iOS17和云端archive问题须在对应验收前解决 |
 
 ## S0-01：模拟器环境
@@ -355,7 +355,7 @@ App/扩展编译、S0相关RSS回归和上述UI操作已有实际通过证据；
 
 ## S4：共享源运行时、请求和撤销闭环
 
-本地阶段通过，完整输入/断点与边界见 [S4记录](s4-runtime.md)。新增 `scripts/validate_reader_fork_s4.sh`，强制 Reader-Fork-Dev、检查所有选定 suite/用例真实执行以及最终零失败/跳过，不能以总数掩盖未执行的合同。
+以下为主体2253426c提交前的历史通过记录；后续补充曾失败，最终在获批新增的官方27.2 runtime通过238项，详见本节末尾。完整输入/断点与边界见 [S4记录](s4-runtime.md)。新增 `scripts/validate_reader_fork_s4.sh`，强制 Reader-Fork-Dev、检查所有选定 suite/用例真实执行以及最终零失败/跳过，不能以总数掩盖未执行的合同。
 
 - `YUEDU_EVIDENCE_DIR=/tmp/readerfork-s4-final-iphone bash scripts/validate_reader_fork_s4.sh`：iPhone 17 Pro Max / iOS26.2，233项、33 suites，0失败/跳过。
 - 通过 `YUEDU_DEST="$(bash scripts/sim.sh dest iPad)"` 切换目标，`YUEDU_EVIDENCE_DIR=/tmp/readerfork-s4-final-ipad bash scripts/validate_reader_fork_s4.sh`：iPad Pro 13-inch (M5) / iOS26.2，相同233项、0失败/跳过。
@@ -368,3 +368,18 @@ App/扩展编译、S0相关RSS回归和上述UI操作已有实际通过证据；
 未解决/未验证：偶发 test module emission 超时（未修改代码或DerivedData的重跑通过，不宣称根因已修复）；队列/Keychain QoS警告；JavaScriptCore不保证杀死纯JS无限循环；真人登录、S5分页/S6网页媒体、iOS17/真机、正式iCloud签名及Xcode26.6 archive。S4不构成这些门槛或整体RSS可用性通过。
 
 回滚必须整体撤回本阶段RSS适配及对应共享修改，保留 `rss_runtime_variables.json` 数据；旧S3版本不能直接读取新的封装，若降级需要显式转换并保留opaque变量备份，不清空用户数据。不自动push/release。
+
+### S4补充：前台owner与JSC地址截断（诊断与新环境验收通过）
+
+进入S5调用链核查后发现RSSFeedView漏传owner，先用真实View/HTTP/重建store复现3断言失败，再补齐参数。该项通过，但扩大门槛 `/tmp/readerfork-s4-foreground-iphone/tests.xcresult` 为234项、233通过、1个JSC崩溃、0跳过。S5暂停，补充代码未提交。
+
+最小化和区分实验见 [JSC诊断](../../Technotes/RSSJSCContextLifetimeCrash.md)。裸JSContext正常App宿主也能崩溃；隔离宿主、独立CLI、纯JS字面量和ASan通过没有被当作修复。随后LLDB取得系统36位掩码截断高地址的证据；上游WebKit06d5550移除这一假设。
+
+用户明确批准后执行`xcodebuild -downloadPlatform iOS -architectureVariant arm64`，新增官方iOS27.2 runtime，未移除26.2设备/数据。最终正常Reader-Fork-Dev、完整App界面、ASan关闭：
+
+- `/tmp/readerfork-s4-runtime-repair-iphone/tests.xcresult`：iPhone18 Pro Max / iOS27.2(24B8117)，238项、35 suites、0失败/跳过。
+- `/tmp/readerfork-s4-runtime-repair-ipad-ready/tests.xcresult`：iPad Pro13-inch(M5) / 相同runtime，238项、35 suites、0失败/跳过。
+- 首轮新iPad运行2项WebKit超时；`simctl bootstatus <动态UDID> -b`后原4项专项和完整238项通过，没有删用例或扩大超时。
+- `RSSForegroundRuntimeTests`、`RSSArticleScriptObjectTests`进入S4门槛，原同源取消/重建使用100次循环。五语文案、shell/Python解析、文档链接与`git diff --check`通过。
+
+本地补充验收恢复通过，中文提交后继续S5。**旧26.2系统二进制没有被修复；26.2真机/最低iOS和发布兼容仍未放行。** 本次没有生产JSC补丁或初始化/安全策略绕过，所有诊断探针已撤回。

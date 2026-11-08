@@ -474,7 +474,8 @@ struct RSSFeedView: View {
         await fetcher.fetchItems(
             from: requestedSource,
             metadata: store.feedMetadata(for: requestedSource.id),
-            sortEntry: requestedEntry
+            sortEntry: requestedEntry,
+            owner: store
         )
         guard !Task.isCancelled, store.accepts(ticket),
               store.source(id: requestedSource.id) == requestedSource,

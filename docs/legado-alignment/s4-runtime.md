@@ -1,6 +1,6 @@
-# S4：共享运行时接入（本地阶段通过）
+# S4：共享运行时接入（补充验收通过）
 
-前置 S3 提交为 `6177891e`。S4 最终在 Reader-Fork-Dev 的 iPhone/iPad 模拟器各通过 233 项、33 suites，0 失败、0 跳过。按授权先提交本阶段，再进入 S5。此结论不包含真人登录、真机媒体或发布验收。
+前置 S3 为 `6177891e`；S4 主体为 `2253426c`。前台owner漏传已补齐；另以LLDB定位到旧26.2系统JSC的36位地址截断，经用户批准新增官方27.2 runtime后，正常 Reader-Fork-Dev 的 iPhone/iPad **各238项、35 suites、0失败/跳过**通过。没有修改生产JS引擎或源脚本规避问题。补充提交后恢复S5；旧26.2环境及最低系统/真机仍按[诊断边界](../../Technotes/RSSJSCContextLifetimeCrash.md)保留，不宣称旧系统已修复。
 
 ## 当前实现
 
@@ -36,7 +36,7 @@
 
 补充诊断：数次 xcodebuild 在 module emission 阶段超过命令 1000 秒预算。保留 `/tmp/readerfork-s4-ruleless-feed.log`。没有据此修改构建环境或更换 DerivedData；相同源码的 test frontend 独立诊断约 36 秒完成（`/tmp/readerfork-s4-test-frontend.log`），随后原 wrapper 可执行测试。尚不能归因于某条 Swift 表达式。一次采样误匹配了外层 bash，不能当作 compiler 栈证据。
 
-## 最终门槛与断点闭环
+## 主体提交前的门槛与断点闭环
 
 `scripts/validate_reader_fork_s4.sh` 固定使用 Reader-Fork-Dev，通过 xcresult 同时检查整体结果、非零数量、零失败/跳过，以及每个选定 suite/单独用例确实执行。覆盖共享 runtime/书源、Cookie/真实 loopback 重定向、登录/变量、诊断、S2 导入保真与 S3 身份/持久化/WebDAV；不执行原包脚本。
 
@@ -64,10 +64,22 @@ YUEDU_EVIDENCE_DIR=/tmp/readerfork-s4-final-ipad bash scripts/validate_reader_fo
 - `/tmp/readerfork-s4-closure-iphone/tests.log` 也曾在 test module emission 超过1000秒。没有修改源码/清缓存/换DerivedData，同命令重跑40.8秒完成232项；最终新增owner变量失效覆盖后两设备均通过233项。构建偶发停顿的根因仍未知，不能宣称编译器问题已修复。
 - xcresult 仍包含既有队列/Keychain路径的 QoS 优先级警告；测试通过不构成主线程、内存或吞吐性能放行，S8需独立采集。
 
+## 补充验收（已通过，保留旧环境失败）
+
+- `RSSFeedView.refresh`遗漏`owner: store`，真实View/HTTP/持久化测试先复现3个失败断言；修正调用方后通过。
+- `/tmp/readerfork-s4-foreground-iphone/tests.xcresult`：234项、233通过、1崩溃、0跳过；不是阶段通过。
+- 崩溃可最小化到正常App宿主内的两个JSContext回收与原生字符串连接；PoC宿主或ASan通过不作为修复。
+- `/tmp/readerfork-s4-native-default-final.xcresult`再次关闭ASan后仍失败；前台owner用例通过，最小上下文用例崩溃。
+- LLDB确认地址`0x702a048900`被系统36位掩码截成`0x2a048900`；WebKit上游06d5550移除同一假设。见诊断文档的寄存器与反汇编证据，不是仅凭栈名推测。
+- 经批准新增官方iOS27.2 runtime（未删除旧设备/数据），使用相同正常Dev宿主、完整App界面和未更改的脚本表达式。新增两个suite、原取消/重建各100次全部通过。
+- 最终iPhone：`/tmp/readerfork-s4-runtime-repair-iphone/tests.xcresult`；最终iPad：`/tmp/readerfork-s4-runtime-repair-ipad-ready/tests.xcresult`。均238项、35 suites、0失败/跳过。
+- 新iPad首次有2项WebKit超时；等待系统bootstatus就绪后，原4项专项及完整238项通过，未改测试/延长时间。失败证据保留在诊断文档。
+- 所有临时App启动/界面缩减、LLDB暂停探针已撤回。五语本地化、脚本/文档检查及`git diff --check`通过。
+
 ## 边界与回滚
 
 - 沿用 S3 的 store 级配置 revision 保守失效；无关配置更新也可能要求重试，不为降低重试数接受旧结果。
 - 仅执行自建/去敏 fixture。未运行原始 307 项包的脚本，不把全包导入保真当作所有源可用。
 - JavaScriptCore 原有 timeout 能停止等待并丢弃上下文，但不承诺强制终止任意纯 JS 无限循环；撤销的上下文不能再写 owner/凭据或发起新请求。没有引入私有 API 或新 JS 引擎。
-- iOS 17、真机媒体、正式签名/iCloud、Xcode 26.6 archive、模拟器音频时钟仍未验证或未解决，分别留在原阶段门槛，不在 S4 宣称通过。
+- iOS17、旧26.2真机、真机媒体、正式签名/iCloud、Xcode26.6 archive和媒体时钟仍未验证或未解决，留在对应门槛；27.2模拟器通过不能代替这些验证。
 - 回滚应整体撤回本阶段 RSS 适配与相关共享改动；运行状态文件保留，不能以清空用户数据、切换新 DerivedData 或重置模拟器规避问题。

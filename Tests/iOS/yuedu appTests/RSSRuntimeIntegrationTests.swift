@@ -353,6 +353,7 @@ struct RSSRuntimeIntegrationTests {
 
     @Test("取消活动请求后，尚未执行的同源请求重绑一次且不串文章变量")
     func cancellationAndQueuedArticle() async throws {
+      for _ in 0..<100 {
         try await withStore { store, _ in
             let host = hostName()
             let session = RSSPageFixtureProtocol.makeSession()
@@ -386,6 +387,7 @@ struct RSSRuntimeIntegrationTests {
             #expect(try await pending.value == "B|B")
             #expect(RSSPageFixtureProtocol.requests(host: host).map { $0.url?.path } == ["/a", "/b"])
         }
+      }
     }
 
     @Test("取消发生在java.ajax内时，晚到脚本不能写cache/Cookie或登录头")
