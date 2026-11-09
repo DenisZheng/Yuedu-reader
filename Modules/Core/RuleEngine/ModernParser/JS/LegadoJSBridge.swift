@@ -20,7 +20,7 @@ struct LegadoBrowserPageRequest: Equatable, Sendable {
 }
 
 /// A page source JS asked to open: Legado `java.startBrowser` / `java.startBrowserAwait`.
-struct SourceBrowserRequest {
+struct SourceBrowserRequest: Sendable {
     /// The URL as the source wrote it — possibly with Legado `,{options}`, or a `data:` page.
     let url: String
     let title: String
@@ -40,7 +40,7 @@ struct SourceBrowserRequest {
 
 /// A code the source asks the reader to read off an image: Legado
 /// `java.getVerificationCode(imageUrl)`.
-struct SourceCaptchaRequest {
+struct SourceCaptchaRequest: Sendable {
     /// `http(s)` or `data:` — a few sources draw their code as an SVG data URI.
     let imageURL: String
     /// The source's headers and cookie jar for fetching the image. A captcha belongs to the
@@ -528,6 +528,8 @@ struct LegadoHTTPResult: Sendable {
     var interactionGuard: (() -> Bool)?
     var runtimeAccessAllowed: (() -> Bool)?
     private var interactionPermitted: Bool { interactionGuard?() ?? true }
+    var browserInteractionGuard: (() -> Bool)?
+    var captchaInteractionGuard: (() -> Bool)?
     private func requestHeaders(for url: URL?) -> [String: String] {
         let headers = sourceHeaders
         return requestHeaderScope?.inheritedHeaders(headers, for: url) ?? headers
@@ -1134,7 +1136,7 @@ struct LegadoHTTPResult: Sendable {
     /// While a video episode is being fetched, a page of the source's (no `html`) is where that
     /// episode plays (`videoEpisodeHandover`).
     func startBrowser(_ url: String, _ title: String, _ html: String?) {
-        guard interactionPermitted else { return }
+        guard browserInteractionGuard?() ?? interactionPermitted else { return }
         if videoEpisodeHandover != nil, html == nil {
             if videoEpisodeHandover?.page == nil { videoEpisodeHandover?.page = url }
             return
@@ -1176,7 +1178,7 @@ struct LegadoHTTPResult: Sendable {
     func startBrowserAwait(
         _ url: String, _ title: String, _ refetchAfterSuccess: Bool, _ html: String?
     ) -> LegadoStrResponse {
-        guard interactionPermitted else { return throwBrowserCancelled(url: url) }
+        guard browserInteractionGuard?() ?? interactionPermitted else { return throwBrowserCancelled(url: url) }
         guard let presenter = browserPresenter else {
             return throwBrowserCancelled(url: url)
         }
@@ -1213,7 +1215,7 @@ struct LegadoHTTPResult: Sendable {
     /// blocks the script until the user answers. Legado throws when nothing came back
     /// (`验证结果为空`), so a dismissed sheet or an empty answer throws here too.
     func getVerificationCode(_ imageUrl: String) -> String {
-        guard interactionPermitted else { return throwIntoScript("Interaction required") }
+        guard captchaInteractionGuard?() ?? interactionPermitted else { return throwIntoScript("Interaction required") }
         guard let presenter = captchaPresentHandler ?? Self.sharedCaptchaPresenter else {
             return throwIntoScript("getVerificationCode: no captcha presenter")
         }

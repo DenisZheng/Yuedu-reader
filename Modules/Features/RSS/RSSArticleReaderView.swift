@@ -11,6 +11,8 @@ struct RSSArticleReaderView: View {
     @State private var fullTextError: String?
     @State private var originalTarget: RSSOpenTarget?
     @State private var originalPageLoading = true
+    @State private var rulePageError: String?
+    @State private var rulePageReloadID = UUID()
     @State private var selectedURL: InAppWebURL?
     @Environment(\.openURL) private var openURL
     /// 分享 payload waiting for this page's own share sheet. This view is a
@@ -20,6 +22,8 @@ struct RSSArticleReaderView: View {
     @State private var pendingShare: PendingShareExport<URL>?
     @State private var findRequestID: UUID?
     @State private var sourceFaviconURLs: [URL] = []
+    @State private var webActions = RSSWebActionRouter()
+    @State private var isReaderVisible = false
 
     init(articleID: String, store: RSSStore = .shared) {
         self.articleID = articleID
@@ -39,11 +43,20 @@ struct RSSArticleReaderView: View {
         Group {
             if let article {
                 Group {
-                    if let originalTarget, let source {
-                        RSSSourcePageWebView(source: source, target: originalTarget, error: $fullTextError, loading: $originalPageLoading, owner: store, findRequestID: $findRequestID)
+                    if let source, article.contentType == .image || article.contentType == .video {
+                        RSSTypedArticleView(article: article, source: source, owner: store)
+                    } else if let target = ruleTarget(for: article), let source {
+                        RSSSourcePageWebView(source: source, target: target, error: $rulePageError, loading: $originalPageLoading, owner: store,
+                                             findRequestID: $findRequestID, restoreScrollY: article.readerScrollY,
+                                             onScrollYChange: { store.updateReaderScrollY(articleId: article.id, scrollY: $0) }, article: article,
+                                             onAction: { try webActions.receive($0, source: source, owner: store) },
+                                             isActive: isReaderVisible && selectedURL == nil && pendingShare == nil)
+                            .id(rulePageReloadID)
                             .overlay(alignment: .top) {
                                 if originalPageLoading { ProgressView().padding(DSSpacing.md) }
-                                if let fullTextError { Text(fullTextError).padding(DSSpacing.md).background(DSColor.surface) }
+                                if let message = rulePageError ?? fullTextError {
+                                    Text(message).font(DSFont.footnote).padding(DSSpacing.md).background(DSColor.surface)
+                                }
                             }
                     } else {
                         RSSArticleWebReaderView(
@@ -80,6 +93,26 @@ struct RSSArticleReaderView: View {
                         }
 
                         Menu {
+                            if let media = article.media, !media.isEmpty, let source {
+                                Section(localized("附件")) {
+                                    ForEach(media) { attachment in
+                                        Button {
+                                            if attachment.kind == .image {
+                                                let base = URL(string: article.link) ?? source.articleLinkBaseURL
+                                                webActions.destination = .init(target: .photo(source, attachment.url, base, false, nil))
+                                            } else {
+                                                webActions.playMedia(attachment, article: article, source: source, owner: store)
+                                            }
+                                        } label: {
+                                            Label(attachmentTitle(attachment), systemImage: attachment.kind == .image ? "photo" : attachment.kind == .audio ? "waveform" : "play.rectangle")
+                                        }
+                                        .accessibilityIdentifier("rss.attachment." + String(attachment.kind.rawValue))
+                                    }
+                                }
+                            }
+                            if rulePageError != nil {
+                                Button(localized("重試")) { rulePageReloadID = UUID() }
+                            }
                             if fullTextError != nil || article.fullTextIsPartial == true {
                                 Button(localized("重試")) { Task { await loadFullTextIfNeeded(article) } }
                             }
@@ -117,6 +150,7 @@ struct RSSArticleReaderView: View {
                 }
                 .task(id: article.id) {
                     store.markRead(articleId: article.id, isRead: true)
+                    guard article.contentType != .image, article.contentType != .video else { return }
                     await loadFullTextIfNeeded(article)
                 }
                 .task(id: sourceFaviconLoadKey(for: article)) {
@@ -130,12 +164,20 @@ struct RSSArticleReaderView: View {
                 }
             }
         }
+        .modifier(RSSWebActionPresentation(router: webActions, owner: store))
+        .onAppear { isReaderVisible = true }
+        .onDisappear { isReaderVisible = false; webActions.cancelPending() }
         .sheet(item: $pendingShare) { export in
             ShareExportSheet(export: export)
         }
         .sheet(item: $selectedURL) { url in
             SafariView(url: url)
         }
+    }
+
+    private func attachmentTitle(_ media: RSSMediaReference) -> String {
+        let fallback = URL(string: media.url)?.lastPathComponent ?? localized("附件")
+        return String((fallback.isEmpty ? localized("附件") : fallback).prefix(160))
     }
 
     /// The article's own link, resolved against its source — feeds and Legado rules
@@ -173,6 +215,16 @@ struct RSSArticleReaderView: View {
         case .reader:
             return "doc.text"
         }
+    }
+
+    private func ruleTarget(for article: RSSArticleRecord) -> RSSOpenTarget? {
+        guard let source, RSSArticleContentService.usesRules(source) else { return nil }
+        let content = bodyHTML(for: article)
+        if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let base = RSSLinkRoute.route(article.link, relativeTo: source.articleLinkBaseURL).url?.absoluteString ?? article.link
+            return .articleHTML(content, baseURL: base)
+        }
+        return originalTarget
     }
 
     private func document(for article: RSSArticleRecord) -> RSSArticleHTMLDocument {

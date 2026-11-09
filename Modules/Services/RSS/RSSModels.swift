@@ -284,6 +284,27 @@ enum LegadoSortURLParser {
         return result
     }
 
+    /// java.open(\"sort\")的临时分类是JSON map或单URL，不是源sortUrl的“名称::URL”语法。
+    static func actionEntries(from raw: String, title: String?) throws -> [RSSSortEntry] {
+        guard raw.utf8.count <= 65_536 else { throw RSSWebFailure.actionUnavailable }
+        guard raw.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") else { return [.init(name: title ?? "", url: raw)] }
+        let data = Data(raw.utf8)
+        guard let values = try JSONSerialization.jsonObject(with: data) as? [String: String], values.count <= 256 else { throw RSSWebFailure.actionUnavailable }
+        // 标准JSON解析负责验证/转义；仅按原文key token位置保留GSON map的分类次序，不实现第二套JSON解析器。
+        let keys = try NSRegularExpression(pattern: #""(?:\\.|[^"\\])*"\s*:"#)
+        var ordered: [RSSSortEntry] = []
+        var seen: Set<String> = []
+        for match in keys.matches(in: raw, range: NSRange(raw.startIndex..., in: raw)) {
+            guard let range = Range(match.range, in: raw) else { continue }
+            var token = String(raw[range]); token.removeLast()
+            guard let name = try JSONSerialization.jsonObject(with: Data(token.utf8), options: [.fragmentsAllowed]) as? String,
+                  let url = values[name], seen.insert(name).inserted else { continue }
+            ordered.append(.init(name: name, url: url))
+        }
+        guard ordered.count == values.count else { throw RSSWebFailure.actionUnavailable }
+        return ordered
+    }
+
     /// Whether the sortUrl needs JavaScript evaluation before splitting.
     static func needsJSEvaluation(_ sortUrl: String) -> Bool {
         let trimmed = sortUrl.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -397,7 +418,7 @@ struct RSSItem: Codable, Identifiable, Sendable {
 
     /// Convert from unified ParsedFeedItem and source ID.
     /// The caller is responsible for generating a plain-text summary from `contentHTML`.
-    init(from parsed: ParsedFeedItem, sourceId: String, summary: String = "") {
+    init(from parsed: ParsedFeedItem, sourceId: String, summary: String = "", sourceContentType: RSSContentType? = nil) {
         self.rawKey = parsed.uniqueID
         self.scope = .feed
         self.id = RSSIdentity.article(sourceID: sourceId, scope: .feed, rawKey: parsed.uniqueID)
@@ -413,6 +434,26 @@ struct RSSItem: Codable, Identifiable, Sendable {
         self.language = parsed.language
         self.tags = parsed.tags.map { Array($0) } ?? []
         self.description = summary
+        let attachments = (parsed.attachments ?? []).sorted {
+            ($0.mimeType ?? "", $0.title ?? "", $0.sizeInBytes ?? 0, $0.durationInSeconds ?? 0, $0.url)
+                < ($1.mimeType ?? "", $1.title ?? "", $1.sizeInBytes ?? 0, $1.durationInSeconds ?? 0, $1.url)
+        }
+        let references: [RSSMediaReference] = attachments.enumerated().compactMap { index, attachment in
+            guard let original = URL(string: attachment.url, relativeTo: URL(string: parsed.feedURL))?.absoluteURL,
+                  let scheme = original.scheme?.lowercased(), ["http", "https"].contains(scheme), original.host != nil else { return nil }
+            let mime = attachment.mimeType?.lowercased() ?? ""
+            let kind = mime.hasPrefix("image/") ? RSSAttachmentKind.image
+                : mime.hasPrefix("video/") ? RSSAttachmentKind.video
+                : mime.hasPrefix("audio/") ? RSSAttachmentKind.audio
+                : sourceContentType?.rawValue == RSSContentType.image.rawValue ? RSSAttachmentKind.image
+                : sourceContentType?.rawValue == RSSContentType.video.rawValue ? RSSAttachmentKind.video
+                : nil
+            guard let kind else { return nil }
+            return RSSMediaReference(key: "attachment:\(index):\(kind.rawValue):\(mime)", articleID: id, kind: kind, url: original.absoluteString)
+        }
+        media = references.isEmpty ? nil : references
+        // 普通Feed仍打开安全文章；附件是用户主动选择的媒体，不将整篇Feed改为type=1/2。
+        contentType = sourceContentType
     }
 
     func identified(sourceID: String, scope: RSSArticleScope) -> RSSItem {

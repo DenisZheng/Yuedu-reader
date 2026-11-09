@@ -45,9 +45,12 @@ final class VideoPlaybackController {
         case book(BookStore, persists: Bool)
         /// A script's link, played as it is.
         case link(VideoStream)
+        /// A persisted attachment of one RSS article (not a book/chapter identity).
+        case rss(RSSStore, articleID: String?, attachmentKey: String, VideoStream)
     }
 
     private let source: Source
+    @ObservationIgnored private var mediaResources: RSSMediaResourceSession?
     private var loadTask: Task<Void, Never>?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
@@ -59,6 +62,8 @@ final class VideoPlaybackController {
     /// refreshes a failed link once (`retryOnPlayError`), then reports the failure.
     private var refetchedChapter: Int?
     private var lastSavedTime: Double = 0
+    private var closed = false
+    private var heldForBackground = false
     private var nowPlayingSession: MPNowPlayingSession?
     /// Not state the screen shows; set while the picture's layer is made.
     @ObservationIgnored private var pictureInPicture: AVPictureInPictureController?
@@ -86,6 +91,24 @@ final class VideoPlaybackController {
         player.automaticallyWaitsToMinimizeStalling = true
     }
 
+    /// An RSS article attachment, with progress owned by RSSStore and keyed by its stable attachment key.
+    init(rss store: RSSStore, articleID: String?, attachmentKey: String, stream: VideoStream, title: String,
+         resources: RSSMediaResourceSession? = nil) {
+        var book = ReadingBook(title: title, author: "", contentFilename: "")
+        let progress = articleID.flatMap { store.mediaProgress(articleID: $0, attachmentKey: attachmentKey) }
+        book.onlineChapters = [OnlineChapterRef(index: 0, title: title, url: stream.url.absoluteString)]
+        book.audioChapterIndex = 0
+        book.audioTimeSeconds = progress?.position ?? 0
+        self.book = book
+        self.source = .rss(store, articleID: articleID, attachmentKey: attachmentKey, stream)
+        self.mediaResources = resources
+        self.currentTime = progress?.position ?? 0
+        self.lastSavedTime = progress?.position ?? 0
+        self.guide = VideoEpisodeGuide(chapters: book.onlineChapters ?? [])
+        self.chapterIndex = 0
+        player.automaticallyWaitsToMinimizeStalling = true
+    }
+
     var route: VideoEpisodeGuide.Route? { guide.route(containing: chapterIndex) }
     var hasNext: Bool { guide.episode(after: chapterIndex) != nil }
     var hasPrevious: Bool { guide.episode(before: chapterIndex) != nil }
@@ -102,6 +125,8 @@ final class VideoPlaybackController {
 
     /// Opens the saved episode at its saved time.
     func start() {
+        guard !closed else { return }
+        mediaResources?.onStop { [weak self] in Task { @MainActor in self?.resourceAccessRevoked() } }
         guard !guide.isEmpty else {
             phase = .failed(localized("這部影片沒有可播放的集數"))
             return
@@ -115,7 +140,14 @@ final class VideoPlaybackController {
 
     /// Saves where it is and lets the player go.
     func close() {
+        guard !closed else { return }
         saveProgress(force: true)
+        closed = true
+        mediaResources?.onStop(nil)
+        switch source {
+        case .link(let stream), .rss(_, _, _, let stream): stream.closeResource()
+        case .book: break
+        }
         loadTask?.cancel()
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -129,11 +161,34 @@ final class VideoPlaybackController {
         pictureInPicture = nil
     }
 
+    /// RSS媒体只承诺前台播放：其资源端点不跨后台存活，切后台即停，也不启动画中画。
+    var allowsPictureInPicture: Bool {
+        if case .rss = source { return false }
+        return true
+    }
+
+    func enterBackground() {
+        guard !allowsPictureInPicture, !closed else { return }
+        heldForBackground = true
+        saveProgress(force: true)
+        player.pause()
+        if phase == .playing { phase = .paused }
+    }
+
+    /// 回前台只解除限制，不自动续播，由用户点按继续。
+    func enterForeground() { heldForBackground = false }
+
+    private func resourceAccessRevoked() {
+        guard !closed else { return }
+        close()
+        phase = .failed(localized("訂閱來源或登入狀態已變更，請重新開啟"))
+    }
+
     /// Lets the picture go on in Picture in Picture when the app leaves the foreground while it
     /// plays. Only then: the player lives as long as its screen, so a window started from a
     /// button would end with the screen it floats over.
     func attachPictureInPicture(to layer: AVPlayerLayer) {
-        guard pictureInPicture == nil, AVPictureInPictureController.isPictureInPictureSupported() else { return }
+        guard allowsPictureInPicture, pictureInPicture == nil, AVPictureInPictureController.isPictureInPictureSupported() else { return }
         guard let controller = AVPictureInPictureController(playerLayer: layer) else {
             AppLogger.info("[Video] Picture in Picture unavailable for this layer", level: .notice)
             return
@@ -146,7 +201,8 @@ final class VideoPlaybackController {
     // MARK: Episodes
 
     func play(chapterIndex: Int, at time: Double = 0) {
-        guard guide.route(containing: chapterIndex) != nil else { return }
+        guard !closed, guide.route(containing: chapterIndex) != nil else { return }
+        guard !closed else { return }
         if chapterIndex != self.chapterIndex { saveProgress(force: true) }
         self.chapterIndex = chapterIndex
         if refetchedChapter != chapterIndex { refetchedChapter = nil }
@@ -175,7 +231,7 @@ final class VideoPlaybackController {
         lastSavedTime = time
         let store: BookStore
         switch source {
-        case .link(let stream):
+        case .link(let stream), .rss(_, _, _, let stream):
             begin(stream)
             return
         case .book(let bookStore, _):
@@ -288,6 +344,12 @@ final class VideoPlaybackController {
     }
 
     func resume() {
+        // 后台期间就绪的条目和锁屏命令都不能重新开始播放。
+        if heldForBackground {
+            player.pause()
+            phase = .paused
+            return
+        }
         player.playImmediately(atRate: isLongPressing ? Self.longPressRate : rate)
         phase = .playing
     }
@@ -366,6 +428,11 @@ final class VideoPlaybackController {
         switch source {
         case .link(let stream):
             VideoLinkPositions.save(currentTime, for: stream.url)
+            return
+        case .rss(let store, let articleID, let attachmentKey, _):
+            if let articleID {
+                store.updateMediaProgress(articleID: articleID, attachmentKey: attachmentKey, position: currentTime, duration: duration > 0 ? duration : nil)
+            }
             return
         case .book(_, persists: false):
             return

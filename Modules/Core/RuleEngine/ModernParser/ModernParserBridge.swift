@@ -2,6 +2,18 @@ import Foundation
 import CryptoKit
 import os
 
+/// 显式准备的网页请求可跨网络等待携带响应处理合同，不跨执行器携带AnalyzeUrl/JS对象。
+struct SourceResponseOptions: Equatable, Sendable {
+    var charset: String?
+    var bodyJs: String?
+}
+
+struct SourcePreparedWebRequest: Equatable, Sendable {
+    var request: URLRequest
+    var responseOptions: SourceResponseOptions
+    var variables: [String: String]
+}
+
 // MARK: - Error
 
 enum ModernParserBridgeError: LocalizedError {
@@ -1065,6 +1077,28 @@ class ModernParserBridge {
 
     func setExploreInfoMapValue(_ value: String, forKey key: String) {
         jsEngine.setExploreInfoMapValue(value, forKey: key)
+    }
+
+    func withUserInterface<T>(_ handlers: BoundSourceUserInterfaceHandlers?, _ body: () throws -> T) rethrows -> T {
+        guard let handlers else { return try body() }
+        let engine = jsEngine
+        let browser = engine.browserPresentHandler, captcha = engine.captchaPresentHandler, page = engine.browserPagePresentHandler
+        let browserGuard = engine.browserInteractionGuard, captchaGuard = engine.captchaInteractionGuard
+        engine.browserInteractionGuard = { true }; engine.captchaInteractionGuard = { true }
+        engine.browserPresentHandler = handlers.browser
+        engine.captchaPresentHandler = handlers.captcha
+        engine.browserPagePresentHandler = handlers.browserPage
+        defer {
+            engine.browserPresentHandler = browser; engine.captchaPresentHandler = captcha
+            engine.browserPagePresentHandler = page
+            engine.browserInteractionGuard = browserGuard; engine.captchaInteractionGuard = captchaGuard
+        }
+        return try body()
+    }
+
+    func userInterfaceJava(_ api: NSObject, methods: [String]) throws -> Any {
+        guard let value = jsEngine.delegatingJava(to: api, methods: methods) else { throw ModernParserBridgeError.parseError("Source UI bridge unavailable") }
+        return value
     }
 
     /// Presents URLs that source JS opens via `java.showBrowser` / `java.startBrowser`.
@@ -2667,7 +2701,7 @@ class ModernParserBridge {
         return jsEngine.evaluateResponseScript(
             js,
             response: response,
-            bindings: ["baseUrl": response.url(), "baseURL": response.url()]
+            bindings: runtimeRuleBindings.merging(["baseUrl": response.url(), "baseURL": response.url()]) { _, value in value }
         )
     }
 
@@ -2788,7 +2822,8 @@ class ModernParserBridge {
             throw ModernParserBridgeError.timeout
         }
 
-        return try finishFetch(data: data, response: response, request: request, analyzeUrl: analyzeUrl)
+        return try finishFetch(data: data, response: response, request: request,
+                               options: .init(charset: analyzeUrl.charset, bodyJs: analyzeUrl.bodyJs))
     }
 
     private enum PreparedFetch {
@@ -2799,12 +2834,45 @@ class ModernParserBridge {
 
     /// `fetch`'s script half before the network: the rule URL resolved into a request.
     /// 只准备显式打开的网页请求；复用AnalyzeUrl/源认证，不发起网络或另一套URL解析。
-    func prepareRuleWebRequest(_ ruleURL: String) throws -> URLRequest {
+    func prepareRuleWebRequest(_ ruleURL: String, scope: RuleData? = nil) throws -> SourcePreparedWebRequest {
+        let scope = scope ?? RuleData()
         switch try prepareFetch(ruleUrl: ruleURL, key: nil, page: nil, runtimeVariables: nil,
-                                pageScope: nil, isPrimaryRequest: true, additionalHeaders: [:], allowsWebView: true) {
-        case .network(_, let request): return request
+                                pageScope: scope, isPrimaryRequest: true, additionalHeaders: [:], allowsWebView: true) {
+        case .network(let url, let request):
+            return .init(request: request, responseOptions: .init(charset: url.charset, bodyJs: url.bodyJs), variables: scope.variableMap)
         case .dataURI: throw ModernParserBridgeError.invalidURL(ruleURL)
         }
+    }
+
+    /// WebKit已解析的URL是网页数据，不是源表达式：不得把其中的{{...}}或options升级为源脚本。
+    /// 这里只复用源认证/限流边界；HTTP method/body保持原样，不创建第二套AnalyzeUrl解析器。
+    func prepareNativeWebRequest(_ raw: URLRequest, scope: RuleData? = nil) throws -> SourcePreparedWebRequest {
+        guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
+        guard let url = raw.url, SourceRequestHeaderScope.origin(url) != nil, url.user == nil, url.password == nil,
+              raw.httpBodyStream == nil else { throw ModernParserBridgeError.invalidURL("Web navigation") }
+        let method = (raw.httpMethod ?? "GET").uppercased()
+        guard ["GET", "HEAD"].contains(method) || raw.httpBody != nil else { throw ModernParserBridgeError.invalidURL("Web form body unavailable") }
+        var request = raw
+        for key in (request.allHTTPHeaderFields ?? [:]).keys
+            where !SourceRequestHeaderScope.publicHeaderNames.contains(key.lowercased()) && !["referer", "origin"].contains(key.lowercased()) {
+            request.setValue(nil, forHTTPHeaderField: key)
+        }
+        applySourceAuthentication(to: &request)
+        if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
+        if runtimeOverrides != nil, _jsEngine?.lastError != nil { throw ModernParserBridgeError.parseError("Source JavaScript failed") }
+        request.httpShouldHandleCookies = sourceRuleData.source.enabledCookieJar
+        request.timeoutInterval = 30
+        return .init(request: request, responseOptions: .init(), variables: scope?.variableMap ?? [:])
+    }
+
+    /// 复用fetch的响应半段；已准备URL不能再求值/POST一次，403也必须进入登录检查。
+    func finishRuleWebRequest(data: Data, response: URLResponse, request: URLRequest,
+                              options: SourceResponseOptions) throws -> (body: String, url: String, status: Int) {
+        lastFetchStatus = 200
+        lastFetchHeaders = [:]
+        lastFetchRequestURL = request.url?.absoluteString ?? ""
+        let result = try finishFetch(data: data, response: response, request: request, options: options)
+        return (result.0, result.1, lastFetchStatus)
     }
 
     private func prepareFetch(
@@ -2899,7 +2967,7 @@ class ModernParserBridge {
 
     /// `fetch`'s script half after the network: decode, `loginCheckJs`, `bodyJs`.
     private func finishFetch(
-        data: Data, response: URLResponse, request: URLRequest, analyzeUrl: AnalyzeUrl
+        data: Data, response: URLResponse, request: URLRequest, options: SourceResponseOptions
     ) throws -> (String, String) {
         // One decoder with the native path: the source's `charset` option decides when it
         // names one, as in Legado, and otherwise the charset is detected from the header, the
@@ -2907,7 +2975,7 @@ class ModernParserBridge {
         // every GBK page that did not name its charset into "".
         guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
         let capturedResult = LegadoHTTPResult.make(
-            request: request, data: data, response: response, declaredCharset: analyzeUrl.charset
+            request: request, data: data, response: response, declaredCharset: options.charset
         )
         let sourceResponse = LegadoStrResponse(result: capturedResult)
         let checkedResponse = applyLoginCheck(to: sourceResponse)
@@ -2942,13 +3010,13 @@ class ModernParserBridge {
             body: body
         )
         WebCrawlerDebugger.logResponse(
-            url: request.url?.absoluteString ?? analyzeUrl.url,
+            url: request.url?.absoluteString ?? "",
             statusCode: (response as? HTTPURLResponse)?.statusCode ?? -1,
             htmlBody: body
         )
 
         let transformedBody = try applyResponseBodyScript(
-            analyzeUrl.bodyJs,
+            options.bodyJs,
             to: body,
             baseURL: finalUrl
         )
@@ -2973,7 +3041,7 @@ class ModernParserBridge {
         let previousStage = runtimeStage
         runtimeStage = "bodyJs"
         defer { runtimeStage = previousStage }
-        let value = jsEngine.evaluateIsolated(script, bindings: ["result": body, "baseUrl": baseURL])
+        let value = jsEngine.evaluateIsolated(script, bindings: runtimeRuleBindings.merging(["result": body, "baseUrl": baseURL, "baseURL": baseURL]) { _, value in value })
         if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
         guard let transformed = value else {
             throw ModernParserBridgeError.parseError(

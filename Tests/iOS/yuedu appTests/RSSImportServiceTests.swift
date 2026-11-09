@@ -69,7 +69,7 @@ struct RSSImportServiceTests {
     @Test("真实URLSession包下载有响应检查和解压后字节上限")
     func boundedDownload() async throws {
         let body = try data(source())
-        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/VideoStill")
+        let directory = VideoStillFixtures.directory()
         let server = try VideoStillFixtureServer(directory: directory, routes: [
             "/ok": .init(body: body), "/large": .init(body: body),
             "/error": .init(body: body, status: "503 Service Unavailable")

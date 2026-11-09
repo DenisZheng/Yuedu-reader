@@ -157,7 +157,7 @@ struct RSSBrowsingContractTests {
         source.header = #"{"X-Source":"fixture"}"#
         source.sortUrl = #"https://start.invalid/open#anchor,{"method":"POST","body":"a=1","headers":{"X-Option":"yes"}}"#
         let target = try #require(try await RSSOpenTarget.resolve(source: source, session: session))
-        guard case .request(let request) = target else { Issue.record("没有生成网页请求"); return }
+        guard case .request(let request, _) = target else { Issue.record("没有生成网页请求"); return }
         #expect(request.httpMethod == "POST")
         #expect(request.httpBody.map { String(decoding: $0, as: UTF8.self) } == "a=1")
         #expect(request.value(forHTTPHeaderField: "X-Source") == "fixture")

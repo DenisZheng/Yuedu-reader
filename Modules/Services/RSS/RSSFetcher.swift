@@ -1214,7 +1214,8 @@ final class RSSFetcher: ObservableObject {
             if let parsed = RSSFeedParser.parse(data: data, url: source.url) {
                 let items = parsed.items.map {
                     RSSItem(from: $0, sourceId: source.id,
-                            summary: RSSContentSanitizer.summary(from: $0.contentHTML ?? $0.contentText ?? $0.summary ?? ""))
+                            summary: RSSContentSanitizer.summary(from: $0.contentHTML ?? $0.contentText ?? $0.summary ?? ""),
+                            sourceContentType: source.contentType)
                 }
                 return (items, RSSFeedInfo(title: parsed.title, homepageURL: parsed.homePageURL, faviconURL: parsed.faviconURL), nil, false)
             }

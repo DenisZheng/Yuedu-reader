@@ -44,11 +44,31 @@ struct RSSMediaProgress: Codable, Equatable, Sendable {
     var duration: Double?
 }
 
+/// 附件类型与源类型不同域；保留旧版rawValue对象和未知值，不能让未知附件破坏整库读取。
+struct RSSAttachmentKind: RawRepresentable, Codable, Equatable, Sendable {
+    var rawValue: Int
+    static let other = Self(rawValue: 0)
+    static let image = Self(rawValue: 1)
+    static let video = Self(rawValue: 2)
+    static let audio = Self(rawValue: 3)
+    private enum CodingKeys: String, CodingKey { case rawValue }
+    init(rawValue: Int) { self.rawValue = rawValue }
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer()
+        if let integer = try? value.decode(Int.self) { rawValue = integer }
+        else { rawValue = try decoder.container(keyedBy: CodingKeys.self).decode(Int.self, forKey: .rawValue) }
+    }
+    func encode(to encoder: Encoder) throws {
+        var value = encoder.container(keyedBy: CodingKeys.self)
+        try value.encode(rawValue, forKey: .rawValue)
+    }
+}
+
 struct RSSMediaReference: Codable, Equatable, Sendable, Identifiable {
-    /// 原始附件key或执行器明确指定的角色（如primary）；不是签名播放地址。
+    /// 原始附件key或明确角色，不使用签名URL作为进度身份。
     var key: String
     var articleID: String
-    var kind: RSSContentType
+    var kind: RSSAttachmentKind
     var url: String
     var id: String { RSSIdentity.attachment(articleID: articleID, key: key) }
 }

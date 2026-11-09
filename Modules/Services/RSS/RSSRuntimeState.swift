@@ -52,15 +52,26 @@ final class RSSRuntimeState: SourceRuntimeStateAccess, @unchecked Sendable {
         }
     }
     func mutateCredentials(_ mutation: (UInt64?) -> UInt64?) {
-        guard isCurrent else { return }
-        let expected = lock.withLock { credentialRevision }
-        guard let updated = mutation(expected) else {
-            let failed = isActiveRevision(expected)
-            lock.withLock { credentialWriteFailed = failed }
-            invalidate()
-            return
+        // CAS与active检查是同一个临界区；不能在检查后被撤销，再把旧凭据写回。
+        let mustInvalidate = lock.withLock { () -> Bool in
+            guard active else { return false }
+            guard isActiveRevision(credentialRevision) else { return true }
+            guard let updated = mutation(credentialRevision) else {
+                credentialWriteFailed = isActiveRevision(credentialRevision)
+                return true
+            }
+            credentialRevision = updated
+            return false
         }
-        lock.withLock { if active { credentialRevision = updated } }
+        if mustInvalidate { invalidate() }
+    }
+    func withCurrentAccess<T: Sendable>(_ body: @Sendable () throws -> T) throws -> T {
+        return try lock.withLock {
+            guard active else { throw CancellationError() }
+            if let authenticationKey, let credentialRevision {
+                return try LoginManager.shared.withLoginInfoRevision(sourceUrl: authenticationKey, expectedRevision: credentialRevision, body)
+            } else { return try body() }
+        }
     }
     private func isActiveRevision(_ expected: UInt64?) -> Bool {
         guard let authenticationKey else { return true }

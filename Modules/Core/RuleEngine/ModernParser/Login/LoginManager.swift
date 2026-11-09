@@ -43,7 +43,7 @@ enum LoginState: Equatable {
 /// A single field in a login form, parsed from the source's `loginUi` JSON.
 /// Mirrors Legado's `RowUi` data class. The one model behind both the book-source
 /// and TTS login sheets.
-struct LoginField: Identifiable, Equatable {
+struct LoginField: Identifiable, Equatable, Sendable {
     let name: String
     let type: LoginFieldType
     let action: String?
@@ -56,7 +56,7 @@ struct LoginField: Identifiable, Equatable {
 
     var id: String { name }
 
-    enum LoginFieldType: String {
+    enum LoginFieldType: String, Sendable {
         case text     = "text"
         case password = "password"
         case select   = "select"
@@ -645,6 +645,14 @@ final class LoginManager: Sendable {
         }
         if result?.1 == true { notifyLoginInfoChanged(sourceUrl: sourceUrl) }
         return result?.0
+    }
+
+    /// 在短小的Cookie内存变更期间固定凭据修订；body不可做IO或发送通知。
+    func withLoginInfoRevision<T: Sendable>(sourceUrl: String, expectedRevision: UInt64, _ body: @Sendable () throws -> T) throws -> T {
+        return try state.withLock { value in
+            guard value.loginInfoRevisions[sourceUrl, default: 0] == expectedRevision else { throw CancellationError() }
+            return try body()
+        }
     }
 
     /// Revision of the credentials used by a source's dynamic header rule.

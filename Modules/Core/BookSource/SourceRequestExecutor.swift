@@ -23,8 +23,10 @@ final class SourceRequestHeaderScope: @unchecked Sendable {
         _ = lock.withLock { origins.insert(origin) }
     }
     func inheritedHeaders(_ headers: [String: String], for url: URL?) -> [String: String] {
-        let allowed = url.flatMap(Self.origin).map { origin in lock.withLock { origins.contains(origin) } } ?? false
-        return allowed ? headers : headers.filter { Self.publicHeaderNames.contains($0.key.lowercased()) }
+        return contains(url) ? headers : headers.filter { Self.publicHeaderNames.contains($0.key.lowercased()) }
+    }
+    func contains(_ url: URL?) -> Bool {
+        url.flatMap(Self.origin).map { origin in lock.withLock { origins.contains(origin) } } ?? false
     }
     static func origin(_ url: URL) -> String? {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
@@ -40,6 +42,9 @@ struct SourceRequestExecutor: Sendable {
     let rateKey: String
     let cookieJarEnabled: Bool?
     var runtimeState: (any SourceRuntimeStateAccess)? = nil
+    var cookieScope: SourceRequestHeaderScope? = nil
+    var maximumBytes: Int? = nil
+    var requestValidator: (@Sendable (URL) throws -> Void)? = nil
 
     struct Response: Sendable {
         let data: Data
@@ -59,10 +64,12 @@ struct SourceRequestExecutor: Sendable {
         if let cookieJarEnabled {
             guard let url = raw.url, SourceRequestHeaderScope.origin(url) != nil,
                   url.user == nil, url.password == nil else { throw URLError(.unsupportedURL) }
-            let explicitCookie = raw.value(forHTTPHeaderField: "Cookie")
-            request.httpShouldHandleCookies = cookieJarEnabled
-            Self.applyRequestCookies(to: &request, explicit: explicitCookie)
-            redirect = SourceRequestRedirectGuard(initialURL: url, explicitCookie: explicitCookie, cookieJarEnabled: cookieJarEnabled)
+            try requestValidator?(url)
+            let allowsCookies = cookieScope?.contains(url) ?? true
+            let explicitCookie = allowsCookies ? raw.value(forHTTPHeaderField: "Cookie") : nil
+            request.httpShouldHandleCookies = false // RSS响应Cookie只能在授权检查后手动提交。
+            Self.applyRequestCookies(to: &request, explicit: explicitCookie, allowsJar: allowsCookies)
+            redirect = SourceRequestRedirectGuard(initialURL: url, explicitCookie: explicitCookie, cookieJarEnabled: cookieJarEnabled, runtimeState: runtimeState, cookieScope: cookieScope, requestValidator: requestValidator)
         } else { redirect = nil }
         let fingerprint = Self.fingerprint(request)
         if let fingerprint, validators?.requestFingerprint == fingerprint {
@@ -76,7 +83,19 @@ struct SourceRequestExecutor: Sendable {
             try Task.checkCancellation()
             guard runtimeState?.isCurrent != false else { throw CancellationError() }
             return try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group -> (Data, URLResponse) in
-                group.addTask { try await session.data(for: configuredRequest, delegate: redirect) }
+                group.addTask {
+                    guard let maximumBytes else { return try await session.data(for: configuredRequest, delegate: redirect) }
+                    let (bytes, response) = try await session.bytes(for: configuredRequest, delegate: redirect)
+                    defer { bytes.task.cancel() }
+                    guard maximumBytes > 0, response.expectedContentLength <= maximumBytes else { throw URLError(.dataLengthExceedsMaximum) }
+                    var data = Data(); data.reserveCapacity(min(maximumBytes, max(0, Int(response.expectedContentLength))))
+                    for try await byte in bytes {
+                        if data.count % 16_384 == 0 { try Task.checkCancellation() }
+                        guard data.count < maximumBytes else { throw URLError(.dataLengthExceedsMaximum) }
+                        data.append(byte)
+                    }
+                    return (data, response)
+                }
                 group.addTask {
                     try await Task.sleep(for: .seconds(timeout))
                     throw URLError(.timedOut)
@@ -90,6 +109,10 @@ struct SourceRequestExecutor: Sendable {
         let token = runtimeState?.addCancellation { work.cancel() }
         defer { if let token { runtimeState?.removeCancellation(token) } }
         let value = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+        try Task.checkCancellation()
+        guard runtimeState?.isCurrent != false else { throw CancellationError() }
+        if let failure = redirect?.cookieFailure { throw failure }
+        if let cookieJarEnabled { try Self.storeResponseCookies(value.1, enabled: cookieJarEnabled && (cookieScope?.contains(value.1.url) ?? true), authorization: runtimeState) }
         return Response(data: value.0, response: value.1, requestFingerprint: fingerprint)
     }
 
@@ -110,9 +133,36 @@ struct SourceRequestExecutor: Sendable {
         return digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    fileprivate static func applyRequestCookies(to request: inout URLRequest, explicit: String?) {
+    fileprivate static func storeResponseCookies(_ response: URLResponse, enabled: Bool, authorization: (any SourceRuntimeStateAccess)?) throws {
+        guard enabled else { return }
+        let cookies = try responseCookies(in: response)
+        if !cookies.isEmpty { try CookieStore.shared.synchronizeWebCookies(cookies, removed: [], authorization: authorization) }
+    }
+
+    /// 单独构造HTTPCookie不验证响应域；用系统临时jar的setCookies(for:mainDocumentURL:)验证域/公共后缀。
+    static func responseCookies(in response: URLResponse) throws -> [HTTPCookie] {
+        guard let response = response as? HTTPURLResponse, let url = response.url else { return [] }
+        var fields: [String: String] = [:]
+        for (key, value) in response.allHeaderFields where String(describing: key).lowercased() == "set-cookie" {
+            if let text = value as? String { fields["Set-Cookie"] = text }
+            else if let values = value as? [String] { fields["Set-Cookie"] = values.joined(separator: ", ") }
+        }
+        guard let raw = fields["Set-Cookie"], !raw.isEmpty else { return [] }
+        guard raw.utf8.count <= 65_536 else { throw URLError(.badServerResponse) }
+        let cookies = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
+        guard cookies.count <= 256, let validator = URLSessionConfiguration.ephemeral.httpCookieStorage else { throw URLError(.badServerResponse) }
+        validator.cookieAcceptPolicy = .onlyFromMainDocumentDomain
+        return cookies.filter { cookie in
+            // 用不带过期/路径限制的探针校验域；合法的过期原Cookie仍需返回以删除旧认证。
+            guard let probe = HTTPCookie(properties: [.name: "reader_cookie_domain_probe", .value: "1", .domain: cookie.domain, .path: "/"]) else { return false }
+            validator.setCookies([probe], for: url, mainDocumentURL: url)
+            return (validator.cookies ?? []).contains { $0.name == probe.name && $0.domain == probe.domain }
+        }
+    }
+
+    fileprivate static func applyRequestCookies(to request: inout URLRequest, explicit: String?, allowsJar: Bool = true) {
         guard let url = request.url else { return }
-        let jar = CookieStore.shared.requestHeader(for: url)
+        let jar = allowsJar ? CookieStore.shared.requestHeader(for: url) : ""
         let merged = CookieStore.shared.merge(existing: jar, incoming: explicit ?? "")
         request.setValue(merged.isEmpty ? nil : merged, forHTTPHeaderField: "Cookie")
     }
@@ -122,15 +172,34 @@ private final class SourceRequestRedirectGuard: NSObject, URLSessionTaskDelegate
     let initialURL: URL
     let explicitCookie: String?
     let cookieJarEnabled: Bool
-    init(initialURL: URL, explicitCookie: String?, cookieJarEnabled: Bool) {
+    let runtimeState: (any SourceRuntimeStateAccess)?
+    let cookieScope: SourceRequestHeaderScope?
+    let requestValidator: (@Sendable (URL) throws -> Void)?
+    private let errorLock = NSLock()
+    private var storedCookieFailure: Error?
+    var cookieFailure: Error? { errorLock.withLock { storedCookieFailure } }
+    init(initialURL: URL, explicitCookie: String?, cookieJarEnabled: Bool, runtimeState: (any SourceRuntimeStateAccess)?, cookieScope: SourceRequestHeaderScope?, requestValidator: (@Sendable (URL) throws -> Void)?) {
         self.initialURL = initialURL
         self.explicitCookie = explicitCookie
         self.cookieJarEnabled = cookieJarEnabled
+        self.runtimeState = runtimeState
+        self.cookieScope = cookieScope
+        self.requestValidator = requestValidator
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        do {
+            guard runtimeState?.isCurrent != false else { throw CancellationError() }
+            try SourceRequestExecutor.storeResponseCookies(response, enabled: cookieJarEnabled && (cookieScope?.contains(response.url) ?? true), authorization: runtimeState)
+        } catch {
+            errorLock.withLock { storedCookieFailure = error }
+            completionHandler(nil)
+            return
+        }
         guard let url = request.url, let target = SourceRequestHeaderScope.origin(url),
               url.user == nil, url.password == nil else { completionHandler(nil); return }
+        do { try requestValidator?(url) }
+        catch { errorLock.withLock { storedCookieFailure = error }; completionHandler(nil); return }
         var redirected = request
         if url != initialURL {
             // validator只验证旧目标的表示；即使同origin，新位置也不能用旧ETag得到假304。
@@ -144,8 +213,9 @@ private final class SourceRequestRedirectGuard: NSObject, URLSessionTaskDelegate
             }
         }
         // 原路径的jar Cookie不能复用到新路径，即使host没变；跨origin更不能带原始手工Cookie。
-        redirected.httpShouldHandleCookies = cookieJarEnabled
-        SourceRequestExecutor.applyRequestCookies(to: &redirected, explicit: sameOrigin ? explicitCookie : nil)
+        redirected.httpShouldHandleCookies = false
+        let allowsCookies = cookieScope?.contains(url) ?? true
+        SourceRequestExecutor.applyRequestCookies(to: &redirected, explicit: sameOrigin && allowsCookies ? explicitCookie : nil, allowsJar: allowsCookies)
         completionHandler(redirected)
     }
 }

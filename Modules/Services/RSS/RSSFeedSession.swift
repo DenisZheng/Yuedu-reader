@@ -35,6 +35,8 @@ final class RSSFeedSession {
     private let store: RSSStore
     private let session: URLSession
     private let maxPages: Int
+    private let resolvesEntry: Bool
+    private let entryOverrides: [RSSSortEntry]?
     private var activeRevision: UInt64?
     private var generation: UInt64 = 0
     private var task: Task<Void, Never>?
@@ -42,11 +44,14 @@ final class RSSFeedSession {
     private var visited: Set<String> = []
     private var loadedIDs: Set<String> = []
 
-    init(source: RSSSource, store: RSSStore, session: URLSession = .shared, maxPages: Int = 50) {
+    init(source: RSSSource, store: RSSStore, session: URLSession = .shared, maxPages: Int = 50,
+         resolvesEntry: Bool = true, entries: [RSSSortEntry]? = nil) {
         self.sourceID = source.id
         self.store = store
         self.session = session
         self.maxPages = max(1, maxPages)
+        self.resolvesEntry = resolvesEntry
+        self.entryOverrides = entries
         // 规则列表既有默认分类的身份保持不变；普通Feed仍为.feed。
         self.scope = source.isLegadoRuleBased ? .category(.init(name: "", url: source.sourceKey)) : .feed
     }
@@ -96,7 +101,7 @@ final class RSSFeedSession {
         guard !isLoading, let source = store.source(id: sourceID), let ticket = store.requestTicket(for: sourceID) else { return }
         generation &+= 1
         let id = generation
-        let resolvedEntries = entries.isEmpty || activeRevision != store.configurationRevision ? nil : entries
+        let resolvedEntries = entryOverrides ?? (entries.isEmpty || activeRevision != store.configurationRevision ? nil : entries)
         activeRevision = store.configurationRevision
         isLoading = true
         failedRequest = request
@@ -104,10 +109,12 @@ final class RSSFeedSession {
         wasCancelled = false
         webPageFallbackURL = nil
         let metadata = scope == .feed && !request.append ? store.feedMetadata(for: sourceID) : nil
+        let resolvesEntry = self.resolvesEntry
         let work = Task { [weak self, store, session] in
             let fetcher = RSSFetcher(session: session)
             await fetcher.fetchItems(from: source, metadata: metadata, sortEntry: request.entry, owner: store,
-                                     page: request.page, key: request.key, requestURL: request.url, resolvedEntries: resolvedEntries)
+                                     page: request.page, key: request.key, requestURL: request.url,
+                                     resolveEntry: resolvesEntry, resolvedEntries: resolvedEntries)
             guard let self, id == self.generation else { return }
             defer { self.isLoading = false; self.task = nil }
             guard !Task.isCancelled, store.accepts(ticket), store.source(id: source.id) == source else {

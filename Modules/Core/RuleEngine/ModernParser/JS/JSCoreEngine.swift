@@ -143,6 +143,9 @@ class JSCoreEngine {
         didSet { bridge.browserPresentHandler = browserPresentHandler }
     }
 
+    var browserInteractionGuard: (() -> Bool)? { didSet { bridge.browserInteractionGuard = browserInteractionGuard } }
+    var captchaInteractionGuard: (() -> Bool)? { didSet { bridge.captchaInteractionGuard = captchaInteractionGuard } }
+
     /// Called when JS invokes `java.getVerificationCode`. Unset, the captcha opens through
     /// `LegadoJSBridge.sharedCaptchaPresenter`.
     var captchaPresentHandler: ((SourceCaptchaRequest, @escaping @Sendable (String?) -> Void) -> Void)? {
@@ -596,6 +599,8 @@ class JSCoreEngine {
     func evaluate(_ script: String, result: Any?, bindings: [String: Any] = [:]) -> String? {
         switch onJSQueueWithTimeout({ [self] () -> String? in
             lastError = nil
+            let previousJava = bindings["java"] != nil ? context.objectForKeyedSubscript("java") : nil
+            defer { if let previousJava { context.setObject(previousJava, forKeyedSubscript: "java" as NSString) } }
             setResult(result)
             for (key, value) in bindings {
                 context.setObject(value, forKeyedSubscript: key as NSString)
@@ -620,6 +625,8 @@ class JSCoreEngine {
     ) -> LegadoStrResponse {
         switch onJSQueueWithTimeout({ [self] in
             lastError = nil
+            let previousJava = bindings["java"] != nil ? context.objectForKeyedSubscript("java") : nil
+            defer { if let previousJava { context.setObject(previousJava, forKeyedSubscript: "java" as NSString) } }
             setResult(response)
             for (key, value) in bindings {
                 context.setObject(value, forKeyedSubscript: key as NSString)
@@ -794,10 +801,31 @@ class JSCoreEngine {
             || byte == 36
     }
 
+    /// 配置脚本的原生菜单只覆写明确的UI方法，其余java仍指向原共享请求/解析桥。
+    /// 对象只在本执行器内使用，不成为网页的任意脚本接口。
+    func delegatingJava(to api: NSObject, methods: [String]) -> JSValue? {
+        switch onJSQueueWithTimeout({ [self] () -> JSValue? in
+            let factory = context.evaluateScript("""
+            (function(original,api,names){const allowed=new Set(names);
+              return new Proxy(original,{get(target,key){const owner=allowed.has(key)?api:target;
+                const value=Reflect.get(owner,key,owner);return typeof value==='function'?value.bind(owner):value;
+              }});
+            })
+            """)
+            return factory?.call(withArguments: [bridge, api, methods])
+        }) {
+        case .completed(let value): return value
+        case .timedOut: return nil
+        }
+    }
+
     /// Evaluate with multiple bindings injected into the context before execution.
     func evaluate(_ script: String, bindings: [String: Any]) -> String? {
         switch onJSQueueWithTimeout({ [self] () -> String? in
             lastError = nil
+            // RSS导航/原生菜单的有限java属于这一次求值，不能替换后续共享解析器的java。
+            let previousJava = bindings["java"] != nil ? context.objectForKeyedSubscript("java") : nil
+            defer { if let previousJava { context.setObject(previousJava, forKeyedSubscript: "java" as NSString) } }
             for (key, value) in bindings {
                 context.setObject(value, forKeyedSubscript: key as NSString)
             }

@@ -8,8 +8,7 @@ import XCTest
 /// S1约束实验，不代表RSS已接入这些能力。服务器验收到达的请求，播放器验收实际时钟推进。
 @MainActor
 final class RSSMediaPoCTests: XCTestCase {
-    private let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/VideoStill", isDirectory: true)
+    private let fixtures = VideoStillFixtures.directory()
 
     func testHTTPRangeHEADAndAuthenticationFixture() async throws {
         let server = try VideoStillFixtureServer(directory: fixtures, referer: "https://fixture.invalid/page")

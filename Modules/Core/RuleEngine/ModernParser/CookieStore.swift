@@ -23,6 +23,7 @@ final class CookieStore: Sendable {
     /// Domain → raw cookie string (persistent snapshot).
     private let store: OSAllocatedUnfairLock<[String: String]>
     private let fileURL: URL
+    private let persistenceLock = NSLock()
 
     // MARK: - Init
 
@@ -76,6 +77,50 @@ final class CookieStore: Sendable {
             (!$0.isSecure || url.scheme?.lowercased() == "https") && ($0.expiresDate == nil || $0.expiresDate! > now)
         }
         return cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+    }
+
+    /// WebKit适配只选择真实domain的Cookie，保留其path/过期/HttpOnly；不使用脚本兼容回退。
+    func webCookies(for url: URL) -> [HTTPCookie] {
+        guard let host = url.host?.lowercased() else { return [] }
+        let now = Date()
+        return (HTTPCookieStorage.shared.cookies ?? []).filter { cookie in
+            let domain = cookie.domain.lowercased()
+            let plain = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
+            return (host == plain || domain.hasPrefix(".") && host.hasSuffix("." + plain))
+                && (!cookie.isSecure || url.scheme?.lowercased() == "https")
+                && (cookie.expiresDate == nil || cookie.expiresDate! > now)
+        }
+    }
+
+    /// 有属性的Cookie交由系统jar持有，退休同名根路径的旧扁平值。
+    /// 不把新Cookie写回旧格式，避免重启/过期后丢失path、Secure、HttpOnly而复活认证。
+    func synchronizeWebCookies(_ incoming: [HTTPCookie], removed: [HTTPCookie], authorization: (any SourceRuntimeStateAccess)? = nil) throws {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        let mutation: @Sendable () -> Bool = {
+            let now = Date()
+            for cookie in removed { HTTPCookieStorage.shared.deleteCookie(cookie) }
+            for cookie in incoming {
+                if let expires = cookie.expiresDate, expires <= now { HTTPCookieStorage.shared.deleteCookie(cookie) }
+                else { HTTPCookieStorage.shared.setCookie(cookie) }
+            }
+            return self.store.withLock { values -> Bool in
+                var changed = false
+                for cookie in removed + incoming where cookie.path == "/" {
+                    let domain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
+                    guard let raw = values[domain] else { continue }
+                    let next = self.removingCookie(named: cookie.name, from: raw)
+                    if next != raw {
+                        values[domain] = next.isEmpty ? nil : next
+                        changed = true
+                    }
+                }
+                return changed
+            }
+        }
+        let changed: Bool
+        if let authorization { changed = try authorization.withCurrentAccess(mutation) }
+        else { changed = mutation() }
+        if changed { try persistStrictly() }
     }
 
     /// Stores `cookie` for the host of `url`.
@@ -199,9 +244,24 @@ final class CookieStore: Sendable {
     }
 
     private func save() {
-        let snapshot = store.withLock { $0 }
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+        if Thread.isMainThread {
+            Task.detached { [self] in
+                do { try persistStrictly() }
+                catch { AppLogger.parse("Cookie persistence failed", context: ["errorCode": (error as NSError).code], level: .error) }
+            }
+        } else {
+            do { try persistStrictly() }
+            catch { AppLogger.parse("Cookie persistence failed", context: ["errorCode": (error as NSError).code], level: .error) }
+        }
+    }
+
+    private func persistStrictly() throws {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        try persistenceLock.withLock {
+            // 锁内取最新快照，不能让较晚完成的旧保存覆盖新Cookie。
+            let data = try JSONEncoder().encode(store.withLock { $0 })
+            try data.write(to: fileURL, options: .atomic)
+        }
     }
 
     /// Replay persisted cookies into HTTPCookieStorage on startup.

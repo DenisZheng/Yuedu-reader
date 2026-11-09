@@ -6,7 +6,7 @@ import XCTest
 /// S1资源管道实验：使用共享脚本会话和WebKit真实加载，不代表RSS生产路径已接入。
 @MainActor
 final class RSSResourcePipelinePoCTests: XCTestCase {
-    private var directory: URL { URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/VideoStill") }
+    private var directory: URL { VideoStillFixtures.directory() }
 
     func testSharedScriptDecodeReachesWebKitImageAndKeepsSourceContext() async throws {
         let plain = pixel()

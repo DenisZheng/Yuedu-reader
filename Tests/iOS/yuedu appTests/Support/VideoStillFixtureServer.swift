@@ -4,7 +4,7 @@ import Network
 /// 视频帧与 RSS 媒体 PoC 共用的测试服务器：仅本机、临时端口、有限请求，不代理外站。
 /// 固定文件只允许访问给定目录的直接子文件；测试路由显式给出响应与必要头部。
 final class VideoStillFixtureServer: @unchecked Sendable {
-    struct Request: CustomStringConvertible {
+    struct Request: CustomStringConvertible, Sendable {
         let method: String
         let path: String
         let headers: [String: String]
@@ -31,6 +31,7 @@ final class VideoStillFixtureServer: @unchecked Sendable {
     private var continuation: CheckedContinuation<URL, Error>?
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private var received: [Request] = []
+    private var requestObserver: (@Sendable (Request) -> Void)?
 
     init(directory: URL, referer: String? = nil, routes: [String: Response] = [:]) throws {
         self.directory = directory
@@ -42,6 +43,9 @@ final class VideoStillFixtureServer: @unchecked Sendable {
     }
 
     var requests: [Request] { lock.withLock { received } }
+    func observeRequests(_ observer: @escaping @Sendable (Request) -> Void) {
+        lock.withLock { requestObserver = observer }
+    }
 
     func start() async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
@@ -139,6 +143,8 @@ final class VideoStillFixtureServer: @unchecked Sendable {
             return true
         }
         guard withinBudget else { return send(connection, status: "429 Too Many Requests", body: Data()) }
+        let observer = lock.withLock { requestObserver }
+        observer?(Request(method: method, path: path, headers: headers, body: body))
 
         let response: Response
         if let route = routes[path] {
@@ -170,7 +176,8 @@ final class VideoStillFixtureServer: @unchecked Sendable {
         var extra = response.headers
         extra["Content-Type"] = response.type
         extra["Accept-Ranges"] = "bytes"
-        extra["Cache-Control"] = "no-store"
+        // 默认no-store；路由显式声明Cache-Control时以路由为准（cacheFirst合同需要可缓存响应）。
+        if extra["Cache-Control"] == nil { extra["Cache-Control"] = "no-store" }
         if method == "GET", response.status == "200 OK", let range = headers["range"] {
             guard let bounds = Self.bounds(range, count: response.body.count) else {
                 extra["Content-Range"] = "bytes */\(response.body.count)"

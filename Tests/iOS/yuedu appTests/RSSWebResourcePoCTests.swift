@@ -6,8 +6,7 @@ import XCTest
 /// S1平台约束实验。页面/脚本全部自行构造，只访问本机固定路由，不使用真实源或账号。
 @MainActor
 final class RSSWebResourcePoCTests: XCTestCase {
-    private let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/VideoStill", isDirectory: true)
+    private let fixtures = VideoStillFixtures.directory()
 
     func testPageScriptsRelativeResourcesAndMainFrameInjectionOrder() async throws {
         let server = try VideoStillFixtureServer(directory: fixtures, routes: [

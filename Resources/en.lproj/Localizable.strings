@@ -1,4 +1,18 @@
 "CSS 選擇器示例：ul.book-list li\\n屬性提取：a@href、img@src" = "CSS selector example: ul.book-list li\\nAttribute extraction: a@href, img@src";
+"載入中" = "Loading";
+"來源需要互動登入" = "This source requires interactive sign-in.";
+"尚無分類" = "No categories";
+"沒有登入欄位" = "No sign-in fields";
+"附件" = "Attachments";
+"確認網頁操作" = "Confirm web action";
+"網頁要求開啟 %@。將使用該來源的原生功能或外部應用程式。" = "This page requests opening %@ using native source features or an external app.";
+"此網頁操作尚不支援" = "This web action is not supported.";
+"此網頁跳轉已被安全限制阻擋" = "This navigation was blocked for security.";
+"無法安全重送此網頁表單，請使用網站登入入口" = "This form cannot be safely replayed. Use the website’s sign-in page.";
+"此來源的資源規則無法安全執行" = "This source’s resource rules cannot be safely executed.";
+"來源資源載入失敗" = "Failed to load source resources.";
+"訂閱來源或登入狀態已變更，請重新開啟" = "The subscription source or sign-in state changed. Please reopen this page.";
+"來源網頁腳本執行失敗" = "The source page script failed.";
 "正文尚未完整載入，已保留部分內容" = "The article is only partially loaded. Loaded content has been kept.";
 "已達分頁上限，已保留部分文章" = "Page limit reached. The loaded articles have been kept.";
 "分頁連結形成循環，已停止載入" = "A pagination loop was detected. Loading has stopped.";
@@ -4409,3 +4423,4 @@
 "重試儲存" = "Retry save";
 "項目 %@" = "Entry %@";
 "首次刷新完成" = "First refresh completed";
+"此版本未啟用 iCloud" = "iCloud is not enabled in this build";

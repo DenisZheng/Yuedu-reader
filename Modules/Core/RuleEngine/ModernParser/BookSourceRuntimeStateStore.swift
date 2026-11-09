@@ -23,6 +23,7 @@ protocol SourceRuntimeStateAccess: Sendable {
     func addCancellation(_ action: @escaping @Sendable () -> Void) -> UUID?
     func removeCancellation(_ id: UUID)
     func mutateCredentials(_ mutation: (UInt64?) -> UInt64?)
+    func withCurrentAccess<T: Sendable>(_ body: @Sendable () throws -> T) throws -> T
     func sourceVariableJSON(for sourceUrl: String) -> String?
     func setSourceVariableJSON(_ json: String?, for sourceUrl: String)
     func sourceVariables(for sourceUrl: String) -> [String: Any]
@@ -38,9 +39,25 @@ extension SourceRuntimeStateAccess {
     func addCancellation(_ action: @escaping @Sendable () -> Void) -> UUID? { nil }
     func removeCancellation(_ id: UUID) {}
     func mutateCredentials(_ mutation: (UInt64?) -> UInt64?) { _ = mutation(nil) }
+    func withCurrentAccess<T: Sendable>(_ body: @Sendable () throws -> T) throws -> T {
+        guard isCurrent else { throw CancellationError() }
+        return try body()
+    }
 }
 
 enum SourceRuntimeRequirement: Error { case interactionRequired }
+
+/// 前台来源登录只授予浏览器/验证码交互，不放开任意系统访问。
+struct SourceUserInterfaceHandlers: Sendable {
+    var browser: @Sendable (RSSRuntime, SourceBrowserRequest, @escaping @Sendable (String?) -> Void) -> Void
+    var captcha: @Sendable (RSSRuntime, SourceCaptchaRequest, @escaping @Sendable (String?) -> Void) -> Void
+    var browserPage: @Sendable (RSSRuntime, LegadoBrowserPageRequest) -> Void
+}
+struct BoundSourceUserInterfaceHandlers: Sendable {
+    var browser: @Sendable (SourceBrowserRequest, @escaping @Sendable (String?) -> Void) -> Void
+    var captcha: @Sendable (SourceCaptchaRequest, @escaping @Sendable (String?) -> Void) -> Void
+    var browserPage: @Sendable (LegadoBrowserPageRequest) -> Void
+}
 
 /// 非书源用例的适配边界；不改变URL/规则解析器或另建JS引擎。
 struct SourceRuntimeOverrides: Sendable {

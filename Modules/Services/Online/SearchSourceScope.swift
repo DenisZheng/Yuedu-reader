@@ -1,8 +1,8 @@
 import Combine
 import Foundation
 
-struct SearchSourceScope: Equatable {
-    enum Mode: String, Equatable {
+struct SearchSourceScope: Equatable, Sendable {
+    enum Mode: String, Equatable, Sendable {
         case all
         case custom
     }

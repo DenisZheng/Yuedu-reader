@@ -4,8 +4,7 @@ import XCTest
 /// custom-scheme仅为平台PoC，不是RSS生产代理或许可扩大。
 @MainActor
 final class RSSSchemeResourcePoCTests: XCTestCase {
-    private let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/VideoStill", isDirectory: true)
+    private let fixtures = VideoStillFixtures.directory()
     private let origin = URL(string: "readerfork-fixture://fixture/")!
 
     func testCustomSchemeLoadsHTMLImagesAndRejectsUnlistedResources() async throws {

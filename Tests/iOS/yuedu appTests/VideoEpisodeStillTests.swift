@@ -9,8 +9,7 @@ import UIKit
 /// the way in is blue and one taken at the first frame is black.
 @Suite("Video episode stills")
 struct VideoEpisodeStillTests {
-    private static let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/VideoStill", isDirectory: true)
+    private static let fixtures = VideoStillFixtures.directory()
     private static let card = CGSize(width: 672, height: 378)
 
     private func still(_ name: String) async throws -> VideoStillFrame {

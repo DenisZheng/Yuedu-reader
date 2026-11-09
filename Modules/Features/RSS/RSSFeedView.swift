@@ -196,10 +196,13 @@ struct RSSFeedView: View {
     @State private var presentation: PagePresentation?
     @State private var autoOpenedWebPage = false
 
-    init(source: RSSSource, store: RSSStore = .shared) {
+    init(source: RSSSource, store: RSSStore = .shared, entries: [RSSSortEntry]? = nil, query: String? = nil, resolvesEntry: Bool = true) {
         self.source = source
         _store = StateObject(wrappedValue: store)
-        _session = State(initialValue: RSSFeedSession(source: source, store: store))
+        _session = State(initialValue: RSSFeedSession(source: source, store: store, resolvesEntry: resolvesEntry, entries: entries))
+        _selectedSortEntry = State(initialValue: entries?.first)
+        _submittedSearch = State(initialValue: query)
+        _searchText = State(initialValue: query ?? "")
     }
 
     private let timeFormatter: DateFormatter = {

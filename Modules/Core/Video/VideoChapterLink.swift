@@ -4,6 +4,12 @@ import Foundation
 struct VideoStream: Equatable, Sendable {
     let url: URL
     let headers: [String: String]
+    private let stopResource: (@Sendable () -> Void)?
+    init(url: URL, headers: [String: String], stopResource: (@Sendable () -> Void)? = nil) {
+        self.url = url; self.headers = headers; self.stopResource = stopResource
+    }
+    func closeResource() { stopResource?() }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.url == rhs.url && lhs.headers == rhs.headers }
 }
 
 enum VideoChapterLinkError: LocalizedError, Equatable {

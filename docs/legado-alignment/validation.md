@@ -423,3 +423,54 @@ App/扩展编译、S0相关RSS回归和上述UI操作已有实际通过证据；
 - 新门槛只等待bootstatus真实信号，不自动重试或改路由；新增用例保留原媒体超时与实际时钟断言，不静音、不推进伪造进度。失败状态在播放器拆除前采集。
 
 #36当前环境前置恢复通过，归档后自动开始S6。仍有底层环境机制未确认的风险；旧26.2、iOS17/真机、DRM与S6生产资源/媒体闭环未被本轮放行。若再次失败需保留RED，不可当成环境已知问题跳过。无生产音频修改，回滚仅撤回新测试/脚本并保留用户数据。
+
+## S6进行中：规则文档首批接入
+
+完整范围、失败证据及未完成项见[S6工作记录](s6-rule-web.md)。已将显式规则description/正文从普通Feed净化路径分流，保留交互HTML/iframe，按源执行preload/finished和启动页脚本/样式、baseURL开关；enableJs=false不执行源/页面脚本。普通Feed包括仅标记Legado导入的Feed仍保持安全净化。原生滚动恢复/保存独立于页面JS，等待contentSize实际信号，不逐帧发布Store状态；异常脱敏并提供原生重试入口。
+
+- 初始规则文档3项RED有5个issues；滚动首次RED有3个issues，单凭didFinish恢复仍失败1项，尺寸观察修正后通过。
+- 正常Dev宿主，官方27.2，两设备各22项/3 suites/0失败跳过：`/tmp/readerfork-s6-first-rule-iPhone.xcresult`、`/tmp/readerfork-s6-first-rule-iPad.xcresult`，包括6项新规则文档、6项既有页面和10项工具栏AX。
+- 相同代码S5完整回归，两设备各268项/38 suites/0失败跳过：`/tmp/readerfork-s6-first-s5-iPhone/tests.xcresult`、`/tmp/readerfork-s6-first-s5-iPad/tests.xcresult`。五语各4014键通过。
+
+**首批接入时S6未完成，未阶段提交/Push。** 首文档与撤销补充见下节；本节22项局部结果不替代完整阶段验收，不推进S7。
+
+## S6补充：首文档共享响应与已加载网页撤销
+
+证据、完整命令及回滚见[S6第二批记录](s6-rule-web.md#第二批实现首文档响应合同与网页撤销)。
+
+- 准备好的请求携带charset/bodyJs、变量和原文章上下文，响应复用ModernParserBridge共享半段；实际Big5→bodyJs→WebKit DOM、200/403登录检查、同源两文章并发、不重复动态URL/POST均已运行。
+- 网页通过RSSStore现有运行时登记撤销；覆盖登录/真实凭据修订、配置、外部变量、删除、自身导航后撤销、切换owner与生产拆除旧JS realm。取得同源turn后重验凭据，拒绝排队期间被更新的旧请求。
+- 正常Reader-Fork-Dev，Xcode27.2/SDK27.2、官方iOS27.2(24B8117)，iPhone18 Pro Max与iPad Pro13-inch(M5)各**63项/6 suites/0失败跳过**：/tmp/readerfork-s6-request-lifetime-final-iPhone.xcresult、/tmp/readerfork-s6-request-lifetime-final-iPad.xcresult。
+- 选择RSSRuleWebTests(6)、RSSWebRequestTests(5)、RSSWebInvalidationTests(4)、RSSOpeningViewTests(6)、RSSToolbarVoiceOverTests(10)、AnalyzeUrlTests(32)，xcresult树确认各用例实际执行。早期无匹配的AnalyzeUrlResponseBodyTests筛选器已纠正，不能记成该suite通过。
+- 同代码S5完整回归，各**268项/38 suites/0失败跳过**：/tmp/readerfork-s6-request-s5-final-iPhone/tests.xcresult、/tmp/readerfork-s6-request-s5-final-iPad/tests.xcresult。这与63项有重叠，不合并宣称独立测试总数。
+- 本批各原始失败都先有RED；包括丢失响应选项、四类Store撤销、真实凭据修订、导航generation、owner变化、拆除后旧文档，以及排队期间凭据CAS刷新。原文章bodyJs绑定缺失也复现并修正；测试失败退出先等待落盘，未改生产文件权限。
+- 五语Localizable各4015键、原包SHA-256及git diff --check通过；未执行原始私人源脚本、未加依赖/权限、未改签名/并发策略、未更换DerivedData或清数据，没有新的云构建/提交/Push。
+
+**该批结束时S6继续进行，不放行、不推进S7。** 当时证明首文档和文档级撤销；后续补充见下节，不把历史局部结论当阶段完成。iOS17/真机、真人登录、DRM与iCloud正式签名仍未验证。回滚本批不改变持久格式或删除RSS/凭据数据。
+
+## S6补充：有限动作桥、Cookie授权与生产WebKit位图
+
+完整边界、RED与回滚见[S6第三批记录](s6-rule-web.md#第三批有限网页动作cookie生命周期与生产图片资源)。
+
+- 有限动作桥/同源后续导航接入生产WebKit；原生目的页路由尚未全部接通，不把组件行为通过当完整UI通过。
+- Cookie按真实domain/path/属性同步；凭据变化后旧响应不能写Cookie；过期/会话Cookie不能从旧扁平快照复活；响应不能给无关域种Cookie。这些均先有真实RED，再修正同一生产路径。HttpOnly图片响应Cookie到达WebKit后续真实fetch，网页JS仍不可读。
+- 合成密文经过共享RSS jsLib/coverDecodeJs及私有头HTTP请求，字节到达生产WK图片；启用JS、禁用JS、动态src/innerHTML/srcset及黑名单网络前阻断已运行。能力scheme仅登记图片，不接管http(s)或建立任意请求代理；外站不带其他站点Cookie。
+- 正常Reader-Fork-Dev、Xcode/SDK27.2、官方iOS27.2(24B8117)，iPhone/iPad各**32项/7 suites/0失败跳过**：/tmp/readerfork-s6-image-cookie-iPhone.xcresult、/tmp/readerfork-s6-image-cookie-final-iPad.xcresult。
+- 同代码S5回归各**268项/38 suites/0失败跳过**：/tmp/readerfork-s6-image-cookie-s5-iPhone/tests.xcresult、/tmp/readerfork-s6-image-cookie-s5-final-iPad/tests.xcresult。命令为scripts/xctest.sh的7个专项suite及scripts/validate_reader_fork_s5.sh，iPad由scripts/sim.sh dest iPad选择；执行串行，未额外build/clean或更换DerivedData。
+- 五语各4020键、git diff --check、两原包SHA-256及Android固定基准已核对。没有运行私有源包脚本或新云构建。
+
+**S6仍未阶段完成。** 尚需真实原生动作UI、图片type=1/附件、SVG/复杂资源、生产音视频及进度/恢复/竞争、cacheFirst/showWebLog、完整三态/AX/视觉与真机。用户最新要求持续推进到S8；仍不把硬件、签名或未执行场景写成通过，不自动Push/release。
+
+## S6补充：媒体资源会话与门槛脚本（未放行）
+
+- 命令：`scripts/validate_reader_fork_s6.sh`（iPad设置 `YUEDU_DEST="$(bash scripts/sim.sh dest iPad)"`）。
+- 结果：iPhone/iPad各S5回归268项、S6专项73项，零失败零跳过；证据 /tmp/readerfork-s6-gate-iPhone、/tmp/readerfork-s6-gate-iPad。
+- 未验证/未完成：cacheFirst、页面级媒体UI路径、前后台/重启续播/播放竞争、复杂资源、视觉与VoiceOver、真机（0个codesigning身份）、iOS 17、DRM、真人登录。详见 s6-rule-web.md 第四批。
+- 回滚：撤回RSSMediaResourceSession、RSSTypedArticleView、RSSWebConsoleLog及对应接线；不删除RSS状态。未提交、未Push。
+
+## S6补充：cacheFirst、页面级媒体与首次真机
+
+- 模拟器：scripts/validate_reader_fork_s6.sh，iPhone/iPad各S5 268项 + S6 92项，零失败零跳过（/tmp/readerfork-s6-gate3-*）。
+- 真机：scripts/device_dev_test.sh，iPhone 17 Pro / iOS 27.2，免费个人团队签名、无iCloud与App Group，92项全部通过（/tmp/readerfork-device-s6.xcresult）。
+- 修复：无iCloud签名下启动即崩（CKContainer陷阱），增加READER_FORK_NO_ICLOUD编译条件；正常构建行为不变。
+- 未验证：真机人工观感/声音、真实源、iCloud/App Group、iOS 17、DRM。未提交、未Push。

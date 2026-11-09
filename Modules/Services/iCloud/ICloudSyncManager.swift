@@ -234,8 +234,17 @@ final class ICloudSyncManager: ObservableObject {
         static let updatedAt = "updatedAt"
     }
 
-    private let container: CKContainer
-    private let database: CKDatabase
+    /// 无iCloud能力的签名（免费个人团队真机调试）中，构造CKContainer会直接陷阱终止进程；
+    /// 这类构建不创建容器，同步明确报不可用，本地阅读照常（ADR 0002）。
+    nonisolated static var isConfigured: Bool {
+        #if READER_FORK_NO_ICLOUD
+        false
+        #else
+        true
+        #endif
+    }
+    private let container: CKContainer?
+    private let database: CKDatabase?
 
     nonisolated private static var deviceId: String {
         if let id = UserDefaults.standard.string(forKey: deviceIdKey) { return id }
@@ -244,9 +253,10 @@ final class ICloudSyncManager: ObservableObject {
         return id
     }
 
-    private init(container: CKContainer = CKContainer(identifier: ICloudSyncManager.containerIdentifier)) {
+    private init(container: CKContainer? = ICloudSyncManager.isConfigured
+                    ? CKContainer(identifier: ICloudSyncManager.containerIdentifier) : nil) {
         self.container = container
-        database = container.privateCloudDatabase
+        database = container?.privateCloudDatabase
         lastSyncDate = UserDefaults.standard.object(forKey: Self.lastSyncKey) as? Date
     }
 
@@ -1361,6 +1371,7 @@ final class ICloudSyncManager: ObservableObject {
     }
 
     func statusTitle(isAppSignedIn: Bool) -> String {
+        guard Self.isConfigured else { return localized("此版本未啟用 iCloud") }
         guard isAppSignedIn else { return localized("尚未開啟同步") }
         switch accountStatus {
         case .available:
@@ -1452,7 +1463,8 @@ final class ICloudSyncManager: ObservableObject {
     }
 
     nonisolated private func fetchAccountStatus() async -> CKAccountStatus {
-        await withCheckedContinuation { continuation in
+        guard let container else { return .restricted }
+        return await withCheckedContinuation { continuation in
             container.accountStatus { status, _ in
                 continuation.resume(returning: status)
             }
@@ -1829,8 +1841,14 @@ final class ICloudSyncManager: ObservableObject {
         )
     }
 
+    nonisolated private func requireDatabase() throws -> CKDatabase {
+        guard let database else { throw ICloudSyncError.accountUnavailable(.restricted) }
+        return database
+    }
+
     nonisolated private func fetchRecord(_ recordID: CKRecord.ID) async throws -> CKRecord {
-        try await withCheckedThrowingContinuation { continuation in
+        let database = try requireDatabase()
+        return try await withCheckedThrowingContinuation { continuation in
             database.fetch(withRecordID: recordID) { record, error in
                 if let error {
                     continuation.resume(throwing: error)
@@ -1866,7 +1884,8 @@ final class ICloudSyncManager: ObservableObject {
 
     /// A record with its change tag and none of its fields; nil when there is no such record.
     nonisolated private func fetchRecordWithoutFields(_ recordID: CKRecord.ID) async throws -> CKRecord? {
-        try await withCheckedThrowingContinuation { continuation in
+        let database = try requireDatabase()
+        return try await withCheckedThrowingContinuation { continuation in
             let operation = CKFetchRecordsOperation(recordIDs: [recordID])
             operation.desiredKeys = []
             // Both blocks run on the operation's own serial queue: the record's result
@@ -1903,7 +1922,8 @@ final class ICloudSyncManager: ObservableObject {
     }
 
     nonisolated private func deleteRecord(_ recordID: CKRecord.ID) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let database = try requireDatabase()
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             database.delete(withRecordID: recordID) { _, error in
                 if let error {
                     continuation.resume(throwing: error)
@@ -1915,7 +1935,8 @@ final class ICloudSyncManager: ObservableObject {
     }
 
     nonisolated private func saveRecord(_ record: CKRecord) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let database = try requireDatabase()
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             database.save(record) { _, error in
                 if let error {
                     continuation.resume(throwing: error)
