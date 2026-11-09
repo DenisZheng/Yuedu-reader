@@ -95,7 +95,10 @@ enum RSSImageService {
     nonisolated static func inspect(_ data: Data) throws -> String {
         dispatchPrecondition(condition: .notOnQueue(.main))
         return try SourcePerfTrace.span("rss.image.inspect", "main=\(Thread.isMainThread),bytes=\(data.count)") {
-            guard data.count <= maximumBytes,
+            guard data.count <= maximumBytes else { throw RSSWebFailure.resourceUnavailable }
+            // SVG只作为<img>图片交给WebKit（图片上下文不执行脚本、不加载外部资源）；不当作HTML/文档返回。
+            if isSVG(data) { return "image/svg+xml" }
+            guard
                   let image = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
                   let type = CGImageSourceGetType(image),
                   let properties = CGImageSourceCopyPropertiesAtIndex(image, 0, nil) as? [CFString: Any],
@@ -114,8 +117,27 @@ enum RSSImageService {
             }
         }
     }
+    /// 根元素是<svg>的XML（可有BOM、XML声明、注释、DOCTYPE），只看前4KiB。
+    nonisolated static func isSVG(_ data: Data) -> Bool {
+        guard var text = String(data: data.prefix(4_096), encoding: .utf8) else { return false }
+        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+        var rest = Substring(text)
+        while true {
+            rest = rest.drop(while: \.isWhitespace)
+            if rest.hasPrefix("<?") || rest.hasPrefix("<!--") || rest.hasPrefix("<!") {
+                let end = rest.hasPrefix("<!--") ? "-->" : ">"
+                guard let close = rest.range(of: end) else { return false }
+                rest = rest[close.upperBound...]
+            } else { break }
+        }
+        guard rest.lowercased().hasPrefix("<svg") else { return false }
+        let next = rest.dropFirst(4).first
+        return next == nil || next!.isWhitespace || next == ">" || next == "/"
+    }
+
     nonisolated static func displayImage(_ data: Data) async throws -> UIImage {
-        try await SourceScriptThread.run {
+        if isSVG(data) { throw RSSWebFailure.imageFormatRestricted }
+        return try await SourceScriptThread.run {
             try SourcePerfTrace.span("rss.image.display", "main=\(Thread.isMainThread),bytes=\(data.count)") {
                 guard let value = UIImage(data: data)?.preparingForDisplay() else { throw RSSWebFailure.resourceUnavailable }
                 return value

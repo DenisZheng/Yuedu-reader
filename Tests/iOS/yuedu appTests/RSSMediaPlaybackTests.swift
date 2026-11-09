@@ -140,6 +140,69 @@ import XCTest
         try await owner.flushPersistence()
     }
 
+    @Test("签名地址过期：播放失败后重新执行ruleContent取新签名并从原进度继续；再次失败只报错不循环")
+    func expiredSignedURLReResolves() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) } }
+        let owner = RSSStore(storageDirectory: directory)
+        let media = try Data(contentsOf: fixtures.appendingPathComponent("video-still-landscape.mp4"))
+        final class Signer: @unchecked Sendable {
+            let lock = NSLock(); var issued = 0; var valid = 0; var refuseAll = false
+        }
+        let signer = Signer()
+        let server = try VideoStillFixtureServer(directory: fixtures)
+        server.route { request in
+            switch request.path {
+            case "/sign/article":
+                let n = signer.lock.withLock { signer.issued += 1; return signer.issued }
+                return .init(body: Data("<a id='v' href='/signed/video.mp4?sig=\(n)'>v</a>".utf8))
+            case "/signed/video.mp4":
+                let ok = signer.lock.withLock { !signer.refuseAll && request.query == "sig=\(signer.valid)" }
+                return ok ? .init(body: media, type: "video/mp4") : .init(body: Data(), status: "403 Forbidden")
+            default: return nil
+            }
+        }
+        let base = try await server.start()
+        defer { server.stop() }
+        var source = RSSSource(name: "Signed", url: base.absoluteString)
+        source.importedFromLegado = true; source.contentType = .video; source.ruleContent = "id.v@href"
+        owner.addSource(source)
+        var item = RSSItem(id: "signed", title: "Signed", link: base.appendingPathComponent("sign/article").absoluteString, sourceId: source.id)
+        item.contentType = .video
+        owner.mergeFetchedItems([item], for: source.id)
+        let article = try #require(owner.article(id: item.id))
+        owner.updateMediaProgress(articleID: article.id, attachmentKey: "primary", position: 1.0)
+        // 第一次解析得到 sig=1，随后服务器只认下一次签名，模拟打开后地址过期。
+        let (stale, resources) = try await RSSTypedArticleModel.resolveVideo(article, source: source, owner: owner)
+        signer.lock.withLock { signer.valid = 2 }
+        let controller = VideoPlaybackController(rss: owner, articleID: article.id, attachmentKey: "primary", stream: stale,
+            title: "Signed", resources: resources, refresh: { try await RSSTypedArticleModel.resolveVideo(article, source: source, owner: owner) })
+        defer { controller.close() }
+        controller.start()
+        let advanced = XCTestExpectation(description: "新签名实际播放")
+        let observer = controller.player.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: 1.4, preferredTimescale: 600))], queue: .main) { advanced.fulfill() }
+        #expect(await XCTWaiter.fulfillment(of: [advanced], timeout: 15) == .completed)
+        controller.player.removeTimeObserver(observer)
+        #expect(server.requests.filter { $0.path == "/sign/article" }.count == 2, "只重新求值一次")
+        #expect(server.requests.contains { $0.path == "/signed/video.mp4" && $0.query == "sig=2" })
+        #expect(controller.player.currentTime().seconds >= 1.0, "从保存进度继续，不回到开头")
+        #expect(resources.isStopped, "旧资源会话已停止")
+
+        // 新签名也失效：再失败一次只报告错误，不循环解析。
+        signer.lock.withLock { signer.refuseAll = true }
+        controller.retry()
+        let deadline = ContinuousClock.now + .seconds(15)
+        while ContinuousClock.now < deadline {
+            if case .failed = controller.phase { break }
+            await Task.yield()
+        }
+        guard case .failed = controller.phase else { Issue.record("持续失效应停在失败状态：\(controller.phase)"); return }
+        let resolves = server.requests.filter { $0.path == "/sign/article" }.count
+        #expect(resolves == 3, "手动重试只重新求值一次：\(resolves)")
+        try await owner.flushPersistence()
+    }
+
     @Test("type=2 ruleContent produces the playable URL (relative to the article); type=1 empty rule uses the link")
     func typedArticleResourceURL() async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)

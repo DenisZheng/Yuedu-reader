@@ -8,11 +8,12 @@ struct RSSArticleVideoPlayerView: View {
     let stream: VideoStream
     let resources: RSSMediaResourceSession
     let title: String
+    var refresh: VideoPlaybackController.RSSRefresh? = nil
     @EnvironmentObject private var bookStore: BookStore
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VideoPlayerView(content: .rss(owner, articleID: articleID, attachmentKey: attachmentKey,
-                                     stream, title: title, resources: resources)) { dismiss() }
+                                     stream, title: title, resources: resources, refresh: refresh)) { dismiss() }
             .environmentObject(bookStore)
     }
 }

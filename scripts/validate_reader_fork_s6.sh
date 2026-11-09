@@ -13,7 +13,7 @@ s6=(
   RSSRuleWebTests RSSWebRequestTests RSSWebInvalidationTests RSSWebNavigationTests
   RSSCookieAuthorizationTests RSSImageServiceTests RSSWebImageTests
   RSSWebActionRouterTests RSSLoginServiceTests RSSNativeWebFlowTests
-  RSSMediaPlaybackTests RSSMediaResourceSessionTests RSSWebDocumentCacheTests
+  RSSMediaPlaybackTests RSSMediaResourceSessionTests RSSWebDocumentCacheTests RSSS6VisualAccessibilityTests
   RSSMediaPoCTests VideoEpisodeStillTests RSSWebResourcePoCTests RSSSchemeResourcePoCTests RSSResourcePipelinePoCTests
 )
 YUEDU_EVIDENCE_DIR="$EVIDENCE/s5" bash scripts/validate_reader_fork_s5.sh

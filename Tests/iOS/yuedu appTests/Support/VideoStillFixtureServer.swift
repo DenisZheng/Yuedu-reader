@@ -9,6 +9,7 @@ final class VideoStillFixtureServer: @unchecked Sendable {
         let path: String
         let headers: [String: String]
         let body: Data
+        var query = ""
         var referer: String? { headers["referer"] }
         var description: String { "\(method) \(path)" }
     }
@@ -32,6 +33,7 @@ final class VideoStillFixtureServer: @unchecked Sendable {
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private var received: [Request] = []
     private var requestObserver: (@Sendable (Request) -> Void)?
+    private var dynamicRoute: (@Sendable (Request) -> Response?)?
 
     init(directory: URL, referer: String? = nil, routes: [String: Response] = [:]) throws {
         self.directory = directory
@@ -45,6 +47,11 @@ final class VideoStillFixtureServer: @unchecked Sendable {
     var requests: [Request] { lock.withLock { received } }
     func observeRequests(_ observer: @escaping @Sendable (Request) -> Void) {
         lock.withLock { requestObserver = observer }
+    }
+
+    /// 需要随请求变化的响应（如签名过期）；返回nil时回到静态路由/文件。
+    func route(_ handler: @escaping @Sendable (Request) -> Response?) {
+        lock.withLock { dynamicRoute = handler }
     }
 
     func start() async throws -> URL {
@@ -131,7 +138,9 @@ final class VideoStillFixtureServer: @unchecked Sendable {
         let first = lines[0].split(separator: " ")
         guard first.count == 3 else { close(connection); return }
         let method = String(first[0])
-        let path = String(first[1]).components(separatedBy: "?")[0]
+        let target = String(first[1]).components(separatedBy: "?")
+        let path = target[0]
+        let query = target.count > 1 ? target[1] : ""
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
             guard let colon = line.firstIndex(of: ":") else { continue }
@@ -139,15 +148,18 @@ final class VideoStillFixtureServer: @unchecked Sendable {
         }
         let withinBudget = lock.withLock {
             guard received.count < 128 else { return false }
-            received.append(Request(method: method, path: path, headers: headers, body: body))
+            received.append(Request(method: method, path: path, headers: headers, body: body, query: query))
             return true
         }
         guard withinBudget else { return send(connection, status: "429 Too Many Requests", body: Data()) }
-        let observer = lock.withLock { requestObserver }
-        observer?(Request(method: method, path: path, headers: headers, body: body))
+        let (observer, dynamic) = lock.withLock { (requestObserver, dynamicRoute) }
+        let current = Request(method: method, path: path, headers: headers, body: body, query: query)
+        observer?(current)
 
         let response: Response
-        if let route = routes[path] {
+        if let route = dynamic?(current) {
+            response = route
+        } else if let route = routes[path] {
             response = route
         } else {
             let name = String(path.dropFirst())

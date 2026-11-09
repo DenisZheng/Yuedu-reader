@@ -111,6 +111,89 @@ import Testing
             do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) }
         }
     }
+    @Test("explore动作：确认后进入原生发现页，按目标书源规则/请求头取书；取消不请求，重复触发被拒")
+    func exploreActionReachesDiscover() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let owner = RSSStore(storageDirectory: directory)
+        let server = try VideoStillFixtureServer(directory: directory, routes: [
+            "/explore": .init(body: Data("<ul><li class='b'><a href='/book/1'>Explore fixture book</a></li></ul>".utf8),
+                              requiredHeaders: ["x-books": "explore-destination"])
+        ])
+        let base = try await server.start()
+        var book = BookSource(bookSourceUrl: base.absoluteString + "books-" + UUID().uuidString, bookSourceName: "Explore fixture")
+        book.header = #"{"X-Books":"explore-destination"}"#
+        book.ruleExplore.bookList = "class.b"; book.ruleExplore.name = "tag.a@text"; book.ruleExplore.bookUrl = "tag.a@href"
+        await BookSourceStore.shared.waitUntilLoaded()
+        BookSourceStore.shared.add(book)
+        defer {
+            server.stop()
+            _ = BookSourceStore.shared.delete(id: book.id)
+            do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) }
+        }
+        let source = RSSSource(name: "Explore RSS", url: base.absoluteString)
+        owner.addSource(source)
+        let router = RSSWebActionRouter()
+        func request() -> RSSWebActionRequest {
+            .init(action: .explore(url: base.appendingPathComponent("explore").absoluteString, title: "Explore title", origin: book.bookSourceUrl),
+                  authority: .page, sourceID: source.id, ownerID: owner.runtimeIdentity, ticket: owner.requestTicket(for: source.id),
+                  baseURL: base, credentialRevision: LoginManager.shared.loginInfoRevision(sourceUrl: RSSRuntime.authenticationKey(for: source)))
+        }
+        func settle() async {
+            let deadline = ContinuousClock.now + .seconds(5)
+            while router.isLoading, ContinuousClock.now < deadline { await Task.yield() }
+        }
+        // 取消：确认框出现但不发请求。
+        try router.receive(request(), source: source, owner: owner)
+        await settle()
+        #expect(router.confirmation != nil)
+        do { try router.receive(request(), source: source, owner: owner); Issue.record("待确认期间重复触发应被拒") }
+        catch { #expect(error is RSSWebFailure) }
+        router.cancelPending()
+        #expect(router.confirmation == nil && router.destination == nil)
+        #expect(server.requests.isEmpty)
+
+        let window = try window(root: NavigationStack {
+            Text("root").modifier(RSSWebActionPresentation(router: router, owner: owner))
+        }.environmentObject(BookStore(metadataFileURL: directory.appendingPathComponent("books.json"))))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        try router.receive(request(), source: source, owner: owner)
+        await settle()
+        router.acceptConfirmation(owner: owner) { _ in Issue.record("explore不应走外部打开") }
+        guard case .explore(let selected, let url, let title)? = router.destination?.target else { Issue.record("未进入发现目的页"); return }
+        #expect(selected.id == book.id && title == "Explore title")
+        #expect(url == base.appendingPathComponent("explore").absoluteString)
+        // SwiftUI只在辅助功能读取时构建元素；按XCUITest方式临时开启automation读取实际显示的书名。
+        let accessibility = try #require(dlopen("/usr/lib/libAccessibility.dylib", RTLD_NOW))
+        typealias GetFlag = @convention(c) () -> Bool
+        typealias SetFlag = @convention(c) (Bool) -> Void
+        let enabled = unsafeBitCast(try #require(dlsym(accessibility, "_AXSAutomationEnabled")), to: GetFlag.self)
+        let setEnabled = unsafeBitCast(try #require(dlsym(accessibility, "_AXSSetAutomationEnabled")), to: SetFlag.self)
+        let was = enabled()
+        setEnabled(true)
+        defer { setEnabled(was) }
+        let deadline = ContinuousClock.now + .seconds(10)
+        func shown() -> Bool { labels(window).contains { $0.contains("Explore fixture book") } }
+        while !shown(), ContinuousClock.now < deadline { await Task.yield() }
+        #expect(shown(), "发现页必须实际显示目标书源解析的书：\(labels(window))")
+        let explore = server.requests.filter { $0.path == "/explore" }
+        // 列表首屏后可能按既有分页逻辑再取一次；每次都必须带目标书源的头。
+        #expect((1...2).contains(explore.count) && explore.allSatisfy { $0.headers["x-books"] == "explore-destination" })
+        try await owner.flushPersistence()
+    }
+    private func labels(_ view: UIView) -> Set<String> {
+        var found = Set<String>()
+        func walk(_ element: Any, depth: Int) {
+            guard depth < 40 else { return }
+            if let object = element as? NSObject, let label = object.accessibilityLabel, !label.isEmpty { found.insert(label) }
+            if let label = (element as? UILabel)?.text { found.insert(label) }
+            if let view = element as? UIView { for sub in view.subviews { walk(sub, depth: depth + 1) } }
+            if let object = element as? NSObject, let children = object.accessibilityElements {
+                for child in children { walk(child, depth: depth + 1) }
+            }
+        }
+        walk(view, depth: 0)
+        return found
+    }
     private func withRoot(_ run: (RSSStore, RSSSource, VideoStillFixtureServer, URL, UIWindow) async throws -> Void) async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let owner = RSSStore(storageDirectory: directory)

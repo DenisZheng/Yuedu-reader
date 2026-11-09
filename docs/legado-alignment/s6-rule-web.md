@@ -171,6 +171,15 @@ YUEDU_EVIDENCE_DIR=/tmp/readerfork-s6-request-s5-final-iPhone bash scripts/valid
 - 已知限制：单个上游响应上限16MiB，不支持Range的大MP4会失败；HLS外站资源仅允许公开HTTPS；loopback端点在后台/画中画及真机ATS下的行为未验证。
 - 硬件阻塞：真机显示available (paired)，但本机codesigning身份为0，无法签名安装；iOS 17、DRM、真人登录、正式签名同样未验证。
 
+## 第六批与阶段结论：S6本地阶段通过
+
+- 签名地址过期：type=1/2文章的播放器持有ruleContent重算回调；AVPlayerItem失败时重新求值一次，取得新签名和新资源会话，从当前进度继续（先解除旧会话的撤销回调再停止）；再次失败只报错。手动重试本身算一次重算，不叠加自动重算。普通Feed附件和脚本链接没有可重算的来源，保持原地址并报告失败（与Legado每次打开重新getContent的语义一致；Legado本身没有播放中自动重算）。测试：`RSSMediaPlaybackTests/expiredSignedURLReResolves`。
+- SVG/CSS：资源管道识别根元素为svg的XML，以image/svg+xml交给`<img>`；图片上下文中的SVG脚本不执行（测试断言）。原生图片查看器对SVG明确报“受限”，不当成解码失败。外部CSS由WebKit原生加载，不继承源私有头（测试断言）。管道模式下CSS中的背景图不经过私有头/coverDecode，这是已披露的限制。
+- explore动作：确认→原生发现页→按目标书源的规则和请求头实际取书并显示；取消不发请求；待确认期间重复触发被拒绝。
+- 视觉/AX：新增`RSSS6VisualAccessibilityTests`，类型化文章、图片和动作错误三个状态在深色/浅色+AX5下断言VoiceOver可读出标题/说明/操作按钮，且按钮在屏幕内。走查发现动作错误浮层在AX5下截断，已修复为全宽、可换行。截图位于/tmp/readerfork-s6-visual。
+- 门槛：iPhone/iPad各S5回归268项 + S6专项97项（19 suites），零失败零跳过（/tmp/readerfork-s6-gate4-*）。真机iPhone 17 Pro已跑92项通过，用户也手动确认了视频画面和声音。
+- 仍未验证（移交S8发布门槛）：iOS 17（本机没有该runtime，安装需另行批准）、DRM、真人登录、真实网站源、iCloud/App Group签名构建、真人VoiceOver实际使用。
+
 ## 第五批：cacheFirst、页面级媒体与真机（局部，S6仍未放行）
 
 - `cacheFirst`：`RSSWebDocumentCache` 只覆盖首文档，对应Legado的 LOAD_CACHE_ELSE_NETWORK。key包含源、URL、认证头和Cookie；命中时不发网络请求，也不重放Set-Cookie。no-store、非200和登录检查失败的响应不写入缓存。缓存位于Caches目录，上限32MiB，按LRU淘汰。WebKit子资源仍由系统处理。测试fixture原本对所有响应强制no-store，已改为路由可以覆盖。

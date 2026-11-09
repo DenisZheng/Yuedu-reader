@@ -49,8 +49,13 @@ final class VideoPlaybackController {
         case rss(RSSStore, articleID: String?, attachmentKey: String, VideoStream)
     }
 
-    private let source: Source
+    private var source: Source
     @ObservationIgnored private var mediaResources: RSSMediaResourceSession?
+    /// 规则解析得到的RSS媒体地址可能是会过期的签名URL；失败时按Legado重新打开的语义重新求值一次，
+    /// 不复用旧地址。附件/脚本链接没有可重算的来源，保持原地址并报告失败。
+    typealias RSSRefresh = @MainActor () async throws -> (VideoStream, RSSMediaResourceSession)
+    @ObservationIgnored private var rssRefresh: RSSRefresh?
+    private var rssStreamStale = false
     private var loadTask: Task<Void, Never>?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
@@ -93,7 +98,8 @@ final class VideoPlaybackController {
 
     /// An RSS article attachment, with progress owned by RSSStore and keyed by its stable attachment key.
     init(rss store: RSSStore, articleID: String?, attachmentKey: String, stream: VideoStream, title: String,
-         resources: RSSMediaResourceSession? = nil) {
+         resources: RSSMediaResourceSession? = nil, refresh: RSSRefresh? = nil) {
+        self.rssRefresh = refresh
         var book = ReadingBook(title: title, author: "", contentFilename: "")
         let progress = articleID.flatMap { store.mediaProgress(articleID: $0, attachmentKey: attachmentKey) }
         book.onlineChapters = [OnlineChapterRef(index: 0, title: title, url: stream.url.absoluteString)]
@@ -231,6 +237,30 @@ final class VideoPlaybackController {
         lastSavedTime = time
         let store: BookStore
         switch source {
+        case .rss(let rss, let articleID, let key, let stale) where rssStreamStale && rssRefresh != nil:
+            let refresh = rssRefresh
+            loadTask = Task { [weak self] in
+                do {
+                    guard let refresh else { return }
+                    let (stream, resources) = try await refresh()
+                    guard let self, !Task.isCancelled, !self.closed else { stream.closeResource(); return }
+                    // 先解除旧会话的撤销回调再停止，旧会话停止不能被当成凭据撤销。
+                    self.mediaResources?.onStop(nil)
+                    stale.closeResource()
+                    self.mediaResources = resources
+                    self.source = .rss(rss, articleID: articleID, attachmentKey: key, stream)
+                    self.rssStreamStale = false
+                    resources.onStop { [weak self] in Task { @MainActor in self?.resourceAccessRevoked() } }
+                    self.begin(stream)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard let self, !self.closed else { return }
+                    AppLogger.info("[Video] RSS media re-resolve failed", level: .error)
+                    self.phase = .failed((error as? LocalizedError)?.errorDescription ?? localized("無法播放這一集"))
+                }
+            }
+            return
         case .link(let stream), .rss(_, _, _, let stream):
             begin(stream)
             return
@@ -310,7 +340,12 @@ final class VideoPlaybackController {
             activateNowPlaying()
         case .failed:
             // A script's link has nothing to resolve it again from.
-            if case .book(let store, _) = source, refetchedChapter != chapterIndex {
+            if case .rss = source, rssRefresh != nil, refetchedChapter != chapterIndex {
+                refetchedChapter = chapterIndex
+                rssStreamStale = true
+                AppLogger.info("[Video] RSS media failed to play; resolving it again", level: .notice)
+                load(at: currentTime)
+            } else if case .book(let store, _) = source, refetchedChapter != chapterIndex {
                 refetchedChapter = chapterIndex
                 AppLogger.info("[Video] link failed to play; resolving it again", level: .notice)
                 VideoChapterLinks.discardResolvedLink(for: book, chapterIndex: chapterIndex, store: store)
@@ -356,6 +391,8 @@ final class VideoPlaybackController {
 
     func retry() {
         refetchedChapter = nil
+        // 手动重试本身就是一次重新求值；不再叠加失败后的自动重算。
+        if case .rss = source, rssRefresh != nil { rssStreamStale = true; refetchedChapter = chapterIndex }
         load(at: currentTime)
     }
 

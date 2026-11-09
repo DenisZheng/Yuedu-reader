@@ -205,7 +205,7 @@ bash scripts/xctest.sh -- -only-testing:'yuedu appTests/LegadoRSSCompatTests'
 | S3 | 持久化后重建 store、身份隔离、删除与晚到响应、不变不写、备份快照与恢复 | 实际升级设备与系统终止条件抽查 |
 | S4 | 执行上下文、变量隔离、认证传播、Cookie、并发/取消、共享书源回归 | 需要人参与的登录/验证码 |
 | S5 | 打开优先级、分类/搜索切换、列表/正文分页、重复页/重试/取消 | 少量代表站点的端到端差异 |
-| S6 | 本地 HTTP/WebKit/播放器集成测试，覆盖资源请求、Range/HLS、媒体进度和释放 | 实际声音/画面、后台中断、受限编码/DRM及真机行为 |
+| S6 | 本地阶段通过 | 规则网页/请求/Cookie/图片/动作/登录/媒体/cacheFirst/签名过期重算/SVG/explore/AX：双设备各S5 268项 + S6 97项零失败零跳过；真机iPhone 17 Pro 92项通过，用户确认画面和声音正常。iOS17/DRM/真人登录/真实源移交S8，见[S6记录](s6-rule-web.md) |
 | S7 | 导航/导入/管理 UI 测试、本地化/可访问性检查、WebDAV备份恢复与故障注入 | VoiceOver实际使用、Dynamic Type视觉检查、真实WebDAV服务 |
 | S8 | 分层代表源与回归重跑、请求/写盘/内存/主线程性能采集 | 最低iOS与真机发布抽查、需私人账号的场景 |
 

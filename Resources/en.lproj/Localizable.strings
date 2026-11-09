@@ -4424,3 +4424,4 @@
 "項目 %@" = "Entry %@";
 "首次刷新完成" = "First refresh completed";
 "此版本未啟用 iCloud" = "iCloud is not enabled in this build";
+"此圖片格式（SVG）無法在原生檢視器顯示，請在網頁中檢視" = "This image format (SVG) can't be shown in the native viewer. View it in the web page.";

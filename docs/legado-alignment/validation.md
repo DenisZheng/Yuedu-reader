@@ -474,3 +474,12 @@ App/扩展编译、S0相关RSS回归和上述UI操作已有实际通过证据；
 - 真机：scripts/device_dev_test.sh，iPhone 17 Pro / iOS 27.2，免费个人团队签名、无iCloud与App Group，92项全部通过（/tmp/readerfork-device-s6.xcresult）。
 - 修复：无iCloud签名下启动即崩（CKContainer陷阱），增加READER_FORK_NO_ICLOUD编译条件；正常构建行为不变。
 - 未验证：真机人工观感/声音、真实源、iCloud/App Group、iOS 17、DRM。未提交、未Push。
+
+## S6阶段收尾
+
+- 命令：`scripts/validate_reader_fork_s6.sh`（iPhone 18 Pro Max / iPad Pro 13-inch (M5)，iOS 27.2 runtime 24B8117）。
+- 结果：两设备各S5回归268项/38 suites + S6专项97项/19 suites，零失败零跳过；证据位于/tmp/readerfork-s6-gate4-iPhone、/tmp/readerfork-s6-gate4-iPad。
+- 本地化校验通过；`git diff --check`通过；固定输入哈希未变。
+- 真机：iPhone 17 Pro / iOS 27.2，92项通过（/tmp/readerfork-device-s6.xcresult）；用户手动确认视频画面和声音正常。
+- 未验证：iOS 17、DRM、真人登录、真实源、正式签名下的iCloud/App Group。
+- 回滚：revert S6提交；RSS源/文章数据格式未变，cacheFirst缓存位于Caches，可丢弃。

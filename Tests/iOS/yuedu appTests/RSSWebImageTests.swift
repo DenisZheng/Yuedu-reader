@@ -66,7 +66,45 @@ import Testing
             #expect(server.requests.isEmpty)
         }
     }
+    @Test("SVG经同一管道以image/svg+xml进入<img>且其中脚本不执行；外部CSS由WebKit加载且不带源私有头")
+    func svgAndStylesheet() async throws {
+        let svg = Data("<?xml version='1.0'?><!-- c --><svg xmlns='http://www.w3.org/2000/svg' width='6' height='3'><script>parent.svgRan=1</script><rect width='6' height='3'/></svg>".utf8)
+        let extra: [String: VideoStillFixtureServer.Response] = [
+            "/vector": .init(body: Data(svg.map { $0 ^ 0x5a }), type: "application/octet-stream", requiredHeaders: ["x-fixture": "private-image-fixture"]),
+            "/style.css": .init(body: Data("#article{color:rgb(1, 2, 3)}".utf8), type: "text/css")
+        ]
+        try await withPage(js: true, html: "<link rel='stylesheet' href='/style.css'><p id='article'>Article</p><img id='vector' src='/vector'>", routes: extra) { web, state, server in
+            let deadline = ContinuousClock.now + .seconds(5)
+            var values: [Any] = []
+            repeat {
+                values = try await web.evaluateJavaScript("[document.getElementById('vector').naturalWidth, getComputedStyle(document.getElementById('article')).color, String(window.svgRan||0)]") as? [Any] ?? []
+                if values.first as? Int == 6, values.dropFirst().first as? String == "rgb(1, 2, 3)" { break }
+                await Task.yield()
+            } while ContinuousClock.now < deadline
+            #expect(values.first as? Int == 6)
+            #expect(values.dropFirst().first as? String == "rgb(1, 2, 3)")
+            #expect(values.last as? String == "0", "图片上下文中的SVG脚本不能执行")
+            #expect(state.error == nil)
+            #expect(server.requests.first { $0.path == "/vector" }?.headers["x-fixture"] == "private-image-fixture")
+            let css = try #require(server.requests.first { $0.path == "/style.css" })
+            #expect(css.headers["x-fixture"] == nil, "WebKit原生子资源不继承源私有头")
+        }
+    }
+
+    @Test("SVG识别有界；原生图片查看器对SVG明确报受限，不当作解码失败")
+    func svgDetection() async throws {
+        #expect(RSSImageService.isSVG(Data("\u{FEFF}  <!DOCTYPE svg><svg/>".utf8)))
+        #expect(!RSSImageService.isSVG(Data("<svgx></svgx>".utf8)))
+        #expect(!RSSImageService.isSVG(Data("<html><svg></svg></html>".utf8)))
+        await #expect(throws: RSSWebFailure.imageFormatRestricted) {
+            _ = try await RSSImageService.displayImage(Data("<svg xmlns='http://www.w3.org/2000/svg'/>".utf8))
+        }
+        let mime = try await SourceScriptThread.run { try RSSImageService.inspect(Data("<svg width='1' height='1'/>".utf8)) }
+        #expect(mime == "image/svg+xml")
+    }
+
     private func withPage(js: Bool, html: String, inject: String? = nil, blocked: Bool = false, cookie: String? = nil,
+        routes extra: [String: VideoStillFixtureServer.Response] = [:],
         run: (WKWebView, Load, VideoStillFixtureServer) async throws -> Void) async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = RSSStore(storageDirectory: directory)
@@ -75,7 +113,7 @@ import Testing
             "/protected": .init(body: Data(plain.map { $0 ^ 0x5a }), type: "application/octet-stream",
                                 headers: cookie.map { ["Set-Cookie": "\($0)=synthetic; Path=/; HttpOnly"] } ?? [:], requiredHeaders: ["x-fixture": "private-image-fixture"]),
             "/probe": .init(body: Data("OK".utf8))
-        ])
+        ].merging(extra) { $1 })
         let base = try await server.start()
         defer {
             server.stop()

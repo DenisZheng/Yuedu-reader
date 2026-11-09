@@ -26,7 +26,8 @@ struct RSSTypedArticleView: View {
                                    context: nil, owner: owner, ruleURL: true)
             case .video(let stream, let resources):
                 RSSArticleVideoPlayerView(owner: owner, articleID: article.id, attachmentKey: "primary",
-                                          stream: stream, resources: resources, title: article.title)
+                                          stream: stream, resources: resources, title: article.title,
+                                          refresh: { [article, source, owner] in try await RSSTypedArticleModel.resolveVideo(article, source: source, owner: owner) })
             }
         }
         .toolbarTitleDisplayMode(.inline)
@@ -49,11 +50,7 @@ struct RSSTypedArticleView: View {
             try Task.checkCancellation()
             guard id == generation, owner.article(id: article.id) != nil else { throw CancellationError() }
             if article.contentType == .video {
-                if raw.hasPrefix("<") { throw VideoChapterLinkError.dashManifest }
-                let prepared = try await RSSMediaRequestService.prepare(raw, source: source, base: URL(string: article.link),
-                    context: nil, owner: owner, trustedRuleURL: true,
-                    article: .init(title: article.title, link: article.link, category: article.categoryName ?? "", id: article.id))
-                let (stream, resources) = try await RSSMediaRequestService.stream(prepared)
+                let (stream, resources) = try await Self.stream(raw, article: article, source: source, owner: owner)
                 guard id == generation, !Task.isCancelled else { resources.stop(); throw CancellationError() }
                 state = .video(stream, resources)
             } else {
@@ -64,6 +61,24 @@ struct RSSTypedArticleView: View {
             guard id == generation else { return }
             state = .failed((error as? LocalizedError)?.errorDescription ?? RSSWebFailure.resourceUnavailable.localizedDescription)
         }
+    }
+
+    /// 播放失败后的重新求值：重新执行ruleContent，得到新的（签名）地址和新的资源会话；所有权交给播放器。
+    static func resolveVideo(_ article: RSSArticleRecord, source: RSSSource, owner: RSSStore) async throws
+        -> (VideoStream, RSSMediaResourceSession) {
+        guard owner.article(id: article.id) != nil else { throw CancellationError() }
+        let raw = try await resourceURL(article, source: source, owner: owner)
+        try Task.checkCancellation()
+        return try await stream(raw, article: article, source: source, owner: owner)
+    }
+
+    private static func stream(_ raw: String, article: RSSArticleRecord, source: RSSSource, owner: RSSStore) async throws
+        -> (VideoStream, RSSMediaResourceSession) {
+        if raw.hasPrefix("<") { throw VideoChapterLinkError.dashManifest }
+        let prepared = try await RSSMediaRequestService.prepare(raw, source: source, base: URL(string: article.link),
+            context: nil, owner: owner, trustedRuleURL: true,
+            article: .init(title: article.title, link: article.link, category: article.categoryName ?? "", id: article.id))
+        return try await RSSMediaRequestService.stream(prepared)
     }
 
     func release() {

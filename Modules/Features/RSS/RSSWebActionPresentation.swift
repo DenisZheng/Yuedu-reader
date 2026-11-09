@@ -26,9 +26,13 @@ struct RSSWebActionPresentation: ViewModifier {
                 if router.isLoading { ProgressView().padding(DSSpacing.md) }
                 if let error = router.error {
                     VStack(spacing: DSSpacing.sm) {
+                        // 大字号下完整换行，不截断错误原因。
                         Text(error).font(DSFont.footnote)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
                         Button(localized("關閉")) { router.error = nil }
                     }
+                    .frame(maxWidth: .infinity)
                     .padding(DSSpacing.md).background(DSColor.surface)
                     .accessibilityIdentifier("rss.web.actionError")
                 }

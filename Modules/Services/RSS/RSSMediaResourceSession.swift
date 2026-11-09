@@ -99,6 +99,8 @@ final class RSSMediaResourceSession: @unchecked Sendable {
         } catch { stop(); throw error }
     }
 
+    var isStopped: Bool { lock.withLock { closed } }
+
     /// 当前会话只有一个播放器consumer；撤销时先停止已缓冲播放，而不是等下一个HTTP请求失败。
     func onStop(_ action: (@Sendable () -> Void)?) {
         let notify = lock.withLock { () -> Bool in

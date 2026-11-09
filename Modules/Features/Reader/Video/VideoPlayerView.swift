@@ -18,7 +18,8 @@ struct VideoPlayerView: View {
         /// A source script's one link (`java.openVideoPlayer`).
         case link(VideoStream, title: String)
         /// A persisted RSS attachment, keyed by the article and its stable attachment role.
-        case rss(RSSStore, articleID: String?, attachmentKey: String, VideoStream, title: String, resources: RSSMediaResourceSession? = nil)
+        case rss(RSSStore, articleID: String?, attachmentKey: String, VideoStream, title: String, resources: RSSMediaResourceSession? = nil,
+                 refresh: VideoPlaybackController.RSSRefresh? = nil)
     }
 
     let content: Content
@@ -119,8 +120,9 @@ struct VideoPlayerView: View {
             VideoPlaybackController(book: book, store: store, persists: false)
         case .link(let stream, let title):
             VideoPlaybackController(link: stream, title: title)
-        case .rss(let rss, let articleID, let key, let stream, let title, let resources):
-            VideoPlaybackController(rss: rss, articleID: articleID, attachmentKey: key, stream: stream, title: title, resources: resources)
+        case .rss(let rss, let articleID, let key, let stream, let title, let resources, let refresh):
+            VideoPlaybackController(rss: rss, articleID: articleID, attachmentKey: key, stream: stream, title: title,
+                                    resources: resources, refresh: refresh)
         }
     }
 
