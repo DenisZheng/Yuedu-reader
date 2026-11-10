@@ -484,6 +484,12 @@ private struct ExploreHomeRoot: View {
                 Spacer()
             }
         } else {
+            ToolbarItem(placement: .topBarTrailing) { searchButton.rootTabBarButton(overColor: barIsOverColor) }
+            #if compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+            }
+            #endif
             ToolbarItem(placement: .topBarTrailing) { configurationsButton.rootTabBarButton(overColor: barIsOverColor) }
             // 首頁配置 in its own glass, apart from ••• (maintainer, 2026-10-22).
             #if compiler(>=6.2)
@@ -493,6 +499,16 @@ private struct ExploreHomeRoot: View {
             #endif
             ToolbarItem(placement: .topBarTrailing) { moreControl.rootTabBarButton(overColor: barIsOverColor) }
         }
+    }
+
+    /// 搜索不再是Tab：從這裡推入同一個SearchView（不建立第二套搜索）。
+    private var searchButton: some View {
+        Button { path.append(ExploreNavigationRoute.search) } label: {
+            Image(systemName: "magnifyingglass")
+                .accessibilityHidden(true)
+        }
+        .accessibilityLabel(localized("搜索"))
+        .accessibilityIdentifier("explore.search")
     }
 
     /// 首頁配置's page, a button of its own since 2026-10-22 (maintainer, after Rex's 管理配置):

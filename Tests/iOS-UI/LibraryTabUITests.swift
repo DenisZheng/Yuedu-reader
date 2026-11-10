@@ -43,7 +43,7 @@ final class LibraryTabUITests: XCTestCase {
                                // The card shows until it is closed: shown again for this run.
                                "-reset-library-notice"] + extra
         app.launch()
-        let tab = app.tabBars.buttons["資源庫"].firstMatch
+        let tab = app.rootTab("資源庫")
         XCTAssertTrue(tab.waitForExistence(timeout: 30), app.debugDescription)
         tab.tap()
         return app
@@ -102,11 +102,20 @@ final class LibraryTabUITests: XCTestCase {
         let page = app.navigationBars["來源配置管理"]
         XCTAssertTrue(page.waitForExistence(timeout: 5), app.debugDescription)
 
-        let edge = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 1, dy: app.frame.height * 0.5))
-        edge.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)))
+        if app.tabBars.firstMatch.exists {
+            // iPhone：原生边缘返回手势。
+            let edge = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 1, dy: app.frame.height * 0.5))
+            edge.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)))
+        } else {
+            // iPadOS 使用侧边栏与分栏导航，推入页的返回由左上角 NavigationStack 按钮处理，
+            // 不能把屏幕边缘手势当作其 pop 证据。
+            let back = app.navigationBars["來源配置管理"].buttons["資源庫"]
+            XCTAssertTrue(back.waitForExistence(timeout: 5), app.debugDescription)
+            back.tap()
+        }
 
-        XCTAssertTrue(app.tabBars.buttons["資源庫"].firstMatch.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertFalse(page.exists, app.debugDescription)
+        XCTAssertTrue(app.rootTab("資源庫").waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(page.isHittable, app.debugDescription)
     }
 
     @MainActor
@@ -116,8 +125,10 @@ final class LibraryTabUITests: XCTestCase {
         let app = try launch(["-book-source-store-dir", directory.path])
         // 探索・書架・資源庫・設定・搜尋, and no RSS tab (decision 30; 搜尋 last since 2026-10-16,
         // 探索 first since 2026-10-25).
-        let names = app.tabBars.buttons.allElementsBoundByIndex.map(\.label)
-        XCTAssertEqual(names, ["探索", "書架", "資源庫", "設定", "搜尋"])
+        let expected = ["探索", "書架", "訂閱", "資源庫", "設定"]
+        for title in expected { XCTAssertTrue(app.rootTab(title).waitForExistence(timeout: 10), app.debugDescription) }
+        let names = app.rootTabLabels(expected)
+        XCTAssertEqual(names, expected, app.debugDescription)
 
         let close = app.buttons["library.noticeClose"].firstMatch
         XCTAssertTrue(close.waitForExistence(timeout: 5), app.debugDescription)
@@ -174,7 +185,7 @@ final class LibraryTabUITests: XCTestCase {
 
         // Adding a source is 設定's (maintainer, 2026-10-27): 來源配置管理 and 遠端書庫 are its
         // rows, beside 模組. 遠端書庫 is no card here while nothing is connected.
-        app.tabBars.buttons["設定"].firstMatch.tap()
+        app.rootTab("設定").tap()
         let remote = app.buttons["settings_remote_libraries"].firstMatch
         XCTAssertTrue(remote.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.buttons["settings_sources"].exists && app.buttons["settings_modules"].exists,

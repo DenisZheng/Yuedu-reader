@@ -16,7 +16,18 @@
 | S5 | 本地阶段通过并Push：两设备各268项/38 suites/0失败跳过，见[S5记录](s5-browsing.md) |
 | IPA/#35 | 实际26.6云归档与产物校验通过，run42460767989，见[归档记录](ipa-first-run.md) |
 | 媒体前置/#36 | 当前27.2环境恢复：正常Dev两设备各36项，S1各55项；系统底层机制未唯一定位，见[音频记录](../../Technotes/RSSSimulatorAudioClock.md) |
-| S6–S8 | 自动进入S6实现；真机/iOS17、DRM、正式签名/iCloud及完整生产行为仍须对应验收 |
+| S6 | 本地门槛通过；两设备各97项专项，真机92项通过且用户确认画面/声音。提交 `5e6e06e2` 后暂停真机测试，发布限制保留 |
+| S7 | 本地自动门槛通过；两设备各63项专项，复跑S5 268项、S6 97项；[管理与备份记录](s7-management.md) |
+| S8 | 待执行分层实源和规模测量；iOS17、DRM、真实服务、正式签名/iCloud及强杀恢复未放行 |
+
+## S7 收尾：独立入口、统一搜索和安全恢复
+
+- 命令：`scripts/validate_reader_fork_s7.sh`，由 `scripts/sim.sh` 分别选择 iPhone/iPad；正常 Reader-Fork-Dev、iOS 27.2 (24B8117)。
+- 最终结果：每设备 S5 268项/38 suites、S6 97项/19 suites、S7 63项/14 suites；全部零失败零跳过。S7 包含49项单元/集成与14项UI。
+- 证据：`/tmp/readerfork-s7-final-gates.AFHzp6/{iPhone,iPad}/` 的日志、xcresult与汇总。红绿反馈见 [S7记录](s7-management.md)。
+- 本地化4108键、固定源包哈希、`git diff --check` 通过。
+- 未验证：真人登录/VoiceOver、真实WebDAV、iOS17、正式签名iCloud/App Group；跨文件恢复的强杀/重启原子性未验证，仅证实可捕获错误的回滚和原文件副本保留。不能写成完整发布通过。
+- 回滚：撤回S7改动，保留源/文章、远端备份版本和本地恢复前副本；不恢复覆盖原版路径的旧写入。未Push，未执行真机或云归档。
 
 ## S0-01：模拟器环境
 

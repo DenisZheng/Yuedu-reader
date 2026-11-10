@@ -9,6 +9,8 @@ enum ExploreNavigationRoute: Hashable {
     case sourceCategory(ExploreCategoryReference)
     /// Legado's 搜索 on a source: the search page scoped to that source alone.
     case searchInSource(sourceURL: String)
+    /// 全部來源的搜索頁：搜索不再是Tab，從探索／書架的放大鏡進入（Fork決策：五Tab）。
+    case search
     /// 書源管理, pushed on every version.
     case sourceManager
     /// 聚合設定, from 探索's ••• (中繼資料語言偏好推薦, 參與聚合的來源; Phase 5 plan, decision 36).
@@ -46,7 +48,7 @@ enum ExploreNavigationRoute: Hashable {
             return lhsURL == rhsURL
         case (.sourceManager, .sourceManager), (.aggregationSettings, .aggregationSettings),
              (.subscriptions, .subscriptions), (.aiRecommendations, .aiRecommendations),
-             (.moduleManager, .moduleManager):
+             (.moduleManager, .moduleManager), (.search, .search):
             return true
         case (.moduleGroup(let lhsGroup), .moduleGroup(let rhsGroup)):
             return lhsGroup == rhsGroup
@@ -79,6 +81,8 @@ enum ExploreNavigationRoute: Hashable {
         case .searchInSource(let sourceURL):
             hasher.combine(4)
             hasher.combine(sourceURL)
+        case .search:
+            hasher.combine(5)
         case .sourceManager:
             hasher.combine(7)
         case .aggregationSettings:

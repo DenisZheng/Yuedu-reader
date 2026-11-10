@@ -60,6 +60,8 @@ private struct ExploreRouteDestinations: ViewModifier {
                 mode: .custom, selectedSourceURLs: [sourceURL]
             ))
             .environmentObject(store)
+        case .search:
+            SearchView(usesUnifiedSearch: true).environmentObject(store)
         case .sourceManager:
             BookSourceListView()
         case .aggregationSettings:

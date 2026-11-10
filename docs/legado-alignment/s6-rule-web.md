@@ -1,4 +1,6 @@
-# S6：规则网页与资源/媒体闭环（进行中）
+# S6：规则网页与资源/媒体闭环
+
+当前结论：本地门槛通过，提交 `9e9c9837`、`5e6e06e2`。用户随后确认真机视频画面和声音正常，并要求暂停真机测试、继续 S7–S8；以下各批次按当时状态保留，当前未验证项以“第六批与阶段结论”为准，不把模拟器证据外推为发布通过。
 
 前置已完成并归档Push：S5 `a60f9d45`；手动IPA修复与云端成功证据 `129f3dea`；当前27.2媒体环境复验 `5453b7b7`。按用户要求自动进入S6，不把下面的局部通过记为阶段完成。
 
@@ -182,7 +184,7 @@ YUEDU_EVIDENCE_DIR=/tmp/readerfork-s6-request-s5-final-iPhone bash scripts/valid
 
 ## 第五批：cacheFirst、页面级媒体与真机（局部，S6仍未放行）
 
-- `cacheFirst`：`RSSWebDocumentCache` 只覆盖首文档，对应Legado的 LOAD_CACHE_ELSE_NETWORK。key包含源、URL、认证头和Cookie；命中时不发网络请求，也不重放Set-Cookie。no-store、非200和登录检查失败的响应不写入缓存。缓存位于Caches目录，上限32MiB，按LRU淘汰。WebKit子资源仍由系统处理。测试fixture原本对所有响应强制no-store，已改为路由可以覆盖。
+- `cacheFirst`：`RSSWebDocumentCache` 只覆盖首文档，对应Legado的 LOAD_CACHE_ELSE_NETWORK。key包含源、URL、认证头和Cookie；命中时不发网络请求，也不重放Set-Cookie。no-store、非200和登录检查失败的响应不写入缓存。缓存位于Caches目录，上限32MiB，按修改时间淘汰。WebKit子资源仍由系统处理。测试fixture原本对所有响应强制no-store，已改为路由可以覆盖。
 - 页面级媒体：type=2文章经真实 `RSSArticleReaderView` 进入播放器，实际推进、离开后写入进度、重开继续播放；凭据撤销后播放器停止。
 - 前台限定：切后台时暂停并保存进度，锁屏命令不会重新开始，回前台不自动续播，RSS媒体不开画中画。Legado的后台播放依赖用户主动开启的悬浮窗服务，按产品决定不移植。
 - 真机启动崩溃：无iCloud能力的签名下，`CKContainer(identifier:)` 在启动阶段触发陷阱（5份设备崩溃日志栈一致）。新增编译条件 `READER_FORK_NO_ICLOUD`：该条件下不创建容器，账号状态视为restricted，所有CloudKit调用抛出账号不可用，状态文案为“此版本未啟用 iCloud”；本地阅读不受影响。正常构建行为不变。
@@ -198,7 +200,7 @@ YUEDU_EVIDENCE_DIR=/tmp/readerfork-s6-request-s5-final-iPhone bash scripts/valid
 
 `scripts/validate_reader_fork_s6.sh` 已扩展到18个S6 suite。iPhone和iPad各通过S5回归268项和S6专项92项，证据 /tmp/readerfork-s6-gate3-*。iCloud相关回归另跑24项，全部通过。
 
-## 仍须完成，不能宣称S6通过（早期清单，以第四批为准）
+## 早期未完成清单（历史，已由第五/第六批部分补齐）
 
 - 有限动作桥已接生产WebKit并有组件行为证据，仍需逐个接通原生目的页、跨源确认和动作恰好一次的生产UI路径；组件通过不等于用户流程通过。
 - 已撤销页面重新打开及完整原生重试（包括重新解析动态URL）；后续导航继续共享响应处理。已验证首文档charset/bodyJs/loginCheck，不等于后续导航全部完成。

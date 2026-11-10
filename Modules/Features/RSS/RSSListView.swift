@@ -24,7 +24,18 @@ private enum RSSOPMLDeferredImport {
     case data(Data)
 }
 
+/// 訂閱Tab的根：自己的NavigationStack，與資源庫推入的是同一個`RSSListView`與同一個`RSSStore`。
+struct RSSTabRoot: View {
+    var body: some View {
+        NavigationStack {
+            RSSListView(isTabRoot: true)
+        }
+    }
+}
+
 struct RSSListView: View {
+    /// 訂閱Tab根頁用大標題；從資源庫／探索推入時保持inline（design.md H1）。
+    var isTabRoot = false
     @StateObject private var store = RSSStore.shared
     @Bindable private var gs = GlobalSettings.shared
 
@@ -50,6 +61,7 @@ struct RSSListView: View {
     @State private var sourceToEdit: RSSSource?
     @State private var folderToRename: RSSFolder?
     @State private var sourceForInfo: RSSSource?
+    @State private var sourceSettings: RSSSourceSettingsRoute?
     @State private var deleteTarget: RSSDeleteTarget?
     @State private var isRefreshingAll = false
     @State private var refreshProgress = RSSRefreshProgress()
@@ -77,8 +89,7 @@ struct RSSListView: View {
         visibleSources(store.rootSources())
     }
 
-    /// RSS 訂閱, pushed on the stack of 資源庫 or 探索 (Phase 5 plan, decision 30: no longer a
-    /// tab, so no stack of its own).
+    /// RSS 訂閱：訂閱Tab的根（`RSSTabRoot`），或推入資源庫／探索的堆疊。
     var body: some View {
         Group {
             ZStack {
@@ -93,13 +104,13 @@ struct RSSListView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 16)
                     .padding(.bottom, 36)
+                    .modifier(RSSRootScrollAnchor(enabled: isTabRoot))
                 }
                 .softScrollEdges()
                 .scrollIndicators(.visible)
                 .modifier(RSSHomeSwipeActionsContainer())
             }
-            .navigationTitle(localized("RSS 訂閱"))
-            .toolbarTitleDisplayMode(.inline)
+            .modifier(RSSListTitle(isTabRoot: isTabRoot))
             .pageBackgroundToolbar(for: .rss)
             .toolbar {
                 // Two separate glass pills. A ToolbarSpacer (iOS 26+) breaks the
@@ -270,6 +281,9 @@ struct RSSListView: View {
             }
             .sheet(item: $folderToRename) { folder in
                 RenameRSSFolderSheet(folder: folder, store: store)
+            }
+            .navigationDestination(item: $sourceSettings) { route in
+                RSSSourceSettingsView(sourceID: route.id, store: store)
             }
             .sheet(item: $sourceForInfo) { source in
                 RSSSourceInfoSheet(source: source, store: store)
@@ -505,6 +519,14 @@ struct RSSListView: View {
                 sourceToEdit = source
             } label: {
                 Label(localized("編輯訂閱"), systemImage: "pencil")
+            }
+
+            if source.usesLegadoRuntime {
+                Button {
+                    sourceSettings = RSSSourceSettingsRoute(id: source.id)
+                } label: {
+                    Label(localized("來源設定"), systemImage: "slider.horizontal.3")
+                }
             }
 
             Button(role: .destructive) {
@@ -1723,3 +1745,27 @@ private struct RSSSourceInfoSheet: View {
 #Preview("Import OPML") {
     RSSOPMLImportSheet(isPresented: .constant(true), onFileCompletion: { _ in }, onDataImport: { _ in })
 }
+
+private struct RSSListTitle: ViewModifier {
+    let isTabRoot: Bool
+    func body(content: Content) -> some View {
+        if isTabRoot {
+            content.rootTabTitle(localized("訂閱"), onScroll: .minimizesBar)
+        } else {
+            content.navigationTitle(localized("RSS 訂閱")).toolbarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+private struct RSSRootScrollAnchor: ViewModifier {
+    let enabled: Bool
+    func body(content: Content) -> some View {
+        if enabled { content.rootTabTitleScrollAnchor() } else { content }
+    }
+}
+
+#Preview("訂閱 tab root") {
+    RSSTabRoot()
+}
+
+struct RSSSourceSettingsRoute: Hashable, Identifiable { let id: String }

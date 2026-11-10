@@ -19,9 +19,7 @@ final class PublicLibraryLiveUITests: XCTestCase {
         app.launch()
         // The storefront's search and shelves went with its page (2026-10-22): the libraries'
         // books are found on 搜尋 and open 作品詳情.
-        let tab = app.tabBars.buttons["搜尋"].firstMatch
-        XCTAssertTrue(tab.waitForExistence(timeout: 30))
-        tab.tap()
+        app.openSearchPage(timeout: 30)
         XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10))
         return app
     }
@@ -142,9 +140,7 @@ final class PublicLibraryLiveUITests: XCTestCase {
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",
                                "-yd_source_disclaimer_accepted", "YES", "-reset-explore-home"]
         app.launch()
-        let tab = app.tabBars.buttons["搜尋"].firstMatch
-        XCTAssertTrue(tab.waitForExistence(timeout: 30))
-        tab.tap()
+        app.openSearchPage(timeout: 30)
         XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10))
         let work = searched(app, "羅生門", title: "羅生門")
         XCTAssertTrue(work.waitForExistence(timeout: 90), app.debugDescription)

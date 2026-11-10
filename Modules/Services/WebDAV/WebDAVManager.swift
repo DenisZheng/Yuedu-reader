@@ -30,20 +30,6 @@ enum WebDAVError: LocalizedError {
 
 // MARK: - Sync Manifest (uploaded to /yuedu/manifest.json with each backup)
 
-struct SyncManifest: Codable {
-    var deviceId: String
-    var deviceName: String
-    var backupDate: Date
-    var appVersion: String
-}
-
-// MARK: - Conflict Info
-
-struct SyncConflict {
-    let remote: SyncManifest
-    let localLastSync: Date
-}
-
 // MARK: - WebDAV Manager
 
 @MainActor
@@ -76,8 +62,6 @@ final class WebDAVManager: @MainActor ObservableObject {
         }
     }
     @Published var statusMessage: String = ""
-    /// Non-nil when a cross-device conflict is detected; the view observes and shows a selection dialog.
-    @Published var pendingConflict: SyncConflict?
 
     // MARK: Private
 
@@ -128,6 +112,11 @@ final class WebDAVManager: @MainActor ObservableObject {
         boundBookStore = bookStore
     }
 
+    /// 版本化备份的生产本机数据（含已绑定书架，恢复后即时刷新）。
+    var productionBackupData: WebDAVProductionLocalData {
+        WebDAVProductionLocalData(rss: RSSStore.shared, bookStore: boundBookStore)
+    }
+
     // MARK: - Transport
 
     /// Executes a WebDAV request on the dedicated session, retrying **once** on
@@ -138,13 +127,21 @@ final class WebDAVManager: @MainActor ObservableObject {
     /// that the session has just reused — the same class of failure OkHttp's
     /// `retryOnConnectionFailure(true)` recovers from. Safe to delete once the
     /// WebDAV server in use stops dropping idle keep-alive connections.
-    nonisolated private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    nonisolated private func send(_ request: URLRequest, maximumBytes: Int = 1_048_576) async throws -> (Data, URLResponse) {
+        // 复用共享的有界字节读取、取消和重定向边界；WebDAV Basic认证不读写RSS CookieStore。
+        let origin = request.url.flatMap(SourceRequestHeaderScope.origin)
+        let executor = SourceRequestExecutor(session: transport, rate: "", rateKey: "webdav", cookieJarEnabled: false,
+            cookieScope: SourceRequestHeaderScope(urls: []), maximumBytes: maximumBytes,
+            requestValidator: { url in
+                guard let origin, SourceRequestHeaderScope.origin(url) == origin else { throw URLError(.unsupportedURL) }
+            })
         do {
-            return try await transport.data(for: request)
+            return try await executor.data(for: request)
         } catch {
+            if Task.isCancelled { throw CancellationError() }
             guard Self.isTransientConnectionError(error) else { throw error }
-            AppLogger.sync("retry \(request.httpMethod ?? "GET") \(request.url?.path ?? "") after transient \(String(describing: (error as? URLError)?.code))", level: .notice)
-            return try await transport.data(for: request)
+            AppLogger.sync("WebDAV transport retry", level: .notice)
+            return try await executor.data(for: request)
         }
     }
 
@@ -172,56 +169,8 @@ final class WebDAVManager: @MainActor ObservableObject {
         }
     }
 
-    /// Back up three local data files to WebDAV, along with a manifest.json containing device info.
-    ///
-    /// File reading strategy:
-    /// - If a file does not exist (not yet generated before first use), silently skip it.
-    /// - If a file exists but fails to read (permission error, disk failure), throw an error
-    ///   and abort the backup to avoid displaying a false "backup successful" message.
-    nonisolated func backup() async throws {
-        await setSync(true, message: "備份中…")
-        defer { Task { @MainActor in self.isSyncing = false } }
-
-        try? await mkcol(path: "/yuedu/")
-
-        let libDir  = FileManager.default.urls(for: .libraryDirectory,  in: .userDomainMask).first!
-
-        // 1. book_sources.json — remote layout is unchanged; only the local path moved
-        //    out of Documents (see StorageLocations).
-        try await backupFileIfExists(at: StorageLocations.bookSourcesFile, to: "/yuedu/book_sources.json")
-
-        // 2. books.json — read from the file-based store (mirrors BookStore.booksMetaFileURL),
-        //    after the saves already queued for it have landed.
-        await BookStore.queuedWritesLanded()
-        if FileManager.default.fileExists(atPath: StorageLocations.booksMetadataFile.path) {
-            let data = try Data(contentsOf: StorageLocations.booksMetadataFile)
-            try await put(data: Self.bookshelfBackupData(from: data), path: "/yuedu/books.json")
-        }
-
-        // 3. replace_rules.json
-        let replaceURL = libDir.appendingPathComponent("replace_rules.json")
-        try await backupFileIfExists(at: replaceURL, to: "/yuedu/replace_rules.json")
-
-        // RSS使用Fork自己的版本化路径，不覆盖原版RSS或拷贝运行时Cookie/媒体缓存。
-        try await backupRSS()
-
-        // 4. manifest.json (for conflict detection)
-        let deviceName = await MainActor.run { UIDevice.current.name }
-        let manifest = SyncManifest(
-            deviceId: Self.deviceId,
-            deviceName: deviceName,
-            backupDate: Date(),
-            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-        )
-        if let manifestData = try? JSONEncoder().encode(manifest) {
-            try await put(data: manifestData, path: "/yuedu/manifest.json")
-        }
-
-        await MainActor.run {
-            self.lastSyncDate = Date()
-            self.statusMessage = "備份成功"
-        }
-    }
+    // 旧的单份备份写入原版 `/yuedu/` 路径并按设备冲突覆盖，违反 ADR 0002（不覆盖原版数据）；
+    // 已由 `backupVersion`/`restoreVersion`（WebDAVVersionedBackup.swift）取代。
 
     nonisolated func backupRSS(store: RSSStore? = nil) async throws {
         let owner = await MainActor.run { store ?? RSSStore.shared }
@@ -245,92 +194,6 @@ final class WebDAVManager: @MainActor ObservableObject {
         return try JSONEncoder().encode(books.filter(\.isInBookshelf).map { $0.strippedForSync() })
     }
 
-    /// If the file at `localURL` exists, read and upload it; skip if the file does not exist.
-    /// If the file exists but fails to read, an error is thrown to prevent silently ignoring real failures.
-    nonisolated private func backupFileIfExists(at localURL: URL, to remotePath: String) async throws {
-        guard FileManager.default.fileExists(atPath: localURL.path) else { return }
-        let data = try Data(contentsOf: localURL)
-        try await put(data: data, path: remotePath)
-    }
-
-    /// Download backup from WebDAV and overwrite local data (includes conflict detection).
-    /// If a cross-device conflict is detected, sets `pendingConflict` and returns early;
-    /// the UI decides whether to proceed.
-    nonisolated func restore() async throws {
-        try await performRestore(skipConflictCheck: false)
-    }
-
-    /// Called after user confirmation: forcefully overwrite local data with the cloud backup.
-    nonisolated func resolveConflict(keepRemote: Bool) async throws {
-        await MainActor.run { pendingConflict = nil }
-        if keepRemote {
-            try await performRestore(skipConflictCheck: true)
-        }
-        // keepRemote == false: keep local, do nothing
-    }
-
-    // MARK: - Private Restore Implementation
-
-    nonisolated private func performRestore(skipConflictCheck: Bool) async throws {
-        await setSync(true, message: "還原中…")
-        defer { Task { @MainActor in self.isSyncing = false } }
-
-        // ── Conflict Detection ──────────────────────────────────────────────────────
-        if !skipConflictCheck {
-            if let manifestData = try? await get(path: "/yuedu/manifest.json"),
-               let remote = try? JSONDecoder().decode(SyncManifest.self, from: manifestData) {
-                let isOtherDevice = remote.deviceId != Self.deviceId
-                // Local has synced before → cloud may be an older backup from another device,
-                // potentially overwriting newer local data.
-                if isOtherDevice, let localSync = await MainActor.run(body: { self.lastSyncDate }) {
-                    await MainActor.run {
-                        self.pendingConflict = SyncConflict(remote: remote, localLastSync: localSync)
-                        self.statusMessage = "偵測到衝突，請選擇要使用哪個版本"
-                    }
-                    return
-                }
-            }
-        }
-
-        // RSS新快照只有404表示旧备份尚未包含；损坏、认证失败、网络失败都必须终止。
-        let rssData = try await downloadRSSBackup()
-
-        // ── Perform Restore ─────────────────────────────────────────────────────────
-        let libDir  = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
-
-        if let sourcesData = try? await get(path: "/yuedu/book_sources.json") {
-            try sourcesData.write(to: StorageLocations.bookSourcesFile, options: .atomic)
-            if let decoded = try? JSONDecoder().decode([BookSource].self, from: sourcesData) {
-                await MainActor.run { BookSourceStore.shared.replaceSources(decoded) }
-            }
-        }
-
-        if let booksData = try? await get(path: "/yuedu/books.json") {
-            try booksData.write(to: StorageLocations.booksMetadataFile, options: .atomic)
-            // Clean up any legacy UserDefaults entry from before the file migration.
-            UserDefaults.standard.removeObject(forKey: "yd_books_meta")
-        }
-
-        if let rulesData = try? await get(path: "/yuedu/replace_rules.json") {
-            let url = libDir.appendingPathComponent("replace_rules.json")
-            try rulesData.write(to: url, options: .atomic)
-        }
-
-        if let rssData { try await RSSStore.shared.restoreBackup(rssData) }
-
-        // Reload the in-memory stores from the just-restored files so the
-        // bookshelf and replace-rule list update live, mirroring the iCloud
-        // restore path. Book sources were already reloaded above.
-        let bookStore = await MainActor.run { boundBookStore }
-        await bookStore?.reloadFromDisk()
-        await MainActor.run { ReplaceRuleStore.shared.reloadFromDisk() }
-
-        await MainActor.run {
-            self.lastSyncDate = Date()
-            self.statusMessage = "還原成功"
-        }
-    }
-
     // MARK: - Private HTTP Methods
 
     /// PROPFIND: Check if path exists (HTTP 200 or 207).
@@ -351,15 +214,34 @@ final class WebDAVManager: @MainActor ObservableObject {
         }
     }
 
+    /// PROPFIND Depth:1 的原始 multistatus；404 → fileNotFound，401 → authenticationFailed。
+    nonisolated func propfindListing(path: String) async throws -> Data {
+        var request = try await makeRequest(path: path)
+        request.httpMethod = "PROPFIND"
+        request.setValue("1", forHTTPHeaderField: "Depth")
+        request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await send(request)
+        guard let http = response as? HTTPURLResponse else { throw WebDAVError.noData }
+        AppLogger.sync("PROPFIND(1) \(path) → \(http.statusCode)", level: .notice)
+        if http.statusCode == 401 { throw WebDAVError.authenticationFailed }
+        if http.statusCode == 404 { throw WebDAVError.fileNotFound }
+        guard http.statusCode == 207 || http.statusCode == 200 else { throw WebDAVError.connectionFailed(http.statusCode) }
+        return data
+    }
+
+    nonisolated static var backupDeviceID: String { deviceId }
+
     /// MKCOL: Create directory (ignore 405 = already exists).
-    nonisolated private func mkcol(path: String) async throws {
+    nonisolated func mkcol(path: String, requireNew: Bool = false) async throws {
         var request = try await makeRequest(path: path)
         request.httpMethod = "MKCOL"
 
         do {
             let (_, response) = try await send(request)
-            guard let http = response as? HTTPURLResponse else { return }
+            guard let http = response as? HTTPURLResponse else { throw WebDAVError.noData }
             AppLogger.sync("MKCOL \(path) → \(http.statusCode)", level: .notice)
+            if http.statusCode == 401 { throw WebDAVError.authenticationFailed }
+            if requireNew, http.statusCode != 201 { throw WebDAVError.connectionFailed(http.statusCode) }
             if http.statusCode != 201 && http.statusCode != 405 && http.statusCode != 200 {
                 throw WebDAVError.connectionFailed(http.statusCode)
             }
@@ -372,7 +254,7 @@ final class WebDAVManager: @MainActor ObservableObject {
     }
 
     /// PUT: Upload data to the specified path.
-    nonisolated private func put(data: Data, path: String) async throws {
+    nonisolated func put(data: Data, path: String) async throws {
         var request = try await makeRequest(path: path)
         request.httpMethod = "PUT"
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
@@ -380,7 +262,7 @@ final class WebDAVManager: @MainActor ObservableObject {
 
         do {
             let (_, response) = try await send(request)
-            guard let http = response as? HTTPURLResponse else { return }
+            guard let http = response as? HTTPURLResponse else { throw WebDAVError.noData }
             AppLogger.sync("PUT \(path) \(data.count)B → \(http.statusCode)", level: .notice)
             if http.statusCode == 401 { throw WebDAVError.authenticationFailed }
             if !(200...299).contains(http.statusCode) {
@@ -395,12 +277,12 @@ final class WebDAVManager: @MainActor ObservableObject {
     }
 
     /// GET: Download data from the specified path.
-    nonisolated private func get(path: String) async throws -> Data {
+    nonisolated func get(path: String, maximumBytes: Int = WebDAVBackupLayout.maximumFileBytes) async throws -> Data {
         var request = try await makeRequest(path: path)
         request.httpMethod = "GET"
 
         do {
-            let (data, response) = try await send(request)
+            let (data, response) = try await send(request, maximumBytes: maximumBytes)
             guard let http = response as? HTTPURLResponse else { throw WebDAVError.noData }
             AppLogger.sync("GET \(path) → \(http.statusCode) \(data.count)B", level: .notice)
             if http.statusCode == 401 { throw WebDAVError.authenticationFailed }

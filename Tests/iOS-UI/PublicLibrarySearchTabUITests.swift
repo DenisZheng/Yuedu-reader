@@ -69,9 +69,7 @@ final class PublicLibrarySearchTabUITests: XCTestCase {
         app.launchEnvironment["YUEDU_PUBLIC_LIBRARY_FIXTURES"] = fixtureDirectory.path
         app.launch()
 
-        let tab = app.tabBars.buttons["搜尋"].firstMatch
-        XCTAssertTrue(tab.waitForExistence(timeout: 30))
-        tab.tap()
+        app.openSearchPage(timeout: 30)
         XCTAssertTrue(app.staticTexts["輸入書名或作者搜尋"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
 
         let field = app.searchFields.firstMatch
@@ -124,9 +122,7 @@ final class PublicLibrarySearchTabUITests: XCTestCase {
                                "-book-source-store-dir", fixtureDirectory.appendingPathComponent("sources").path]
         app.launchEnvironment["YUEDU_PUBLIC_LIBRARY_FIXTURES"] = fixtureDirectory.path
         app.launch()
-        let tab = app.tabBars.buttons["搜尋"].firstMatch
-        XCTAssertTrue(tab.waitForExistence(timeout: 30))
-        tab.tap()
+        app.openSearchPage(timeout: 30)
         let field = app.searchFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()

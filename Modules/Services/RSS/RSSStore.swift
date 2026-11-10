@@ -626,6 +626,18 @@ final class RSSStore: ObservableObject {
         return true
     }
 
+    /// 用户在源设置里编辑的源变量（Legado `setVariable`）；和脚本写入的是同一份，修订后旧请求失效。
+    func setSourceVariableJSON(_ value: String, for sourceID: String) throws {
+        guard !unreadableFiles.contains("rss_runtime_variables.json") else { throw ScraperError.runtimeStateUnavailable }
+        guard source(id: sourceID) != nil else { throw CancellationError() }
+        guard sourceOptionJSON[sourceID] != value else { return }
+        sourceOptionJSON[sourceID] = value
+        clearFeedMetadata(for: sourceID)
+        configurationRevision &+= 1
+        invalidateRuntimes()
+        save(.variables)
+    }
+
     func setVariables(_ values: [String: String], for sourceID: String) {
         guard source(id: sourceID) != nil, (sourceVariables[sourceID] ?? [:]) != values else { return }
         sourceVariables[sourceID] = values
@@ -926,7 +938,12 @@ final class RSSStore: ObservableObject {
                                                records: cachedArticlesBySource, statuses: articleStatuses)
     }
 
-    /// 先完整校验再修改owner；落盘前备份旧文件，失败不会伪报成功或清理可恢复的数据。
+    /// 仅用于故障注入，模拟一次真实文件写入错误；默认不拦截生产写入。
+    #if DEBUG
+    var persistenceWriteFailure: (@Sendable (String) -> Bool)?
+    #endif
+
+    /// 先完整校验再修改owner；落盘前备份旧文件，失败后恢复完整本地状态（不能用去敏云快照回滚）。
     func restoreBackup(_ data: Data) async throws {
         let configuration = configurationRevision
         let content = contentRevision
@@ -935,9 +952,13 @@ final class RSSStore: ObservableObject {
         try Task.checkCancellation()
         try await flushPersistence()
         try await Self.backupBeforeRestore(directory: sourceStorageURL.deletingLastPathComponent())
+        try Task.checkCancellation()
         guard configuration == configurationRevision, content == contentRevision else {
             throw RSSImportService.Issue.stalePlan
         }
+        let previous = (sources: sources, folders: folders, records: cachedArticlesBySource, statuses: articleStatuses,
+                        metadata: feedMetadataBySource, values: sourceVariables, options: sourceOptionJSON,
+                        authentication: authenticationRevisions)
         sources = snapshot.sources
         folders = snapshot.folders
         cachedArticlesBySource = records
@@ -948,7 +969,26 @@ final class RSSStore: ObservableObject {
         authenticationRevisions = [:]
         rebuildArticleIndex()
         save()
-        try await flushPersistence()
+        do { try await flushPersistence() }
+        catch {
+            let original = error
+            sources = previous.sources
+            folders = previous.folders
+            cachedArticlesBySource = previous.records
+            articleStatuses = previous.statuses
+            feedMetadataBySource = previous.metadata
+            sourceVariables = previous.values
+            sourceOptionJSON = previous.options
+            authenticationRevisions = previous.authentication
+            rebuildArticleIndex()
+            save()
+            do { try await flushPersistence() }
+            catch {
+                AppLogger.sync("RSS restore rollback failed; original files retained in rss-restore-backups", level: .fault)
+                throw RSSBackupCodec.Failure.rollbackFailed
+            }
+            throw original
+        }
     }
 
     private nonisolated static func backupBeforeRestore(directory: URL) async throws {
@@ -1007,6 +1047,7 @@ final class RSSStore: ObservableObject {
         var metadata: [String: RSSFeedFetchMetadata]?
         var variables: RSSRuntimeStateFile?
         var directory: URL
+        var writeFailure: (@Sendable (String) -> Bool)? = nil
     }
 
     private func drainPersistence() async {
@@ -1018,7 +1059,7 @@ final class RSSStore: ObservableObject {
         while !dirtyFiles.isEmpty {
             let files = dirtyFiles.union(failedFiles)
             dirtyFiles = []
-            let snapshot = DiskSnapshot(
+            var snapshot = DiskSnapshot(
                 sources: files.contains(.sources) ? sources : nil,
                 folders: files.contains(.folders) ? folders : nil,
                 articles: files.contains(.articles) ? cachedArticlesBySource : nil,
@@ -1027,6 +1068,9 @@ final class RSSStore: ObservableObject {
                 variables: files.contains(.variables) ? RSSRuntimeStateFile(values: sourceVariables, options: sourceOptionJSON) : nil,
                 directory: sourceStorageURL.deletingLastPathComponent()
             )
+            #if DEBUG
+            snapshot.writeFailure = persistenceWriteFailure
+            #endif
             let results = await Self.write(snapshot, excluding: unreadableFiles)
             failedFiles = []
             for (file, success) in results {
@@ -1050,7 +1094,7 @@ final class RSSStore: ObservableObject {
             var results: [(String, Bool)] = []
             func write<Value: Encodable>(_ value: Value?, _ file: String) {
                 guard let value else { return }
-                guard !excluding.contains(file) else { results.append((file, false)); return }
+                guard !excluding.contains(file), snapshot.writeFailure?(file) != true else { results.append((file, false)); return }
                 do {
                     let data = try JSONEncoder().encode(value)
                     try FileManager.default.createDirectory(at: snapshot.directory, withIntermediateDirectories: true)

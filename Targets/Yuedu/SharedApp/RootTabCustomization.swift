@@ -7,22 +7,20 @@ enum RootTabItem: String, CaseIterable, Codable, Hashable, Identifiable {
     case explore
     /// 資源庫 (Phase 5 plan, decisions 30 and 31): every library and source, RSS's feeds too.
     case library
+    /// Fork五Tab後不再是Tab：搜索從探索／書架的放大鏡進入。保留以便舊清單和自訂圖示仍可解碼；不繪製。
     case search
     case settings
-    /// No longer a tab (decision 30): its feeds are in 資源庫. Kept so a reader's custom RSS
-    /// tab icon and the lists and theme packs naming it still decode; never drawn.
+    /// 訂閱：Fork恢復為獨立Tab（AGENTS.md產品邊界5）；資源庫的列仍推入同一個RSS模組。
     case rss
 
     var id: String { rawValue }
 
-    /// The tabs drawn, in order: 探索・書架・資源庫・設定・搜尋 (decision 30; 搜尋 moved to the far
-    /// right, 2026-10-16; 探索 first, and the app opens on it, 2026-10-25). A saved list follows
-    /// this order (`sanitizedRootTabVisibleIDs`).
-    static let tabs: [RootTabItem] = [.explore, .bookshelf, .library, .settings, .search]
+    /// Fork默认顺序：探索｜书架｜订阅｜资源库｜设置；保存的可见清单按此顺序规范化。
+    static let tabs: [RootTabItem] = [.explore, .bookshelf, .rss, .library, .settings]
 
     /// Tabs added after readers had saved which tabs they show. A saved list that does not name
     /// one predates it, so the tab is shown; hiding it writes `hiddenMarker` into the list.
-    static let addedLater: [RootTabItem] = [.library]
+    static let addedLater: [RootTabItem] = [.library, .rss]
 
     /// What a saved list holds for a tab in `addedLater` the reader hid.
     var hiddenMarker: String { "-" + rawValue }
@@ -32,7 +30,7 @@ enum RootTabItem: String, CaseIterable, Codable, Hashable, Identifiable {
         case .bookshelf: return "書架"
         case .explore: return "探索"
         case .library: return "資源庫"
-        case .rss: return "RSS 訂閱"
+        case .rss: return "訂閱"
         case .settings: return "設定"
         case .search: return "搜索"
         }

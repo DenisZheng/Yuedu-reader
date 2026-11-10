@@ -257,7 +257,7 @@ final class ModuleLibraryUITests: XCTestCase {
         let app = launch(extra: ["-book-source-store-dir", sources.path])
         addFixtureModule(app)
 
-        app.tabBars.buttons["搜尋"].firstMatch.tap()
+        app.openSearchPage()
         let field = app.searchFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10), app.debugDescription)
         field.tap()

@@ -954,6 +954,21 @@ struct HomeView: View {
             // Two separate glass pills. A ToolbarSpacer (iOS 26+) breaks the
             // auto-merge so the two menus sit in their own glass instead of
             // fusing into one. Order swapped: options (…) leads, add (+) trails.
+            if addsBooks {
+                // 搜索不再是Tab：書架根頁的明確入口，推入同一個SearchView。
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NavigationLink { SearchView(usesUnifiedSearch: true) } label: {
+                        Image(systemName: "magnifyingglass").accessibilityHidden(true)
+                    }
+                    .accessibilityLabel(localized("搜索"))
+                    .accessibilityIdentifier("bookshelf.search")
+                }
+                #if compiler(>=6.2)
+                if #available(iOS 26.0, *) {
+                    ToolbarSpacer(.fixed, placement: .navigationBarTrailing)
+                }
+                #endif
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 bookshelfOptionsMenu
             }
@@ -1838,7 +1853,7 @@ struct EmptyLibraryView: View {
                     .background(DSColor.accent).clipShape(Capsule())
             }
             NavigationLink {
-                SearchView()
+                SearchView(usesUnifiedSearch: true)
             } label: {
                 Label(localized("搜索書籍"), systemImage: "magnifyingglass")
                     .font(DSFont.subheadline.weight(.medium))

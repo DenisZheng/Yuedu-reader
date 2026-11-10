@@ -351,7 +351,7 @@ final class NowPlayingCapsuleUITests: XCTestCase {
         leaveReader(app, to: other)
 
         // 最近閱讀 presents it full screen.
-        app.tabBars.buttons["搜尋"].firstMatch.tap()
+        app.openSearchPage()
         let field = app.searchFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10), app.debugDescription)
         field.tap()

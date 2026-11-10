@@ -355,12 +355,12 @@ struct ContentView: View {
         case .library:
             LibraryTabRoot(browser: browser)
         case .rss:
-            // Not a tab since 5h (`RootTabItem.tabs` leaves it out); its feeds are in 資源庫.
-            EmptyView()
+            RSSTabRoot()
         case .settings:
             SettingsView()
         case .search:
-            SearchTabRoot()
+            // 不再是Tab（`RootTabItem.tabs`不含它）；搜索從探索／書架推入。
+            EmptyView()
         }
     }
 

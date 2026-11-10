@@ -84,7 +84,7 @@ final class RSSHomeSwipeActionsUITests: XCTestCase {
     /// (`SwipeActionAccentContrastUITests`), so it is tapped where it is drawn.
     @MainActor
     private func openRSSHome(_ app: XCUIApplication) {
-        let library = app.tabBars.buttons["資源庫"].firstMatch
+        let library = app.rootTab("資源庫")
         XCTAssertTrue(library.waitForExistence(timeout: 30), app.debugDescription)
         library.tap()
         let header = app.staticTexts["訂閱"].firstMatch

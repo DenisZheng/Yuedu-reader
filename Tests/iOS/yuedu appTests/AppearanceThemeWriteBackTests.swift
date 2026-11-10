@@ -319,13 +319,13 @@ struct AppearanceThemeWriteBackTests {
         // records — a theme must not be able to store a bar the user cannot escape. 資源庫 is
         // shown too: a list that does not name it predates it.
         let stored = settings.customAppearanceThemes.first { $0.id == a.id }?.extras?.visibleTabIDs
-        #expect(stored == [RootTabItem.bookshelf.rawValue, RootTabItem.library.rawValue, RootTabItem.settings.rawValue])
+        #expect(stored == [RootTabItem.bookshelf.rawValue, RootTabItem.rss.rawValue, RootTabItem.library.rawValue, RootTabItem.settings.rawValue])
 
         settings.appearanceThemeID = b.id
         #expect(settings.visibleRootTabs.count == RootTabItem.tabs.count)
 
         settings.appearanceThemeID = a.id
-        #expect(settings.visibleRootTabs == [.bookshelf, .library, .settings])
+        #expect(settings.visibleRootTabs == [.bookshelf, .rss, .library, .settings])
 
         settings.appearanceThemeID = GlobalSettings.defaultAppearanceThemeID
         #expect(settings.visibleRootTabs.count == RootTabItem.tabs.count)

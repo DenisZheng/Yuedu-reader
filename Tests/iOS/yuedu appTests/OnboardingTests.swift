@@ -101,7 +101,9 @@ struct OnboardingTests {
         #expect(content.pages == [.welcome, .works, .sources, .reading, .start])
         #expect(content.explore == nil)
         #expect(content.starts == [.importFiles])
-        #expect(content.works.map(\.titleKey) == ["作品詳情", "自動補齊書籍資料", "聚合設定"])
+        // 書架仍有搜索入口。
+        #expect(content.works.map(\.titleKey) == ["搜索", "作品詳情", "自動補齊書籍資料", "聚合設定"])
+        #expect(makeContent(visibleTabs: [.rss, .settings]).works.map(\.titleKey) == ["作品詳情", "自動補齊書籍資料", "聚合設定"])
         #expect(content.sources.textKey == "加進來的來源配置、模組和遠端書庫，跟內建的一起用。")
     }
 

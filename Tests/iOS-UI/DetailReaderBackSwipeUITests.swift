@@ -89,9 +89,7 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
     /// search narrowed its source tiles, which left with them in unified library 5d-1.
     @MainActor
     private func openSearchedBook(_ app: XCUIApplication, query: String, named name: String) {
-        let searchTab = app.tabBars.buttons["Search"]
-        XCTAssertTrue(searchTab.waitForExistence(timeout: 15), app.debugDescription)
-        searchTab.tap()
+        app.openSearchPage(timeout: 15)
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 15), app.debugDescription)
         search.tap()
@@ -491,9 +489,7 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
                                "-yd_root_tab_visible_ids", "(bookshelf, explore, settings, search)"]
         app.launch()
-        let searchTab = app.tabBars.buttons["搜索"]
-        XCTAssertTrue(searchTab.waitForExistence(timeout: 15), app.debugDescription)
-        searchTab.tap()
+        app.openSearchPage(timeout: 15)
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 15), app.debugDescription)
         search.tap()
@@ -578,9 +574,7 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
                                "-yd_root_tab_visible_ids", "(bookshelf, explore, settings, search)"]
         app.launch()
-        let searchTab = app.tabBars.buttons["搜索"]
-        XCTAssertTrue(searchTab.waitForExistence(timeout: 15), app.debugDescription)
-        searchTab.tap()
+        app.openSearchPage(timeout: 15)
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 15), app.debugDescription)
         search.tap()
@@ -651,9 +645,7 @@ final class DetailReaderBackSwipeUITests: XCTestCase {
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-explore.mode", "sources", "-reset-explore-home", "-reset-reading-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
                                "-yd_root_tab_visible_ids", "(bookshelf, explore, settings, search)"]
         app.launch()
-        let searchTab = app.tabBars.buttons["搜索"]
-        XCTAssertTrue(searchTab.waitForExistence(timeout: 15), app.debugDescription)
-        searchTab.tap()
+        app.openSearchPage(timeout: 15)
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 15), app.debugDescription)
         search.tap()

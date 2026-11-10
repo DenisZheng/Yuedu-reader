@@ -65,8 +65,8 @@ struct OnboardingContent: Equatable {
         }
 
         var works: [Row] = []
-        // A tab of its own, which the reader can hide.
-        if visibleTabs.contains(.search) {
+        // 搜索不再是Tab，從探索或書架的放大鏡進入；兩者都隱藏時沒有入口，不介紹。
+        if visibleTabs.contains(.explore) || visibleTabs.contains(.bookshelf) {
             works.append(Row(titleKey: RootTabItem.search.titleKey, textKey: "輸入書名或作者，各處的結果依作品合併成一份清單"))
         }
         works += [

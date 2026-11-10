@@ -28,9 +28,10 @@ enum RSSBackupCodec {
     }
 
     enum Failure: LocalizedError {
-        case invalidSnapshot, unsupportedVersion, checksumMismatch, tooLarge
+        case invalidSnapshot, unsupportedVersion, checksumMismatch, tooLarge, rollbackFailed
         var errorDescription: String? {
             switch self {
+            case .rollbackFailed: localized("還原失敗，原始資料副本已保留，請勿繼續同步")
             case .unsupportedVersion: localized("此 RSS 備份版本尚不支援，未還原訂閱資料")
             case .invalidSnapshot, .checksumMismatch, .tooLarge: localized("RSS 備份校驗失敗或超過大小限制，未還原訂閱資料")
             }

@@ -13,7 +13,7 @@ import XCTest
 final class RootTabNavigationOwnershipUITests: XCTestCase {
     /// Every tab shown. Passed at each launch, so a run starts from the full bar whatever an
     /// earlier run left saved.
-    private static let allTabs = "(explore, bookshelf, library, settings, search)"
+    private static let allTabs = "(explore, bookshelf, rss, library, settings)"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -37,7 +37,7 @@ final class RootTabNavigationOwnershipUITests: XCTestCase {
 
         // 设置 was rebuilt with the tab set: its root or the page left open, not a blank bar.
         let settingsRoot = app.buttons["settings_account_row"].firstMatch
-        let tabsPage = app.switches["搜索"].firstMatch
+        let tabsPage = app.switches["订阅"].firstMatch
         let drawn = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in settingsRoot.exists || tabsPage.exists }, object: nil
         )
@@ -69,7 +69,7 @@ final class RootTabNavigationOwnershipUITests: XCTestCase {
 
     @MainActor
     private static func tab(_ title: String, in app: XCUIApplication) -> XCUIElement {
-        app.tabBars.buttons[title].firstMatch
+        app.rootTab(title)
     }
 
     /// In 書架's own navigation bar, so it exists only while the shelf is drawn.
@@ -81,7 +81,7 @@ final class RootTabNavigationOwnershipUITests: XCTestCase {
     /// 设置 → 外观主题 → 底部标签栏, unless it is already open.
     @MainActor
     private static func openTabCustomization(in app: XCUIApplication) {
-        guard !app.switches["搜索"].firstMatch.exists else { return }
+        guard !app.switches["订阅"].firstMatch.exists else { return }
         tab("设置", in: app).tap()
         let appearance = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "外观主题")).firstMatch
         XCTAssertTrue(appearance.waitForExistence(timeout: 10), "no 外观主题 row")
@@ -90,7 +90,7 @@ final class RootTabNavigationOwnershipUITests: XCTestCase {
         XCTAssertTrue(tabsRow.waitForExistence(timeout: 10), "no 底部标签栏 row")
         for _ in 0..<8 where !tabsRow.isHittable { app.swipeUp() }
         tabsRow.tap()
-        XCTAssertTrue(app.switches["搜索"].firstMatch.waitForExistence(timeout: 10), "no 显示页面 switches")
+        XCTAssertTrue(app.switches["订阅"].firstMatch.waitForExistence(timeout: 10), "no 显示页面 switches")
     }
 
     /// A Form toggle's row is the switch element; the knob sits at its trailing edge. On
@@ -108,15 +108,15 @@ final class RootTabNavigationOwnershipUITests: XCTestCase {
     }
 
     /// Hiding 探索 is saved on the simulator; every later test would start without it.
-    /// Relaunched with every tab shown, then 搜索 is switched off and on, which saves the
+    /// Relaunched with every tab shown, then 订阅 is switched off and on, which saves the
     /// whole list again.
     @MainActor
     private static func restoreSavedTabs() throws {
         let app = try launch()
         openTabCustomization(in: app)
-        flip("搜索", in: app)
+        flip("订阅", in: app)
         openTabCustomization(in: app)
-        flip("搜索", in: app)
+        flip("订阅", in: app)
         app.terminate()
     }
 }

@@ -34,9 +34,7 @@ final class RecentReadingReaderChromeUITests: XCTestCase {
         let fromShelf = try readerBackButtonFrame(in: app)
         app.buttons["reader_back_button"].tap()
 
-        let searchTab = app.tabBars.buttons["Search"]
-        XCTAssertTrue(searchTab.waitForExistence(timeout: 10), app.debugDescription)
-        searchTab.tap()
+        app.openSearchPage(timeout: 10)
         let field = app.searchFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10), app.debugDescription)
         field.tap()
