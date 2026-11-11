@@ -1092,7 +1092,8 @@ private extension String {
 final class RSSFetcher: ObservableObject {
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
+    // RSSStore拥有Feed缓存/validator；规则网页另有cacheFirst。禁止URLCache隐式缓存404或绕过刷新。
+    init(session: URLSession = LegadoJSBridge.requestSession) {
         self.session = session
     }
 

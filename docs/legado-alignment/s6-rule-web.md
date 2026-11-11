@@ -1,6 +1,42 @@
 # S6：规则网页与资源/媒体闭环
 
-当前结论：本地门槛通过，提交 `9e9c9837`、`5e6e06e2`。用户随后确认真机视频画面和声音正常，并要求暂停真机测试、继续 S7–S8；以下各批次按当时状态保留，当前未验证项以“第六批与阶段结论”为准，不把模拟器证据外推为发布通过。
+当前结论：**本轮S6自动门槛通过，实源及发布未放行。** 以用户确认的 `0f31f857` 为基线补齐404缓存修复、独立网页主动缩放/原生退出及音频诊断；两设备最终各S5 270项、S6 101项/20 suites和3项网页UI通过，见[本轮记录](s6-web-display.md)。首轮iPad既有搜索用例失败及修正测试假设的失败批次均保留。用户确认过真机视频画面/声音，真机仍暂停；R062/R306当前实站未复测，不能宣称这些源全部恢复。以下各批次按当时状态保留。
+
+## 用户反馈复查：404缓存与分类切换
+
+用户样例为原包R062（网页弹层与间歇404）和R306（首分类正常、切换分类404）。只静态检查源字段，未联网请求这些站点、执行源包脚本或复制原始源包到测试资源。
+
+### 已复现与修复
+
+- `RSSWebDocumentCache`仅在`cacheFirst=true`时保存通过检查的200；R062原包该开关为false。首文档默认使用无URLCache的`LegadoJSBridge.requestSession`。新增连续404→200测试，开关两种取值均重新发请求、恢复后成功。
+- 但`RSSFeedSession`和`RSSFetcher`默认仍使用`URLSession.shared`，**分类列表/Feed可被系统URLCache缓存404**，不受源的`cacheFirst=false`约束。自建本机服务器给404加`Cache-Control: public, max-age=3600`，下一次请求准备返回200；修复前重试仍显示404，服务器只收到首次错误请求。切回首分类也没有新请求。
+- 两个默认入口改为复用`LegadoJSBridge.requestSession`，不新建网络层；RSSStore已有Feed内容/validator和规则网页显式cacheFirst不变。没有清理用户缓存、源配置或文章数据，也没有修改凭据和重定向策略。
+- 等价分类fixture覆盖不同相对端点、`{{page}}`、空行、同名不同URL分类；先翻到第二页，再切分类，从第一页请求；失败不显示首分类内容，重试命中真实网络，返回首分类再次请求。修复后收到预期6次请求，修复前仅4次。
+- R306静态配置的首项使用`/api.php/provide/vod/`，随后一批分类使用`/index.php/provide/vod/`，更后面的分类又使用前一种路径。这是额外线索，不证明远端哪个接口当前可用，也不能将所有失败归因缓存或自行替换源地址。
+
+### 实际验证
+
+正常`Reader-Fork-Dev`、由`scripts/sim.sh`选择Xcode和iPhone/iPad，当前iOS27.2(24B8117)。仅测试本机合成响应，不运行真机。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)" YUEDU_SCHEME=Reader-Fork-Dev
+# 分别使用 iPhone 和 iPad；为每次执行提供独立日志/xcresult路径。
+export YUEDU_DEST="$(bash scripts/sim.sh dest iPhone)"
+E="$(mktemp -d /tmp/readerfork-s6-retry.XXXXXX)"
+bash scripts/xctest.sh -l "$E/tests.log" -- -resultBundlePath "$E/tests.xcresult" \
+  -only-testing:'yuedu appTests/RSSBrowsingContractTests' \
+  -only-testing:'yuedu appTests/RSSBackgroundRefreshTests' \
+  -only-testing:'yuedu appTests/RSSWebDocumentCacheTests' \
+  -only-testing:'yuedu appTests/RSSForegroundRuntimeTests' \
+  -only-testing:'yuedu appTests/RSSCookieAuthorizationTests' \
+  -only-testing:'yuedu appTests/RSSRuntimeIntegrationTests'
+```
+
+- RED：`/tmp/readerfork-s6-category-retry.qNj69y/`，15项中新增分类重试用例失败，2个issues：重试仍失败、缺少2次网络请求。先前方法级过滤曾执行0项（`fsXTTB`），不算通过证据，随后改为运行相关suite。
+- GREEN：iPhone `/tmp/readerfork-s6-retry-green.Oj89Hb/`；iPad `/tmp/readerfork-s6-retry-ipad.KIhpFN/`。各52项/6 suites，零失败零跳过；包含404恢复、分类作用域/页码、Feed validator、后台刷新、认证和运行时回归。
+- 新增无规则Feed fixture曾误走普通Feed的HTTP→HTTPS升级，随后又因缺少link被旧XML解析器丢弃条目。分别使用保留URL的Legado导入入口和完整无敏感内容的Feed条目修正fixture；未修改生产HTTPS策略或放宽条目解析。
+- 未验证：两条真实源的当前远端响应、Android同版本源当前表现、最低iOS17。后续已补独立网页缩放/原生退出并通过实际两层DOM点击，见[本轮记录](s6-web-display.md)，它不是通用广告拦截器，也不等于R062实站已验证。此前媒体/签名/登录/发布限制仍有效。
+- 回滚：撤回两个默认session修改即可恢复旧行为；测试与记录可保留。无数据格式变化，不需要删除任何用户数据。该回滚会重新引入隐式404缓存风险。
 
 前置已完成并归档Push：S5 `a60f9d45`；手动IPA修复与云端成功证据 `129f3dea`；当前27.2媒体环境复验 `5453b7b7`。按用户要求自动进入S6，不把下面的局部通过记为阶段完成。
 

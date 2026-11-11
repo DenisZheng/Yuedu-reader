@@ -14,6 +14,7 @@ s6=(
   RSSCookieAuthorizationTests RSSImageServiceTests RSSWebImageTests
   RSSWebActionRouterTests RSSLoginServiceTests RSSNativeWebFlowTests
   RSSMediaPlaybackTests RSSMediaResourceSessionTests RSSWebDocumentCacheTests RSSS6VisualAccessibilityTests
+  RSSWebViewportTests
   RSSMediaPoCTests VideoEpisodeStillTests RSSWebResourcePoCTests RSSSchemeResourcePoCTests RSSResourcePipelinePoCTests
 )
 YUEDU_EVIDENCE_DIR="$EVIDENCE/s5" bash scripts/validate_reader_fork_s5.sh
@@ -42,5 +43,27 @@ for suite in sys.argv[3:]:
     assert executed.get(suite),f"未执行S6 suite: {suite}"
     assert all(r=="Passed" for r in executed[suite]),(suite,executed[suite])
 print("S6专项通过：",summary["totalTestCount"],"项，",len(sys.argv)-3,"个suite全部实际执行")
+PY
+bash scripts/xctest.sh -l "$EVIDENCE/s6-ui.log" -- -resultBundlePath "$EVIDENCE/s6-ui.xcresult" \
+  -only-testing:'yuedu appUITests/RSSWebDisplayUITests'
+xcrun xcresulttool get test-results summary --path "$EVIDENCE/s6-ui.xcresult" --format json > "$EVIDENCE/s6-ui-summary.json"
+xcrun xcresulttool get test-results tests --path "$EVIDENCE/s6-ui.xcresult" --format json > "$EVIDENCE/s6-ui-tests.json"
+python3 - "$EVIDENCE/s6-ui-summary.json" "$EVIDENCE/s6-ui-tests.json" <<'PY'
+import json,sys
+summary=json.load(open(sys.argv[1]))
+assert summary["result"]=="Passed" and summary["failedTests"]==0 and summary["skippedTests"]==0,summary
+expected={"RSSWebDisplayUITests/"+name+"()" for name in [
+    "testTwoPanelsCanCloseAndPageKeepsState", "testNativeCloseStaysReachableAtAX5AndDark", "testLandscapeClosePanelsAndReset"]}
+executed={}
+def walk(node):
+    if isinstance(node,dict):
+        if node.get("nodeType")=="Test Case": executed[node.get("nodeIdentifier","")]=node.get("result")
+        for child in node.get("children",[]):walk(child)
+    elif isinstance(node,list):
+        for child in node:walk(child)
+walk(json.load(open(sys.argv[2]))["testNodes"])
+assert set(executed)==expected and all(r=="Passed" for r in executed.values()),executed
+assert summary["totalTestCount"]==len(expected),summary
+print("S6网页缩放/连续弹层/原生退出/横屏/AX5 UI：3项实际通过")
 PY
 echo "证据：$EVIDENCE"

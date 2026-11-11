@@ -44,7 +44,7 @@ final class RSSFeedSession {
     private var visited: Set<String> = []
     private var loadedIDs: Set<String> = []
 
-    init(source: RSSSource, store: RSSStore, session: URLSession = .shared, maxPages: Int = 50,
+    init(source: RSSSource, store: RSSStore, session: URLSession = LegadoJSBridge.requestSession, maxPages: Int = 50,
          resolvesEntry: Bool = true, entries: [RSSSortEntry]? = nil) {
         self.sourceID = source.id
         self.store = store

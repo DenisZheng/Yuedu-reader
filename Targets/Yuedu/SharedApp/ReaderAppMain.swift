@@ -30,7 +30,9 @@ enum RSSPoCTestHost {
 private struct RSSPoCApplication: App {
     var body: some Scene {
         WindowGroup {
-            if let path = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_FIXTURE"],
+            if ProcessInfo.processInfo.environment["RSS_WEB_DISPLAY_FIXTURE"] == "1" {
+                RSSWebDisplayFixtureHost()
+            } else if let path = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_FIXTURE"],
                let storage = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_STORAGE"] {
                 RSSImportUIFixtureHost(file: URL(fileURLWithPath: path), directory: URL(fileURLWithPath: storage))
             } else {

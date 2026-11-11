@@ -13,6 +13,9 @@
 "來源資源載入失敗" = "Failed to load source resources.";
 "訂閱來源或登入狀態已變更，請重新開啟" = "The subscription source or sign-in state changed. Please reopen this page.";
 "來源網頁腳本執行失敗" = "The source page script failed.";
+"網頁縮放" = "Page Zoom";
+"網頁縮放：%@" = "Page Zoom: %@";
+"無法調整網頁縮放" = "Unable to change page zoom.";
 "正文尚未完整載入，已保留部分內容" = "The article is only partially loaded. Loaded content has been kept.";
 "已達分頁上限，已保留部分文章" = "Page limit reached. The loaded articles have been kept.";
 "分頁連結形成循環，已停止載入" = "A pagination loop was detected. Loading has stopped.";

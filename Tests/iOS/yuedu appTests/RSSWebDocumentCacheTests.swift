@@ -33,6 +33,42 @@ struct RSSWebDocumentCacheTests {
         #expect(server.requests.filter { $0.path == "/page" }.count == 3)
     }
 
+    @Test("连续HTTP404不能被缓存：重试发出新请求，服务器恢复200后立即成功", arguments: [false, true])
+    func notFoundThenRecovery(cacheFirst: Bool) async throws {
+        final class Sequence: @unchecked Sendable {
+            let lock = NSLock()
+            var count = 0
+            func next() -> Int { lock.withLock { count += 1; return count } }
+        }
+        let sequence = Sequence()
+        let server = try VideoStillFixtureServer(directory: directory)
+        server.route { request in
+            guard request.path == "/recover" else { return nil }
+            let attempt = sequence.next()
+            return .init(body: Data((attempt < 3 ? "Not Found" : "<p>recovered</p>").utf8), type: "text/html",
+                         status: attempt < 3 ? "404 Not Found" : "200 OK",
+                         headers: ["Cache-Control": "public, max-age=3600"])
+        }
+        let base = try await server.start()
+        defer { server.stop() }
+        let url = base.appendingPathComponent("recover")
+        var source = RSSSource(name: "404 retry", url: base.absoluteString)
+        source.cacheFirst = cacheFirst
+        for _ in 0..<2 {
+            do {
+                _ = try await load(url, source)
+                Issue.record("404不应变为加载成功")
+            } catch {
+                guard case ScraperError.httpStatus(404) = error else { throw error }
+            }
+        }
+        #expect(server.requests.filter { $0.path == "/recover" }.count == 2, "每次404重试必须重新访问服务器")
+        #expect(try await load(url, source).contains("recovered"))
+        #expect(server.requests.filter { $0.path == "/recover" }.count == 3)
+        #expect(try await load(url, source).contains("recovered"))
+        #expect(server.requests.filter { $0.path == "/recover" }.count == (cacheFirst ? 3 : 4), "只有成功页且开启cacheFirst才命中缓存")
+    }
+
     @Test("账号头不同不串页面；no-store与错误响应不缓存")
     func credentialAndStorageBoundaries() async throws {
         let server = try VideoStillFixtureServer(directory: directory, routes: [

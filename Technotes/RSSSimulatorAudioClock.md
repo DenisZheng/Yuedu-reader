@@ -1,6 +1,14 @@
 # RSS模拟器音频时钟：环境恢复与前置复验
 
-## 结论与范围
+## 当前0f31f857基线复验
+
+用户确认Mac主机音频一直正常。撤回先前把`afplay`命令错误/超时认定为主机音频故障、要求等待主机恢复的判断；该命令不作为iOS App门槛。旧失败有ready超时/最终时钟0，也有ready等待超时但最终time约0.204秒的不同表现，不能混成一个已知根因。
+
+当前只给本地/HTTP PoC测试增加会话激活、item KVO、seek、播放边界及拆除时间线；保留原播放器清理顺序、ready10秒/时钟8秒断言，没有生产音频修改。正常→隔离→正常宿主对照各1项通过，见`/tmp/readerfork-audio-host-controls.G3Ilua/`；iPad完整音频PoC suite通过，见`/tmp/readerfork-audio-baseline-ipad.Tc1gfA/`。
+
+最新正常Dev媒体前置两端各36/36通过，证据`/tmp/readerfork-current-baseline-media.7Z21AR/`；随后完整S6也实际播放通过，命令/数量和先前失败记录见[当前S6复验](../docs/legado-alignment/s6-web-display.md)。不宣称已唯一解释旧间歇失败或修复了系统音频引擎；如再出现，应按时间线定位，不静音、自动重试或放宽断言。真机仍暂停。
+
+## 历史结论与范围
 
 待办#36是任务编号，不是36个测试。旧iOS26.2上的故障为：音频可加载/seek，但AVPlayer时钟停在0或2秒；本地音频也复现，不能把它仅归因于RSS或网络。S5后在官方iOS27.2上再次复现，再恢复到两设备实际播放通过。
 

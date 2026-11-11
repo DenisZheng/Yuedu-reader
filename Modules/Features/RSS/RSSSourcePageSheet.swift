@@ -13,8 +13,12 @@ struct RSSSourcePageSheet: View {
             RSSSourcePageScreen(source: source, target: target, owner: owner)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button { dismiss() } label: { Image(systemName: "xmark") }
-                            .accessibilityLabel(localized("關閉"))
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                                .frame(minWidth: DSLayout.minimumTapTarget, minHeight: DSLayout.minimumTapTarget)
+                        }
+                        .accessibilityLabel(localized("關閉"))
+                        .accessibilityIdentifier("rss.web.close")
                     }
                 }
         }
@@ -32,12 +36,13 @@ struct RSSSourcePageScreen: View {
     @State private var reloadID = UUID()
     @State private var router = RSSWebActionRouter()
     @State private var isVisible = false
+    @State private var displayScalePercent = 100
     var body: some View {
         RSSSourcePageWebView(source: source, target: target, error: $error, loading: $loading, owner: owner,
             onAction: { request in
                 guard let owner else { throw RSSWebFailure.actionUnavailable }
                 try router.receive(request, source: source, owner: owner)
-            }, isActive: isVisible)
+            }, isActive: isVisible, displayScalePercent: displayScalePercent)
             .id(reloadID)
             .overlay(alignment: .top) {
                 if loading { ProgressView().padding(DSSpacing.md) }
@@ -54,6 +59,23 @@ struct RSSSourcePageScreen: View {
             }
             .navigationTitle(title ?? source.name)
             .toolbarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Picker(localized("網頁縮放"), selection: $displayScalePercent) {
+                            ForEach(RSSWebViewport.percentages, id: \.self) { percent in
+                                Text(RSSWebViewport.label(percent)).tag(percent)
+                            }
+                        }
+                    } label: {
+                        Label(localized("網頁縮放"), systemImage: "plus.magnifyingglass")
+                            .labelStyle(.iconOnly)
+                            .frame(minWidth: DSLayout.minimumTapTarget, minHeight: DSLayout.minimumTapTarget)
+                    }
+                    .accessibilityLabel(String(format: localized("網頁縮放：%@"), RSSWebViewport.label(displayScalePercent)))
+                    .accessibilityIdentifier("rss.web.scale")
+                }
+            }
             .modifier(RSSWebActionPresentation(router: router, owner: owner))
             .onAppear { isVisible = true }
             .onDisappear { isVisible = false; router.cancelPending() }
@@ -79,12 +101,15 @@ struct RSSSourcePageWebView: UIViewRepresentable {
     var authentication = false
     var authenticationBridge: RSSWebAuthenticationBridge? = nil
     var initialRequestContext: RSSOpenTarget.RequestContext? = nil
+    /// 仅独立网页提供主动显示缩放；文章/登录默认不参与。
+    var displayScalePercent: Int? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(error: $error, loading: $loading) }
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = authentication || source.enableJs
         configuration.websiteDataStore = .nonPersistent()
+        configuration.ignoresViewportScaleLimits = displayScalePercent != nil && !authentication
         configuration.setURLSchemeHandler(context.coordinator.images, forURLScheme: RSSWebImages.scheme)
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
@@ -100,6 +125,7 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         context.coordinator.onAction = onAction
         context.coordinator.isPageActive = isActive
         context.coordinator.authentication = authentication
+        context.coordinator.updateDisplayScale(authentication ? nil : displayScalePercent, in: view)
         context.coordinator.authenticationBridge = authenticationBridge
         authenticationBridge?.finish = { [weak view, weak coordinator = context.coordinator] in
             guard let view, let coordinator, !coordinator.isRevoked, coordinator.accessState?.isCurrent == true else { throw CancellationError() }
@@ -160,6 +186,11 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         private var navigationTask: Task<Void, Never>?
         private var task: Task<Void, Never>?
         private var injectionTask: Task<Void, Never>?
+        private var displayTask: Task<Void, Never>?
+        private var displayRevision: UInt64 = 0
+        private var requestedPercent: Int?
+        private var pendingPercent: Int?
+        private var appliedPercent: Int?
         private var generation = 0
         // 页面权限覆盖其全部原生导航；不能与每次导航的完成/注入generation混用。
         private var accessGeneration = 0
@@ -192,7 +223,43 @@ struct RSSSourcePageWebView: UIViewRepresentable {
             guard let context, context.requestURL.flatMap(SourceRequestHeaderScope.origin) == SourceRequestHeaderScope.origin(url) else { return nil }
             return context.headers.first { $0.key.lowercased() == "cookie" }?.value
         }
+        private func cancelDisplayScale() {
+            displayRevision &+= 1
+            displayTask?.cancel()
+            displayTask = nil
+            pendingPercent = nil
+            appliedPercent = nil
+        }
+        func updateDisplayScale(_ percent: Int?, in view: WKWebView) {
+            requestedPercent = percent
+            guard documentIsReady, !isRevoked, !authentication, accessState?.isCurrent == true,
+                  let percent, percent != appliedPercent, percent != pendingPercent else { return }
+            cancelDisplayScale()
+            pendingPercent = percent
+            let revision = displayRevision
+            let id = generation
+            displayTask = Task { [weak self, weak view] in
+                guard let self else { return }
+                defer {
+                    if revision == displayRevision { pendingPercent = nil; displayTask = nil }
+                }
+                do {
+                    try Task.checkCancellation()
+                    guard id == generation, let view, accessState?.isCurrent == true else { return }
+                    let applied = try await RSSWebViewport.apply(percent, revision: revision, in: view)
+                    try Task.checkCancellation()
+                    guard id == generation, revision == displayRevision, accessState?.isCurrent == true, applied else { return }
+                    appliedPercent = percent
+                    if error.wrappedValue == RSSWebFailure.viewportUnavailable.errorDescription { error.wrappedValue = nil }
+                } catch is CancellationError { return }
+                catch {
+                    guard id == generation, revision == displayRevision else { return }
+                    fail(RSSWebFailure.viewportUnavailable)
+                }
+            }
+        }
         func cancel() {
+            cancelDisplayScale()
             generation &+= 1
             accessGeneration &+= 1
             if let accessToken { accessState?.removeCancellation(accessToken) }
@@ -433,6 +500,7 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                 injectionTask?.cancel()
                 self.navigation = navigation
             }
+            cancelDisplayScale()
             documentIsReady = false
         }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -457,6 +525,7 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                     guard accessState?.isCurrent == true else { revoke(webView); return }
                     webView.layoutIfNeeded()
                     documentIsReady = true
+                    updateDisplayScale(requestedPercent, in: webView)
                     restoreScrollIfReady(webView.scrollView)
                     loading.wrappedValue = false
                 } catch is CancellationError { return }

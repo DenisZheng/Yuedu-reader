@@ -6,6 +6,104 @@ import Testing
 @Suite("RSS browsing contracts", .serialized)
 @MainActor
 struct RSSBrowsingContractTests {
+    @Test("分类使用各自的相对路径，切换重置页码；404重试不能被系统缓存挡住")
+    func categoryPathsAndNotFoundRetry() async throws {
+        // 自建无敏感内容的等价输入：首分类和后续分类使用不同端点，不能擅自合并或改写。
+        final class Attempts: @unchecked Sendable {
+            let lock = NSLock()
+            var count = 0
+            func next() -> Int { lock.withLock { count += 1; return count } }
+        }
+        let attempts = Attempts()
+        let body = Data(#"{"list":[{"title":"Fixture item","id":"one"}]}"#.utf8)
+        let server = try VideoStillFixtureServer(directory: .temporaryDirectory)
+        server.route { request in
+            guard ["/api.php/provide/items/", "/index.php/provide/items/"].contains(request.path) else { return nil }
+            if request.path.hasPrefix("/index.php"), attempts.next() == 1 {
+                return .init(body: Data("Not Found".utf8), status: "404 Not Found", headers: ["Cache-Control": "public, max-age=3600"])
+            }
+            return .init(body: body, type: "application/json", headers: ["Cache-Control": "public, max-age=3600"])
+        }
+        let base = try await server.start()
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            server.stop()
+            do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) }
+        }
+        let store = RSSStore(storageDirectory: directory)
+        var source = RSSSource(name: "Category endpoints", url: base.absoluteString)
+        source.cacheFirst = false
+        source.sortUrl = """
+        First::/api.php/provide/items/?ac=detail&pg={{page}}&wd=fixture
+
+        Second::/index.php/provide/items/?ac=detail&pg={{page}}&t=2
+        Second::/api.php/provide/items/?ac=detail&pg={{page}}&t=3
+        """
+        source.ruleArticles = "$.list"; source.ruleTitle = "$.title"
+        source.ruleLink = "/item/{{$.id}}"; source.ruleNextPage = "page"
+        store.addSource(source)
+        // 使用生产默认session，不能注入无缓存的fixture session掩盖URLCache行为。
+        let browser = RSSFeedSession(source: source, store: store)
+        await browser.refresh()
+        #expect(browser.error == nil && browser.currentPage == 1)
+        #expect(browser.entries.count == 3)
+        let first = try #require(browser.entries.first)
+        let second = try #require(browser.entries.dropFirst().first)
+        let third = try #require(browser.entries.last)
+        await browser.nextPage()
+        #expect(browser.currentPage == 2)
+        await browser.refresh(entry: second)
+        #expect(browser.error?.contains("404") == true && browser.canRetry)
+        #expect(browser.currentPage == 0)
+        #expect(store.articles(for: source.id, scope: browser.scope).isEmpty, "新分类失败不能显示首分类缓存")
+        await browser.retry()
+        #expect(browser.error == nil && browser.currentPage == 1)
+        await browser.refresh(entry: third)
+        #expect(browser.error == nil && browser.scope == .category(third), "分类同名但URL不同仍应独立请求")
+        await browser.refresh(entry: first)
+        #expect(browser.error == nil && browser.currentPage == 1)
+        #expect(server.requests.map { $0.path + "?" + $0.query } == [
+            "/api.php/provide/items/?ac=detail&pg=1&wd=fixture",
+            "/api.php/provide/items/?ac=detail&pg=2&wd=fixture",
+            "/index.php/provide/items/?ac=detail&pg=1&t=2",
+            "/index.php/provide/items/?ac=detail&pg=1&t=2",
+            "/api.php/provide/items/?ac=detail&pg=1&t=3",
+            "/api.php/provide/items/?ac=detail&pg=1&wd=fixture"
+        ])
+        try await store.flushPersistence()
+    }
+
+    @Test("默认刷新器的无规则Feed也不隐式缓存404，恢复后重试成功")
+    func plainFeedNotFoundRetry() async throws {
+        final class Attempts: @unchecked Sendable {
+            let lock = NSLock()
+            var count = 0
+            func next() -> Int { lock.withLock { count += 1; return count } }
+        }
+        let attempts = Attempts()
+        let server = try VideoStillFixtureServer(directory: .temporaryDirectory)
+        server.route { request in
+            guard request.path == "/feed" else { return nil }
+            if attempts.next() == 1 {
+                return .init(body: Data("Not Found".utf8), status: "404 Not Found", headers: ["Cache-Control": "public, max-age=3600"])
+            }
+            return .init(body: Data("<rss version='2.0'><channel><title>Fixture</title><item><guid>one</guid><title>Recovered</title><link>https://feed-fixture.invalid/item</link></item></channel></rss>".utf8),
+                         type: "application/rss+xml", headers: ["Cache-Control": "public, max-age=3600"])
+        }
+        let base = try await server.start()
+        defer { server.stop() }
+        var source = RSSSource(name: "Feed retry", url: base.appendingPathComponent("feed").absoluteString)
+        // 导入源保留HTTP URL，避免普通Feed入口强制升级HTTPS；这里没有列表规则，仍走Feed解析。
+        source.importedFromLegado = true
+        let fetcher = RSSFetcher()
+        await fetcher.fetchItems(from: source)
+        #expect(fetcher.error?.contains("404") == true)
+        await fetcher.fetchItems(from: source)
+        #expect(fetcher.error == nil)
+        #expect(fetcher.items.map(\.title) == ["Recovered"])
+        #expect(server.requests.map(\.path) == ["/feed", "/feed"])
+    }
+
     @Test("列表next以请求URL为基址，文章与正文next以redirectURL为基址")
     func redirectedPageBases() async throws {
         let server = try VideoStillFixtureServer(directory: .temporaryDirectory, routes: [

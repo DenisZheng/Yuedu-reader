@@ -5,6 +5,28 @@ import UIKit
 import XCTest
 @testable import yuedu_app
 
+/// 仅记录诊断时间线；跨KVO/测试执行器的条目由同一锁保护，不参与播放器决策。
+private final class AudioTestTimeline: @unchecked Sendable {
+    private let lock = NSLock()
+    private let started = ProcessInfo.processInfo.systemUptime
+    private var entries: [String] = []
+
+    func record(_ event: String) {
+        let entry = String(format: "+%.3f %@", ProcessInfo.processInfo.systemUptime - started, event)
+        lock.lock()
+        entries.append(entry)
+        lock.unlock()
+        // 若同步会话激活卡住，附件来不及生成；有限事件日志保留最后到达的边界。
+        print("[RSS-Audio-PoC] \(entry)")
+    }
+
+    var snapshot: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.joined(separator: "\n")
+    }
+}
+
 /// S1约束实验，不代表RSS已接入这些能力。服务器验收到达的请求，播放器验收实际时钟推进。
 @MainActor
 final class RSSMediaPoCTests: XCTestCase {
@@ -48,67 +70,105 @@ final class RSSMediaPoCTests: XCTestCase {
 
     func testAudioActuallySeeksAndAdvances() async throws {
         // 独立宿主没有普通App的音频会话；显式建立播放条件，并在队列外等待成功。
+        let timeline = AudioTestTimeline()
+        timeline.record("HTTP test started isolatedHost=\(RSSPoCTestHost.isEnabled) appState=\(UIApplication.shared.applicationState.rawValue)")
+        defer {
+            let attachment = XCTAttachment(string: timeline.snapshot)
+            attachment.name = "http-audio-timeline"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
         let previous = try await Task.detached {
             let session = AVAudioSession.sharedInstance()
             let previous = (session.category, session.mode, session.categoryOptions)
+            timeline.record("setCategory begin")
             try session.setCategory(.playback)
+            timeline.record("setActive begin")
             try session.setActive(true)
+            timeline.record("setActive returned")
             return previous
         }.value
         let result: Result<Void, Error>
         do {
-            try await play("video-still-audio-only.m4a")
+            try await play("video-still-audio-only.m4a", timeline: timeline)
             result = .success(())
         } catch { result = .failure(error) }
         do {
+            timeline.record("restore session begin")
             try await Task.detached {
                 let session = AVAudioSession.sharedInstance()
                 try session.setActive(false)
                 try session.setCategory(previous.0, mode: previous.1, options: previous.2)
             }.value
+            timeline.record("restore session returned")
         } catch { XCTFail("测试音频会话恢复失败：\(error)") }
         try result.get()
     }
 
     /// 最小平台回归：不经过RSS、认证头或网络，仍须由真实音频输出推进播放时钟。
     func testLocalAudioActuallyAdvances() async throws {
+        let timeline = AudioTestTimeline()
+        timeline.record("test started isolatedHost=\(RSSPoCTestHost.isEnabled) appState=\(UIApplication.shared.applicationState.rawValue)")
         let previous = try await Task.detached {
             let session = AVAudioSession.sharedInstance()
             let value = (session.category, session.mode, session.categoryOptions)
+            timeline.record("setCategory begin")
             try session.setCategory(.playback)
+            timeline.record("setActive begin")
             try session.setActive(true)
+            timeline.record("setActive returned category=\(session.category.rawValue) mode=\(session.mode.rawValue) sampleRate=\(session.sampleRate) outputs=\(session.currentRoute.outputs.map(\.portType.rawValue))")
             return value
         }.value
         let asset = AVURLAsset(url: fixtures.appendingPathComponent("video-still-audio-only.m4a"))
         let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)
-        defer { player.pause(); player.replaceCurrentItem(with: nil) }
+        timeline.record("asset/item/player created status=\(item.status.rawValue)")
+        var playbackState: String?
+        defer {
+            let attachment = XCTAttachment(string: "\(timeline.snapshot)\nBEFORE TEARDOWN \(playbackState ?? Self.audioState(player: player, item: item))")
+            attachment.name = "local-audio-timeline"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+        }
         let ready = expectation(description: "本地音频ready")
         let observation = item.observe(\.status, options: [.initial, .new]) { value, _ in
+            timeline.record("status KVO=\(value.status.rawValue) error=\(String(describing: value.error))")
             if value.status != .unknown { ready.fulfill() }
         }
         defer { observation.invalidate() }
         await fulfillment(of: [ready], timeout: 10)
+        timeline.record("ready wait returned status=\(item.status.rawValue) error=\(String(describing: item.error))")
         XCTAssertEqual(item.status, .readyToPlay)
         let advanced = expectation(description: "本地音频时钟越过0.2秒")
         let token = player.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: 0.2, preferredTimescale: 600))], queue: .main) {
+            timeline.record("0.2 boundary callback time=\(player.currentTime().seconds)")
             advanced.fulfill()
         }
         defer { player.removeTimeObserver(token) }
+        timeline.record("play() called")
         player.play()
         await fulfillment(of: [advanced], timeout: 8)
+        timeline.record("clock wait returned time=\(player.currentTime().seconds) rate=\(player.rate) control=\(player.timeControlStatus.rawValue)")
         XCTAssertGreaterThan(player.currentTime().seconds, 0.2)
-        let attachment = XCTAttachment(string: Self.audioState(player: player, item: item))
+        let stateBeforeTeardown = Self.audioState(player: player, item: item)
+        playbackState = stateBeforeTeardown
+        let attachment = XCTAttachment(string: stateBeforeTeardown)
         attachment.name = "local-audio-platform-state"
         attachment.lifetime = .keepAlways
         add(attachment)
+        timeline.record("pause and detach player begin")
         player.pause()
         player.replaceCurrentItem(with: nil)
+        timeline.record("pause and detach player returned")
+        timeline.record("restore session begin")
         try await Task.detached {
             let session = AVAudioSession.sharedInstance()
             try session.setActive(false)
             try session.setCategory(previous.0, mode: previous.1, options: previous.2)
         }.value
+        timeline.record("restore session returned")
     }
 
     private static func audioState(player: AVPlayer, item: AVPlayerItem) -> String {
@@ -117,14 +177,17 @@ final class RSSMediaPoCTests: XCTestCase {
     }
 
     @discardableResult
-    private func play(_ name: String) async throws -> [VideoStillFixtureServer.Request] {
+    private func play(_ name: String, timeline: AudioTestTimeline? = nil) async throws -> [VideoStillFixtureServer.Request] {
         let referer = "https://fixture.invalid/player"
         let server = try VideoStillFixtureServer(directory: fixtures, referer: referer)
+        timeline?.record("fixture server start begin")
         let base = try await server.start()
+        timeline?.record("fixture server ready")
         defer { server.stop() }
         let asset = HeaderedMediaAsset.make(url: base.appendingPathComponent(name), headers: ["Referer": referer])
         let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)
+        timeline?.record("HTTP asset/item/player created status=\(item.status.rawValue)")
         // 当前模拟器无显示consumer时HLS seek不完成；PoC使用真实显示层，而非只查ready状态。
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
@@ -137,6 +200,7 @@ final class RSSMediaPoCTests: XCTestCase {
         defer { layer.player = nil; window.isHidden = true }
         let ready = expectation(description: "AVPlayer完成实际资源加载")
         let observation = item.observe(\.status, options: [.initial, .new]) { item, _ in
+            timeline?.record("status KVO=\(item.status.rawValue) error=\(String(describing: item.error))")
             if item.status != .unknown { ready.fulfill() }
         }
         defer {
@@ -144,17 +208,22 @@ final class RSSMediaPoCTests: XCTestCase {
             trace.name = "\(name)-transport"
             trace.lifetime = .keepAlways
             add(trace)
+            timeline?.record("HTTP state before teardown \(Self.audioState(player: player, item: item))")
             observation.invalidate()
             player.pause()
             player.replaceCurrentItem(with: nil)
+            timeline?.record("HTTP pause and detach returned")
         }
         await fulfillment(of: [ready], timeout: 10)
+        timeline?.record("ready wait returned status=\(item.status.rawValue)")
         guard item.status == .readyToPlay else {
             XCTFail("媒体加载失败：\(String(describing: item.error))")
             return server.requests
         }
         let sought = expectation(description: "seek完成回调")
+        timeline?.record("seek(2) called")
         player.seek(to: CMTime(seconds: 2, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { completed in
+            timeline?.record("seek completed=\(completed)")
             XCTAssertTrue(completed)
             sought.fulfill()
         }
@@ -168,8 +237,10 @@ final class RSSMediaPoCTests: XCTestCase {
             if time.seconds > 2.2 { advanced.fulfill() }
         }
         defer { player.removeTimeObserver(observer) }
+        timeline?.record("play() called")
         player.play()
         await fulfillment(of: [advanced], timeout: 8)
+        timeline?.record("clock wait returned time=\(player.currentTime().seconds)")
         XCTAssertGreaterThan(player.currentTime().seconds, 2.2)
         XCTAssertFalse(server.requests.isEmpty)
         XCTAssertTrue(server.requests.allSatisfy { $0.referer == referer })

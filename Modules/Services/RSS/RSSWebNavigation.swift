@@ -28,7 +28,7 @@ struct RSSWebActionRequest: Sendable {
 }
 
 enum RSSWebFailure: LocalizedError {
-    case actionUnavailable, navigationBlocked, formBodyUnavailable, resourceRuleUnsupported, resourceUnavailable, imageFormatRestricted
+    case actionUnavailable, navigationBlocked, formBodyUnavailable, resourceRuleUnsupported, resourceUnavailable, imageFormatRestricted, viewportUnavailable
     var errorDescription: String? {
         switch self {
         case .actionUnavailable: localized("此網頁操作尚不支援")
@@ -36,6 +36,7 @@ enum RSSWebFailure: LocalizedError {
         case .formBodyUnavailable: localized("無法安全重送此網頁表單，請使用網站登入入口")
         case .resourceRuleUnsupported: localized("此來源的資源規則無法安全執行")
         case .resourceUnavailable: localized("來源資源載入失敗")
+        case .viewportUnavailable: localized("無法調整網頁縮放")
         case .imageFormatRestricted: localized("此圖片格式（SVG）無法在原生檢視器顯示，請在網頁中檢視")
         }
     }
