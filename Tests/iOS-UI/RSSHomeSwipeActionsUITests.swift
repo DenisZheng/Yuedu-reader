@@ -12,9 +12,21 @@ import XCTest
 /// `-seed-rss-articles` stores a feed of two unread articles, 首頁訂閱測試.
 final class RSSHomeSwipeActionsUITests: XCTestCase {
     private static let folderName = "SwipeFolder"
+    @MainActor private static var originalOrientation: UIDeviceOrientation?
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        MainActor.assumeIsolated {
+            Self.originalOrientation = XCUIDevice.shared.orientation
+            XCUIDevice.shared.orientation = .portrait
+        }
+    }
+
+    override func tearDownWithError() throws {
+        MainActor.assumeIsolated {
+            if let original = Self.originalOrientation { XCUIDevice.shared.orientation = original }
+            Self.originalOrientation = nil
+        }
     }
 
     @MainActor
@@ -88,8 +100,15 @@ final class RSSHomeSwipeActionsUITests: XCTestCase {
         XCTAssertTrue(library.waitForExistence(timeout: 30), app.debugDescription)
         library.tap()
         let header = app.staticTexts["訂閱"].firstMatch
-        for _ in 0..<6 { app.swipeUp(velocity: .slow) }
+        // UI state restoration may reopen a pushed module page from an earlier test; tapping an
+        // already-selected tab does not necessarily pop it. Return through native Back first.
+        for _ in 0..<8 where !app.navigationBars["RSS 訂閱"].exists {
+            let back = app.navigationBars.buttons.element(boundBy: 0)
+            guard back.exists else { break }
+            back.tap()
+        }
         XCTAssertTrue(header.waitForExistence(timeout: 10), app.debugDescription)
+        for _ in 0..<6 where !header.isHittable { app.swipeUp(velocity: .slow) }
         header.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 1)).withOffset(CGVector(dx: 60, dy: 50)).tap()
         XCTAssertTrue(app.navigationBars["RSS 訂閱"].waitForExistence(timeout: 10), app.debugDescription)
     }

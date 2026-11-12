@@ -12,6 +12,14 @@ enum WebDAVBackupCategory: String, CaseIterable, Codable, Identifiable, Sendable
     case bookSources, bookshelf, replaceRules, rss
     var id: String { rawValue }
     var fileName: String { rawValue + ".json" }
+    var restoreRole: WebDAVRestoreJournal.Role? {
+        switch self {
+        case .bookSources: .bookSources
+        case .bookshelf: .bookshelf
+        case .replaceRules: .replaceRules
+        case .rss: nil
+        }
+    }
     var titleKey: String {
         switch self {
         case .bookSources: "書源"
@@ -162,8 +170,13 @@ struct WebDAVProductionLocalData: WebDAVBackupLocalData {
     let bookStore: BookStore?
     /// 测试用：把文件分类指向隔离目录，并跳过对全局 store 的重载。生产为空。
     var fileOverrides: [WebDAVBackupCategory: URL] = [:]
-    var recoveryDirectory: URL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("webdav-restore-backups", isDirectory: true)
+    var recoveryDirectory: URL = WebDAVRestoreJournal.defaultDirectory
+    #if DEBUG
+    /// 测试暂停在真实分类写入之后；生产恢复顺序和文件内容不变。
+    var afterCategoryWrite: (@Sendable (WebDAVBackupCategory) async throws -> Void)?
+    /// 验证owner发布前失败时，整个文件事务仍回滚且不清除active journal。
+    var beforeStoreReload: (@Sendable () async throws -> Void)?
+    #endif
 
     private static var replaceRulesFile: URL {
         FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("replace_rules.json")
@@ -179,6 +192,11 @@ struct WebDAVProductionLocalData: WebDAVBackupLocalData {
     }
 
     func export(_ category: WebDAVBackupCategory) async throws -> Data? {
+        if category == .bookSources, fileOverrides.isEmpty {
+            let sources = await MainActor.run { BookSourceStore.shared }
+            await sources.waitUntilLoaded()
+            await sources.queuedWritesLanded()
+        }
         switch category {
         case .rss:
             return try await rss.backupData()
@@ -196,74 +214,198 @@ struct WebDAVProductionLocalData: WebDAVBackupLocalData {
         do {
             switch category {
             case .bookSources: _ = try JSONDecoder().decode([BookSource].self, from: data)
-            case .bookshelf: _ = try JSONDecoder().decode([ReadingBook].self, from: data)
+            case .bookshelf:
+                let books = try JSONDecoder().decode([ReadingBook].self, from: data)
+                guard Set(books.map(\.id)).count == books.count else { throw WebDAVBackupError.corrupt(category) }
             case .replaceRules: _ = try JSONDecoder().decode([ReplaceRule].self, from: data)
             case .rss: _ = try await RSSBackupCodec.decode(data)
             }
         } catch { throw WebDAVBackupError.corrupt(category) }
     }
 
+    private struct PendingRestore {
+        let journal: WebDAVRestoreJournal
+        let token: WebDAVRestoreJournal.Token
+        let targets: [WebDAVRestoreJournal.Role: URL]
+        let restoresRSS: Bool
+    }
+
     func apply(_ staged: [(WebDAVBackupCategory, Data)]) async throws {
-        // 改动前完成所有校验与原字节备份；导出用的RSS快照是有损的，绝不能拿来做本地回滚。
-        for (category, data) in staged { try await validate(category, data) }
-        if fileOverrides.isEmpty { await BookStore.queuedWritesLanded() }
-        let files = staged.filter { $0.0 != .rss }
-        let rssData = staged.first { $0.0 == .rss }?.1
-        var previous: [(WebDAVBackupCategory, URL, Data?)] = []
-        for (category, _) in files {
-            guard let url = file(category) else { continue }
-            let old = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
-            previous.append((category, url, old))
-        }
-        let oldBytes = previous.reduce(Int64(0)) { $0 + Int64($1.2?.count ?? 0) }
-        let newBytes = staged.reduce(Int64(0)) { $0 + Int64($1.1.count) }
-        guard try availableBytes() >= oldBytes + newBytes * 2 + 16 * 1_024 * 1_024 else {
-            throw WebDAVBackupError.insufficientSpace
-        }
-        let recovery = recoveryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        if !previous.isEmpty {
-            try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true)
-            for (category, _, data) in previous {
-                if let data { try data.write(to: recovery.appendingPathComponent(category.fileName), options: .atomic) }
+        if staged.contains(where: { $0.0 == .rss }) {
+            try await rss.withRestoreTransaction { previous, transaction in
+                let pending = try await apply(staged, previousRSS: previous, transaction: transaction)
+                try await finish(pending, staged: staged, previousRSS: previous)
             }
-            // 进程被系统终止时仍有精确原字节可人工恢复；该副本不上传、不自动删除。
-            let present = previous.filter { $0.2 != nil }.map { $0.0.rawValue }
-            try JSONEncoder().encode(present).write(to: recovery.appendingPathComponent("original-files.json"), options: .atomic)
+        } else {
+            let pending = try await apply(staged, previousRSS: nil, transaction: nil)
+            try await finish(pending, staged: staged, previousRSS: nil)
         }
-        try Task.checkCancellation()
-        var written = Set<WebDAVBackupCategory>()
+    }
+
+    private func finish(_ pending: PendingRestore, staged: [(WebDAVBackupCategory, Data)],
+                        previousRSS: RSSStore.RestoreState?) async throws {
         do {
-            for (category, data) in files {
-                guard let url = file(category) else { continue }
-                try Task.checkCancellation()
-                try data.write(to: url, options: .atomic)
-                written.insert(category)
-            }
-            // RSSStore自行持有包含正文/变量的原状态，并在落盘异常时回滚。
-            if let rssData { try await rss.restoreBackup(rssData) }
+            #if DEBUG
+            try await beforeStoreReload?()
+            #endif
+            try await reload(staged)
+            try await pending.journal.commit(pending.token)
         } catch {
             let originalError = error
             var rollbackFailed = false
-            for (category, url, old) in previous.reversed() where written.contains(category) {
-                do {
-                    if let old { try old.write(to: url, options: .atomic) }
-                    else { try FileManager.default.removeItem(at: url) }
-                } catch {
+            if pending.restoresRSS, let previousRSS {
+                do { try await rss.restoreLocalState(previousRSS) }
+                catch {
                     rollbackFailed = true
-                    AppLogger.sync("WebDAV rollback failed; original bytes retained locally", level: .fault)
+                    AppLogger.sync("WebDAV RSS owner rollback failed; local copies retained", level: .fault)
                 }
+            }
+            do { try await pending.journal.recover(targets: pending.targets, token: pending.token) }
+            catch {
+                rollbackFailed = true
+                AppLogger.sync("WebDAV file rollback failed; journal retained", level: .fault)
             }
             if rollbackFailed { throw WebDAVBackupError.rollbackFailed }
             throw originalError
         }
-        await reload(Set(files.map(\.0)))
     }
 
-    private func reload(_ categories: Set<WebDAVBackupCategory>) async {
-        guard fileOverrides.isEmpty else { return }
-        if categories.contains(.bookSources) { await MainActor.run { BookSourceStore.shared.reloadFromDisk() } }
-        if categories.contains(.bookshelf) { await bookStore?.reloadFromDisk() }
-        if categories.contains(.replaceRules) { await MainActor.run { ReplaceRuleStore.shared.reloadFromDisk() } }
+    private func apply(_ staged: [(WebDAVBackupCategory, Data)], previousRSS: RSSStore.RestoreState?,
+                       transaction: UUID?) async throws -> PendingRestore {
+        let started = SourcePerfTrace.now
+        let onMain = { Thread.isMainThread }()
+        defer {
+            SourcePerfTrace.record("webdav.restore.apply", "main=\(onMain) categories=\(staged.count) bytes=\(staged.reduce(0) { $0 + $1.1.count })",
+                since: started, mainThreadStallBreadcrumb: false)
+        }
+        guard !staged.isEmpty, Set(staged.map(\.0)).count == staged.count else { throw WebDAVBackupError.corrupt(nil) }
+        for (category, data) in staged { try await validate(category, data) }
+        if fileOverrides.isEmpty {
+            await BookStore.queuedWritesLanded()
+            if staged.contains(where: { $0.0 == .bookSources }) {
+                let sources = await MainActor.run { BookSourceStore.shared }
+                await sources.waitUntilLoaded()
+                await sources.queuedWritesLanded()
+            }
+        }
+        let files = staged.filter { $0.0 != .rss }
+        let rssData = staged.first { $0.0 == .rss }?.1
+        var targets: [WebDAVRestoreJournal.Role: URL] = [:]
+        for (category, _) in files {
+            guard let role = category.restoreRole, let url = file(category) else { throw WebDAVBackupError.corrupt(category) }
+            targets[role] = url
+        }
+        if rssData != nil { targets.merge(await rss.restoreFileTargets) { _, new in new } }
+        let oldBytes = try targets.values.reduce(Int64(0)) { bytes, url in
+            guard FileManager.default.fileExists(atPath: url.path) else { return bytes }
+            return bytes + ((try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0)
+        }
+        let newBytes = staged.reduce(Int64(0)) { $0 + Int64($1.1.count) }
+        // RSS owner自己的副本、journal原副本和原子替换临时文件都计入空间预算。
+        guard try availableBytes() >= oldBytes * 3 + newBytes * 2 + 16 * 1_024 * 1_024 else {
+            throw WebDAVBackupError.insufficientSpace
+        }
+        let journal = fileOverrides.isEmpty && recoveryDirectory == WebDAVRestoreJournal.defaultDirectory
+            ? WebDAVRestoreJournal.shared : WebDAVRestoreJournal(directory: recoveryDirectory)
+        let token = try await journal.begin(targets: targets)
+        var rssStarted = false
+        do {
+            for (category, data) in files {
+                guard let url = file(category) else { throw WebDAVBackupError.corrupt(category) }
+                try Task.checkCancellation()
+                try data.write(to: url, options: .atomic)
+                #if DEBUG
+                try await afterCategoryWrite?(category)
+                #endif
+            }
+            // RSSStore自行持有包含正文/变量的原状态，并在落盘异常时回滚。
+            if let rssData, let transaction {
+                rssStarted = true
+                try await rss.restoreBackup(rssData, transaction: transaction)
+                #if DEBUG
+                try await afterCategoryWrite?(.rss)
+                #endif
+            }
+            return PendingRestore(journal: journal, token: token, targets: targets, restoresRSS: rssData != nil)
+        } catch {
+            let originalError = error
+            var rollbackFailed = false
+            if rssStarted, let previousRSS {
+                do { try await rss.restoreLocalState(previousRSS) }
+                catch {
+                    rollbackFailed = true
+                    AppLogger.sync("WebDAV RSS owner rollback failed; local copies retained", level: .fault)
+                }
+            }
+            do { try await journal.recover(targets: targets, token: token) }
+            catch {
+                rollbackFailed = true
+                AppLogger.sync("WebDAV file rollback failed; journal retained", level: .fault)
+            }
+            if rollbackFailed { throw WebDAVBackupError.rollbackFailed }
+            throw originalError
+        }
+    }
+
+    private func reload(_ staged: [(WebDAVBackupCategory, Data)]) async throws {
+        let sourceData = fileOverrides.isEmpty ? staged.first { $0.0 == .bookSources }?.1 : nil
+        let ruleData = fileOverrides.isEmpty ? staged.first { $0.0 == .replaceRules }?.1 : nil
+        let shelfData = staged.first { $0.0 == .bookshelf }?.1
+
+        let sourceStore = sourceData == nil ? nil : await MainActor.run { BookSourceStore.shared }
+        let expectedSourceRevision = sourceStore?.mutationRevision
+        let preparedSources: [BookSource]?
+        if let sourceData {
+            preparedSources = try await Task.detached(priority: .utility) { try Self.prepareSources(data: sourceData) }.value
+        } else { preparedSources = nil }
+
+        let ruleStore = ruleData == nil ? nil : await MainActor.run { ReplaceRuleStore.shared }
+        let expectedRuleRevision: Int?
+        if let ruleStore { expectedRuleRevision = await MainActor.run { ruleStore.revision } }
+        else { expectedRuleRevision = nil }
+        let preparedRules: [ReplaceRule]?
+        if let ruleData {
+            preparedRules = try await Task.detached(priority: .utility) { try Self.prepareRules(data: ruleData) }.value
+        } else { preparedRules = nil }
+
+        let preparedShelf: BookStore.RestoredShelfSnapshot?
+        if let shelfData, let bookStore { preparedShelf = try await bookStore.prepareRestoredShelf(shelfData) }
+        else { preparedShelf = nil }
+
+        // Nothing is published until every decode/merge is complete and every store still has
+        // the revision captured before preparation. The synchronous MainActor section has no
+        // suspension point, so edits cannot be overwritten between check and publication.
+        try await MainActor.run {
+            if let sourceStore, let expectedSourceRevision,
+               sourceStore.mutationRevision != expectedSourceRevision { throw RSSImportService.Issue.stalePlan }
+            if let ruleStore, let expectedRuleRevision,
+               ruleStore.revision != expectedRuleRevision { throw RSSImportService.Issue.stalePlan }
+            if let bookStore, let preparedShelf { try bookStore.applyRestoredShelf(preparedShelf) }
+            if let sourceStore, let preparedSources, let expectedSourceRevision,
+               !sourceStore.applyRestoredSources(preparedSources, expectedMutationRevision: expectedSourceRevision) {
+                throw RSSImportService.Issue.stalePlan
+            }
+            if let ruleStore, let preparedRules, let expectedRuleRevision,
+               !ruleStore.applyRestoredRules(preparedRules, expectedRevision: expectedRuleRevision) {
+                throw RSSImportService.Issue.stalePlan
+            }
+        }
+    }
+
+    private nonisolated static func prepareSources(data: Data) throws -> [BookSource] {
+        try SourcePerfTrace.span("webdav.reload.sources", "main=\(Thread.isMainThread) bytes=\(data.count)", thresholdMs: 0) {
+            let incoming = try JSONDecoder().decode([BookSource].self, from: data)
+            let deduped = BookSourceStore.dedupedByURL(incoming)
+            guard Set(deduped.map(\.id)).count == deduped.count else { throw WebDAVBackupError.corrupt(.bookSources) }
+            return deduped
+        }
+    }
+
+    private nonisolated static func prepareRules(data: Data) throws -> [ReplaceRule] {
+        try SourcePerfTrace.span("webdav.reload.rules", "main=\(Thread.isMainThread) bytes=\(data.count)", thresholdMs: 0) {
+            let incoming = try JSONDecoder().decode([ReplaceRule].self, from: data)
+            return ReplaceRuleStore.deduplicated(incoming)
+        }
     }
 
     func availableBytes() throws -> Int64 {

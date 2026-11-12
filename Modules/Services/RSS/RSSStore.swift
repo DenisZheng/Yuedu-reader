@@ -588,7 +588,7 @@ final class RSSStore: ObservableObject {
     }
 
     func requestTicket(for sourceID: String) -> RSSRequestTicket? {
-        guard source(id: sourceID) != nil else { return nil }
+        guard restoreTransaction == nil, source(id: sourceID) != nil else { return nil }
         return .init(sourceID: sourceID, configurationRevision: configurationRevision,
                      authenticationRevision: authenticationRevisions[sourceID, default: 0])
     }
@@ -943,8 +943,69 @@ final class RSSStore: ObservableObject {
     var persistenceWriteFailure: (@Sendable (String) -> Bool)?
     #endif
 
+    /// 仅在恢复用例内持有的原状态；不是另一份持久owner，也不导出敏感运行数据。
+    struct RestoreState {
+        let sources: [RSSSource]
+        let folders: [RSSFolder]
+        let records: [String: [RSSArticleRecord]]
+        let statuses: [String: RSSArticleStatus]
+        let metadata: [String: RSSFeedFetchMetadata]
+        let variables: [String: [String: String]]
+        let options: [String: String]
+        let authentication: [String: UInt64]
+    }
+
+    private var restoreTransaction: UUID?
+
+    var restoreFileTargets: [WebDAVRestoreJournal.Role: URL] {
+        let root = sourceStorageURL.deletingLastPathComponent()
+        return Dictionary(uniqueKeysWithValues: WebDAVRestoreJournal.Role.rssFiles.map {
+            ($0.0, root.appendingPathComponent($0.1))
+        })
+    }
+
+    /// 在跨分类IO开始前撤销旧请求，恢复期间不签发新票据；所有RSS恢复共享此边界。
+    func withRestoreTransaction<T>(_ operation: @Sendable (RestoreState, UUID) async throws -> T) async throws -> T {
+        guard restoreTransaction == nil else { throw RSSImportService.Issue.stalePlan }
+        let token = UUID()
+        restoreTransaction = token
+        configurationRevision &+= 1
+        invalidateRuntimes()
+        defer { restoreTransaction = nil }
+        try await flushPersistence()
+        try Task.checkCancellation()
+        return try await operation(restoreState(), token)
+    }
+
+    private func restoreState() -> RestoreState {
+        RestoreState(sources: sources, folders: folders, records: cachedArticlesBySource, statuses: articleStatuses,
+            metadata: feedMetadataBySource, variables: sourceVariables, options: sourceOptionJSON,
+            authentication: authenticationRevisions)
+    }
+
+    func restoreLocalState(_ state: RestoreState) async throws {
+        sources = state.sources
+        folders = state.folders
+        cachedArticlesBySource = state.records
+        articleStatuses = state.statuses
+        feedMetadataBySource = state.metadata
+        sourceVariables = state.variables
+        sourceOptionJSON = state.options
+        authenticationRevisions = state.authentication
+        rebuildArticleIndex()
+        save()
+        try await flushPersistence()
+    }
+
     /// 先完整校验再修改owner；落盘前备份旧文件，失败后恢复完整本地状态（不能用去敏云快照回滚）。
     func restoreBackup(_ data: Data) async throws {
+        try await withRestoreTransaction { _, token in
+            try await restoreBackup(data, transaction: token)
+        }
+    }
+
+    func restoreBackup(_ data: Data, transaction: UUID) async throws {
+        guard restoreTransaction == transaction else { throw RSSImportService.Issue.stalePlan }
         let configuration = configurationRevision
         let content = contentRevision
         let snapshot = try await RSSBackupCodec.decode(data)
@@ -956,9 +1017,7 @@ final class RSSStore: ObservableObject {
         guard configuration == configurationRevision, content == contentRevision else {
             throw RSSImportService.Issue.stalePlan
         }
-        let previous = (sources: sources, folders: folders, records: cachedArticlesBySource, statuses: articleStatuses,
-                        metadata: feedMetadataBySource, values: sourceVariables, options: sourceOptionJSON,
-                        authentication: authenticationRevisions)
+        let previous = restoreState()
         sources = snapshot.sources
         folders = snapshot.folders
         cachedArticlesBySource = records
@@ -972,17 +1031,7 @@ final class RSSStore: ObservableObject {
         do { try await flushPersistence() }
         catch {
             let original = error
-            sources = previous.sources
-            folders = previous.folders
-            cachedArticlesBySource = previous.records
-            articleStatuses = previous.statuses
-            feedMetadataBySource = previous.metadata
-            sourceVariables = previous.values
-            sourceOptionJSON = previous.options
-            authenticationRevisions = previous.authentication
-            rebuildArticleIndex()
-            save()
-            do { try await flushPersistence() }
+            do { try await restoreLocalState(previous) }
             catch {
                 AppLogger.sync("RSS restore rollback failed; original files retained in rss-restore-backups", level: .fault)
                 throw RSSBackupCodec.Failure.rollbackFailed

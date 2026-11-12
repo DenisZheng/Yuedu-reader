@@ -6,6 +6,11 @@ import SwiftUI
 enum ReaderAppMain {
     @MainActor
     static func main() {
+        WebDAVRestoreLaunch().run { startApplication() }
+    }
+
+    @MainActor
+    private static func startApplication() {
         #if DEBUG && targetEnvironment(simulator)
         if RSSPoCTestHost.isEnabled {
             RSSPoCApplication.main()
@@ -30,7 +35,10 @@ enum RSSPoCTestHost {
 private struct RSSPoCApplication: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.environment["RSS_WEB_DISPLAY_FIXTURE"] == "1" {
+            if let path = ProcessInfo.processInfo.environment["WEBDAV_RESTORE_FIXTURE"],
+               URL(fileURLWithPath: path).lastPathComponent.hasPrefix("WebDAVRestoreUITests-") {
+                WebDAVRestoreFixtureHost(root: URL(fileURLWithPath: path))
+            } else if ProcessInfo.processInfo.environment["RSS_WEB_DISPLAY_FIXTURE"] == "1" {
                 RSSWebDisplayFixtureHost()
             } else if let path = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_FIXTURE"],
                let storage = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_STORAGE"] {

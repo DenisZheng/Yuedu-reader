@@ -3426,6 +3426,90 @@ class BookStore: @MainActor ObservableObject, BookProvider {
         finishLoadingChapterLists(complete: shelfLoaded && readingRecordsLoaded)
     }
 
+    /// WebDAV已验证/提交的书架：在后台准备快照，再与源、规则owner一起做revision检查后发布。
+    func reloadRestoredShelf(_ data: Data) async throws {
+        let prepared = try await prepareRestoredShelf(data)
+        try applyRestoredShelf(prepared)
+    }
+
+    struct RestoredShelfSnapshot {
+        fileprivate let revision: UInt64
+        fileprivate let data: Data
+        fileprivate let records: [ReadingBook]
+        fileprivate let repaired: Bool
+        fileprivate let chapterUpdates: [UUID: [OnlineChapterRef]]
+        fileprivate let positions: [UUID: PersistedPositionSnapshot]
+        fileprivate let saveTimes: [UUID: TimeInterval]
+    }
+
+    struct RestoreConflict: Error {}
+
+    func prepareRestoredShelf(_ data: Data) async throws -> RestoredShelfSnapshot {
+        cancelPendingMetadataSave()
+        await Self.queuedWritesLanded()
+        cancelPendingMetadataSave()
+        let revision = mutationRevision
+        let current = records
+        let prepared = try await Self.prepareRestoredShelf(data, current: current, chapters: chapterStore)
+        return RestoredShelfSnapshot(revision: revision, data: data, records: prepared.records,
+            repaired: prepared.repaired, chapterUpdates: prepared.chapterUpdates,
+            positions: prepared.positions, saveTimes: prepared.saveTimes)
+    }
+
+    /// 非throwing工作在publisher前完成；MainActor隔离区内先检查版本，才一次发布全部owner快照。
+    func applyRestoredShelf(_ prepared: RestoredShelfSnapshot) throws {
+        guard mutationRevision == prepared.revision else { throw RestoreConflict() }
+        for (id, chapters) in prepared.chapterUpdates { chapterStore.setChapters(chapters, for: id) }
+        records = prepared.records
+        metadataWritesBlocked = false
+        lastPersistedMetadataData = prepared.data
+        lastPersistedPositionSnapshots = prepared.positions
+        lastPersistedPositionSaveUptimeByBook = prepared.saveTimes
+        let files = persistedFiles
+        Self.persistQueue.async { files.shelfData = prepared.data }
+        if prepared.repaired { saveMetaImmediately() }
+        Task { @MainActor [weak self] in await self?.refreshFilledCovers() }
+        Task { @MainActor [weak self] in await self?.rereadTXTHeaders() }
+    }
+
+    private struct PreparedShelfData {
+        let records: [ReadingBook]
+        let repaired: Bool
+        let chapterUpdates: [UUID: [OnlineChapterRef]]
+        let positions: [UUID: PersistedPositionSnapshot]
+        let saveTimes: [UUID: TimeInterval]
+    }
+
+    private nonisolated static func prepareRestoredShelf(_ data: Data, current: [ReadingBook],
+                                                        chapters: BookChapterStore) async throws -> PreparedShelfData {
+        try SourcePerfTrace.span("webdav.reload.bookshelf", "main=\(Thread.isMainThread) bytes=\(data.count) books=\(current.count)", thresholdMs: 0) {
+            var loaded = sanitizingInlineChapterURLs(try JSONDecoder().decode([ReadingBook].self, from: data))
+            let ids = Set(loaded.map(\.id))
+            guard ids.count == loaded.count else { throw MetadataFileUnwritable() }
+            // 分类备份不含reading_records.json，保留本机阅读记录，不用远端数据把它们清空。
+            loaded.append(contentsOf: current.filter { !$0.isInBookshelf && !ids.contains($0.id) })
+            var repaired = false
+            var chapterUpdates: [UUID: [OnlineChapterRef]] = [:]
+            for index in loaded.indices {
+                let id = loaded[index].id
+                if let inline = loaded[index].onlineChapters {
+                    chapterUpdates[id] = inline
+                    loaded[index].onlineChapters = nil
+                    loaded[index].applyChapterSummary(from: inline)
+                    repaired = true
+                } else if loaded[index].totalChapterNum == nil, let stored = chapters.chapters(for: id) {
+                    loaded[index].applyChapterSummary(from: stored)
+                    repaired = true
+                }
+            }
+            // 不按挂起前的快照删除章节/侧文件，避免误删并发新增数据；正常启动维护仍会清理孤项。
+            let now = ProcessInfo.processInfo.systemUptime
+            return PreparedShelfData(records: loaded, repaired: repaired, chapterUpdates: chapterUpdates,
+                positions: Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, PersistedPositionSnapshot(book: $0)) }),
+                saveTimes: Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, now) }))
+        }
+    }
+
     /// Runs once the shelf and the reading records are read. Lists that came inside them —
     /// a file written before `chapterStore`, or by an older build since — are written out;
     /// a book whose summary is missing gets it back from its stored list; and when both

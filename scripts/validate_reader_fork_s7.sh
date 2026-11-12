@@ -11,9 +11,11 @@ EVIDENCE="${YUEDU_EVIDENCE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/readerfork-s7-accep
 mkdir -p "$EVIDENCE"
 s7=(
   RootTabCustomizationTests OnboardingTests OnboardingVoiceOverTests AppearanceThemeWriteBackTests
-  RSSSourceManagementTests WebDAVVersionedBackupTests RSSWebDAVBackupTests RSSS7AccessibilityTests
+  RSSSourceManagementTests WebDAVVersionedBackupTests WebDAVRestoreJournalTests WebDAVRestoreSafetyTests
+  WebDAVRestoredShelfTests RSSWebDAVBackupTests RSSS7AccessibilityTests
+  BookStoreShelfRecoveryTests BookStoreMainThreadWaitTests
 )
-s7ui=(ForkRootTabsUITests RootTabNavigationOwnershipUITests LibraryTabUITests RSSHomeSwipeActionsUITests PublicLibrarySearchTabUITests RSSImportUITests)
+s7ui=(ForkRootTabsUITests RootTabNavigationOwnershipUITests LibraryTabUITests RSSHomeSwipeActionsUITests PublicLibrarySearchTabUITests RSSImportUITests WebDAVRestoreUITests)
 YUEDU_EVIDENCE_DIR="$EVIDENCE/s6" bash scripts/validate_reader_fork_s6.sh
 args=()
 for suite in "${s7[@]}"; do args+=("-only-testing:yuedu appTests/$suite"); done

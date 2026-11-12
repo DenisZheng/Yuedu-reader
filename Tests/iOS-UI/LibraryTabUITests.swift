@@ -6,8 +6,22 @@ final class LibraryTabUITests: XCTestCase {
     /// iOS 17.5 asks for an Apple ID as the app reads StoreKit, over every page, unless a test
     /// session answers it (`StoreKitTestSessions`): the ••• is checked there too.
 
+    @MainActor private static var originalOrientation: UIDeviceOrientation?
+
+    /// The S6 landscape check runs directly before this suite; use a predictable layout in every case.
     override func setUpWithError() throws {
         continueAfterFailure = false
+        MainActor.assumeIsolated {
+            Self.originalOrientation = XCUIDevice.shared.orientation
+            XCUIDevice.shared.orientation = .portrait
+        }
+    }
+
+    override func tearDownWithError() throws {
+        MainActor.assumeIsolated {
+            if let original = Self.originalOrientation { XCUIDevice.shared.orientation = original }
+            Self.originalOrientation = nil
+        }
     }
 
     /// A source library in a scratch directory, for `-book-source-store-dir`: the simulator's own
@@ -186,7 +200,8 @@ final class LibraryTabUITests: XCTestCase {
         // Adding a source is 設定's (maintainer, 2026-10-27): 來源配置管理 and 遠端書庫 are its
         // rows, beside 模組. 遠端書庫 is no card here while nothing is connected.
         app.rootTab("設定").tap()
-        let remote = app.buttons["settings_remote_libraries"].firstMatch
+        let remote = scrolledTo(app.buttons["settings_remote_libraries"].firstMatch, in: app,
+                                scrolling: app.collectionViews.firstMatch)
         XCTAssertTrue(remote.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.buttons["settings_sources"].exists && app.buttons["settings_modules"].exists,
                       app.debugDescription)

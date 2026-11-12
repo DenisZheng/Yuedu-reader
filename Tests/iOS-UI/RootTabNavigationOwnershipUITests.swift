@@ -21,11 +21,19 @@ final class RootTabNavigationOwnershipUITests: XCTestCase {
 
     // XCTest runs a UI test's teardown on the main thread.
     override func tearDownWithError() throws {
-        try MainActor.assumeIsolated { try Self.restoreSavedTabs() }
+        try MainActor.assumeIsolated {
+            let orientation = XCUIDevice.shared.orientation
+            defer { XCUIDevice.shared.orientation = orientation }
+            XCUIDevice.shared.orientation = .portrait
+            try Self.restoreSavedTabs()
+        }
     }
 
     @MainActor
     func testTabsStillDrawAfterATabBeforeThemIsHidden() throws {
+        let orientation = XCUIDevice.shared.orientation
+        defer { XCUIDevice.shared.orientation = orientation }
+        XCUIDevice.shared.orientation = .portrait
         let app = try Self.launch()
         // Visit 书架 first: a tab's stack is only built when the tab is first shown.
         Self.tab("书架", in: app).tap()
@@ -58,6 +66,7 @@ final class RootTabNavigationOwnershipUITests: XCTestCase {
     @MainActor
     private static func launch() throws -> XCUIApplication {
         let app = XCUIApplication()
+        XCUIDevice.shared.orientation = .portrait
         // Pro: 底部标签栏 is a Pro setting.
         app.launchArguments = ["-onboarding.completed", "YES",
                                "-yd_root_tab_visible_ids", Self.allTabs,
@@ -87,6 +96,7 @@ final class RootTabNavigationOwnershipUITests: XCTestCase {
         XCTAssertTrue(appearance.waitForExistence(timeout: 10), "no 外观主题 row")
         appearance.tap()
         let tabsRow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "底部标签栏")).firstMatch
+        for _ in 0..<8 where !tabsRow.exists { app.swipeUp() }
         XCTAssertTrue(tabsRow.waitForExistence(timeout: 10), "no 底部标签栏 row")
         for _ in 0..<8 where !tabsRow.isHittable { app.swipeUp() }
         tabsRow.tap()

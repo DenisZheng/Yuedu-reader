@@ -16,6 +16,8 @@
 "網頁縮放" = "Page Zoom";
 "網頁縮放：%@" = "Page Zoom: %@";
 "無法調整網頁縮放" = "Unable to change page zoom.";
+"本機資料復原" = "Local Data Recovery";
+"原始資料已復原，請關閉並重新開啟 App。" = "Original data has been recovered. Close and reopen the app.";
 "正文尚未完整載入，已保留部分內容" = "The article is only partially loaded. Loaded content has been kept.";
 "已達分頁上限，已保留部分文章" = "Page limit reached. The loaded articles have been kept.";
 "分頁連結形成循環，已停止載入" = "A pagination loop was detected. Loading has stopped.";

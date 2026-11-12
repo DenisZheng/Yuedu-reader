@@ -167,6 +167,14 @@ final class ReplaceRuleStore: @MainActor ObservableObject {
         load()
     }
 
+    /// 已验证的WebDAV快照在后台去重；这里不重复读取或重写规则文件。
+    @discardableResult
+    func applyRestoredRules(_ prepared: [ReplaceRule], expectedRevision: Int? = nil) -> Bool {
+        guard expectedRevision == nil || expectedRevision == revision else { return false }
+        rules = prepared
+        return true
+    }
+
     // MARK: - Persistence
 
     private func load() {

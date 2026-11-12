@@ -1082,6 +1082,15 @@ class BookSourceStore: @MainActor ObservableObject {
         prunePins()
     }
 
+    /// WebDAV已经等待初次加载并在后台解码/去重；只发布，不重复读盘或保存同一份源。
+    /// 旧pin的清理由正常加载/维护路径处理，避免恢复时写坏未入包的本机pin记录。
+    @discardableResult
+    func applyRestoredSources(_ prepared: [BookSource], expectedMutationRevision: Int? = nil) -> Bool {
+        guard expectedMutationRevision == nil || expectedMutationRevision == mutationRevision else { return false }
+        replaceSources(prepared)
+        return true
+    }
+
     // MARK: Persistence
 
     /// Serialises persistence so writes land in the order they were requested, and so a
@@ -1212,6 +1221,13 @@ class BookSourceStore: @MainActor ObservableObject {
     func flushPendingWrites() {
         let hold = BackgroundTaskHold(name: "bookSources.persist")
         Self.persistQueue.async { hold.release() }
+    }
+
+    /// 恢复先异步排空既有写入；不能用测试专用的同步等待阻塞主线程。
+    nonisolated func queuedWritesLanded() async {
+        await withCheckedContinuation { continuation in
+            Self.persistQueue.async { continuation.resume() }
+        }
     }
 
     /// Waits on the calling thread for queued writes. Tests only; never from UI code.

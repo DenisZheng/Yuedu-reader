@@ -104,7 +104,14 @@ enum RSSImportService {
     typealias Fetch = @Sendable (URL, Int) async throws -> Data
 
     nonisolated static func load(_ input: Input, limits: Limits = .init(), fetch: @escaping Fetch = download) async throws -> Loaded {
+        let onMain = { Thread.isMainThread }()
+        let started = SourcePerfTrace.now
         var loader = Loader(limits: limits, fetch: fetch)
+        defer {
+            SourcePerfTrace.record("rss.import.load",
+                "main=\(onMain) entries=\(loader.candidates.count) bytes=\(loader.bytes) requests=\(loader.visited.count)",
+                since: started, thresholdMs: 1, mainThreadStallBreadcrumb: false)
+        }
         switch input {
         case .data(let data): try await loader.expand(data, depth: 0, location: "1")
         case .file(let url):

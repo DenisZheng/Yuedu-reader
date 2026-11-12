@@ -25,6 +25,8 @@
 | 查看已确认产品决策和实施步骤 | [最终方案 v2.0](development-plan.md) · [分阶段执行计划](implementation-plan.md) |
 | 查看实际进度、测试结果与阻碍 | [验证记录](validation.md) · [项目代理指南](../../AGENTS.md) |
 | 当前基线的网页越界弹层、主动缩放、404重试与双设备复验 | [S6显示与复验](s6-web-display.md) |
+| 当前基线S7的WebDAV中断恢复、后台重载与聚焦验收 | [S7中断恢复](s7-restore-interruption.md) |
+| 当前基线S8的离线规模测量、真实源预审和代表请求 | [S8验收](s8-acceptance.md) |
 | 回溯原方案和审查依据 | [v1.0 原文归档](development-plan-v1.0.md) · [v1.0 审查与补充建议](development-plan-review.md) |
 | 书源为何导入成功却解析失败；Java/JS、登录、Cookie、变量从哪里来 | [书源与共享规则运行时](book-source.md) |
 | 搜索→详情→目录→正文、纯 JS 源、批量正文、图片/音视频 | [书源与共享规则运行时](book-source.md) |
