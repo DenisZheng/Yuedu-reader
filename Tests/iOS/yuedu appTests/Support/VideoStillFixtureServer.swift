@@ -26,6 +26,7 @@ final class VideoStillFixtureServer: @unchecked Sendable {
     private let directory: URL
     private let referer: String?
     private let routes: [String: Response]
+    private let maximumRequests: Int
     private let listener: NWListener
     private let queue = DispatchQueue(label: "VideoStillFixtureServer")
     private let lock = NSLock()
@@ -35,10 +36,13 @@ final class VideoStillFixtureServer: @unchecked Sendable {
     private var requestObserver: (@Sendable (Request) -> Void)?
     private var dynamicRoute: (@Sendable (Request) -> Response?)?
 
-    init(directory: URL, referer: String? = nil, routes: [String: Response] = [:]) throws {
+    init(directory: URL, referer: String? = nil, routes: [String: Response] = [:], maximumRequests: Int = 128) throws {
+        // 仅S8合成规模测试显式扩大；既有媒体/资源PoC仍保持128次预算，不成为无限服务。
+        precondition((1...4096).contains(maximumRequests))
         self.directory = directory
         self.referer = referer
         self.routes = routes
+        self.maximumRequests = maximumRequests
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         listener = try NWListener(using: parameters)
@@ -147,7 +151,7 @@ final class VideoStillFixtureServer: @unchecked Sendable {
             headers[String(line[..<colon]).lowercased()] = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
         }
         let withinBudget = lock.withLock {
-            guard received.count < 128 else { return false }
+            guard received.count < maximumRequests else { return false }
             received.append(Request(method: method, path: path, headers: headers, body: body, query: query))
             return true
         }

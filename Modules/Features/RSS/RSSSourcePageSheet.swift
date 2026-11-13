@@ -198,6 +198,10 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         private var pendingRestore: Double?
         private var sizeObservation: NSKeyValueObservation?
         private var documentIsReady = false
+        private var diagnosticAttempt: RSSWebLoadDiagnostics.Attempt?
+        private var diagnosticFailureRecorded = false
+        private var nativeBrowser = false
+        private var nativeHTTPStatus: Int?
         fileprivate var accessState: RSSRuntimeState?
         private var accessToken: UUID?
         private var loginObserver: NSObjectProtocol?
@@ -209,9 +213,9 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         init(error: Binding<String?>, loading: Binding<Bool>) { self.error = error; self.loading = loading }
         func attachCookies(_ cookieStore: WKHTTPCookieStore) {
             let adapter = RSSWebCookies(cookieStore)
-            adapter.onFailure = { [weak self] failure in self?.fail(failure) }
+            adapter.onFailure = { [weak self] failure in self?.fail(failure, phase: .cookies) }
             webCookies = adapter
-            images.onFailure = { [weak self] failure in self?.fail(failure) }
+            images.onFailure = { [weak self] failure in self?.fail(failure, phase: .resources) }
             images.onCookiesChanged = { [weak self] in try await self?.webCookies?.synchronizeFromNative() }
         }
         func resetCookies() {
@@ -259,6 +263,9 @@ struct RSSSourcePageWebView: UIViewRepresentable {
             }
         }
         func cancel() {
+            diagnosticAttempt = nil
+            nativeBrowser = false
+            nativeHTTPStatus = nil
             cancelDisplayScale()
             generation &+= 1
             accessGeneration &+= 1
@@ -286,6 +293,9 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                   article: RSSArticleRecord? = nil, followingNavigation: Bool = false,
                   initialContext: RSSOpenTarget.RequestContext? = nil) {
             cancel()
+            diagnosticAttempt = RSSWebLoadDiagnostics.Attempt(source: source)
+            diagnosticFailureRecorded = false
+            RSSWebLoadDiagnostics.record(diagnosticAttempt, .started, phase: .runtime)
             if !followingNavigation {
                 loaded = target
                 loadedArticleID = article?.id
@@ -307,6 +317,7 @@ struct RSSSourcePageWebView: UIViewRepresentable {
             let accessID = accessGeneration
             let ticket = owner?.requestTicket(for: source.id)
             task = Task { [weak view] in
+                var diagnosticPhase = RSSWebLoadDiagnostics.Phase.runtime
                 loading.wrappedValue = true
                 error.wrappedValue = nil
                 defer { if id == generation { task = nil } }
@@ -335,6 +346,30 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                     guard runtime.state.isCurrent else { throw CancellationError() }
                     switch target {
                     case .request(let request, let context):
+                        diagnosticPhase = .document
+                        if !authentication, RSSNativeBrowserPolicy.allows(request, source: source, context: context) {
+                            try await context?.validate(source: source, owner: owner)
+                            guard let url = request.url else { throw ScraperError.invalidURL }
+                            requestContext = context
+                            pageURL = url
+                            diagnosticPhase = .cookies
+                            try await webCookies?.bind(runtime: runtime, url: url, explicit: nil)
+                            try Task.checkCancellation()
+                            guard id == generation, runtime.state.isCurrent else { throw CancellationError() }
+                            try await context?.validate(source: source, owner: owner)
+                            // 第一请求及后续表单留在同一WebKit会话；Cookie只通过域约束的cookieStore播种。
+                            nativeBrowser = true
+                            sourceScriptsAllowed = false
+                            view.customUserAgent = request.value(forHTTPHeaderField: "User-Agent")
+                            var browserRequest = request
+                            browserRequest.setValue(nil, forHTTPHeaderField: "User-Agent")
+                            browserRequest.cachePolicy = .reloadIgnoringLocalCacheData
+                            expectedNativeURL = url
+                            diagnosticPhase = .browser
+                            navigation = view.load(browserRequest)
+                            RSSWebLoadDiagnostics.record(diagnosticAttempt, .submitted, phase: .browser)
+                            return
+                        }
                         let document = try await authentication
                             ? RSSOpenTarget.loadAuthenticationDocument(request, context: context, source: source, owner: owner)
                             : RSSOpenTarget.loadDocument(request, context: context, source: source, owner: owner)
@@ -344,21 +379,29 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                         requestContext = document.context
                         runtimeForPage = runtime
                         pageURL = document.url
+                        RSSWebLoadDiagnostics.record(diagnosticAttempt, .received, phase: .document,
+                                                    statusCode: document.statusCode, bytes: document.data.count)
+                        diagnosticPhase = .cookies
                         try await webCookies?.bind(runtime: runtime, url: document.url, explicit: cookieHeader(document.context, for: document.url))
                         try Task.checkCancellation()
                         guard id == generation else { return }
                         sourceScriptsAllowed = sourceScriptsAllowed && request.url.flatMap(SourceRequestHeaderScope.origin) == SourceRequestHeaderScope.origin(document.url)
+                        diagnosticPhase = .resources
                         try await images.bind(source: source, context: requestContext, base: document.url, runtime: runtime, in: view, authentication: authentication)
                         let bytes = document.mimeType.lowercased().contains("html")
                             ? Data(try await images.rewrite(String(decoding: document.data, as: UTF8.self)).utf8) : document.data
+                        diagnosticPhase = .scripts
                         try await installSourceScripts(source, in: view)
                         try Task.checkCancellation()
                         guard id == generation else { return }
+                        diagnosticPhase = .webkit
                         expectedNativeURL = document.url
                         navigation = view.load(bytes, mimeType: document.mimeType, characterEncodingName: document.encoding, baseURL: document.url)
+                        RSSWebLoadDiagnostics.record(diagnosticAttempt, .submitted, phase: diagnosticPhase)
                     case .html(let html, let base), .articleHTML(let html, let base):
                         let isStartup: Bool
                         if case .html = target { isStartup = true } else { isStartup = false }
+                        diagnosticPhase = .html
                         let document = await SourceScriptThread.run {
                             RSSRuleWebDocument(content: html, base: base, source: source, isStartup: isStartup)
                         }
@@ -373,24 +416,29 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                                     context: .init(prepared, runtime: runtime, article: info), owner: owner)
                                 if case .request(_, let context) = seeded { requestContext = context }
                             }
+                            diagnosticPhase = .cookies
                             try await webCookies?.bind(runtime: runtime, url: baseURL, explicit: cookieHeader(requestContext, for: baseURL))
                         } else { requestContext = nil }
                         try Task.checkCancellation()
                         guard id == generation else { return }
                         pageURL = document.baseURL
+                        diagnosticPhase = .resources
                         try await images.bind(source: source, context: requestContext, base: document.baseURL, runtime: runtime, in: view, authentication: authentication)
                         let html = try await images.rewrite(document.html)
+                        diagnosticPhase = .scripts
                         try await installSourceScripts(source, in: view)
                         try Task.checkCancellation()
                         guard id == generation else { return }
+                        diagnosticPhase = .webkit
                         expectedNativeURL = document.baseURL ?? URL(string: "about:blank")
                         navigation = view.loadHTMLString(html, baseURL: document.baseURL)
+                        RSSWebLoadDiagnostics.record(diagnosticAttempt, .submitted, phase: diagnosticPhase)
                     case .external: loading.wrappedValue = false
                     }
                 } catch is CancellationError {
                     if id == generation, !Task.isCancelled, let view { revoke(view) }
                 }
-                catch { if id == generation { fail(error) } }
+                catch { if id == generation { fail(error, phase: diagnosticPhase) } }
             }
         }
         private func installSourceScripts(_ source: RSSSource, in view: WKWebView) async throws {
@@ -499,9 +547,38 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                 generation &+= 1
                 injectionTask?.cancel()
                 self.navigation = navigation
+                if nativeBrowser, let source = loadedSource {
+                    diagnosticAttempt = RSSWebLoadDiagnostics.Attempt(source: source)
+                    diagnosticFailureRecorded = false
+                    RSSWebLoadDiagnostics.record(diagnosticAttempt, .started, phase: .browser)
+                }
+            }
+            if nativeBrowser {
+                nativeHTTPStatus = nil
+                loading.wrappedValue = true
+                error.wrappedValue = nil
             }
             cancelDisplayScale()
             documentIsReady = false
+        }
+        func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                     decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+            guard nativeBrowser, navigationResponse.isForMainFrame else { decisionHandler(.allow); return }
+            guard !isRevoked, accessState?.isCurrent == true,
+                  let http = navigationResponse.response as? HTTPURLResponse, let url = http.url,
+                  SourceRequestHeaderScope.origin(url) == pageURL.flatMap(SourceRequestHeaderScope.origin),
+                  navigationResponse.canShowMIMEType else {
+                decisionHandler(.cancel)
+                fail(RSSWebFailure.navigationBlocked, phase: .browser)
+                return
+            }
+            nativeHTTPStatus = http.statusCode
+            pageURL = url
+            RSSWebLoadDiagnostics.record(diagnosticAttempt, .received, phase: .browser, statusCode: http.statusCode)
+            if (400..<600).contains(http.statusCode) {
+                error.wrappedValue = String(format: localized("RSS 請求失敗：HTTP %d"), http.statusCode)
+            }
+            decisionHandler(.allow)
         }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard !isRevoked, self.navigation === navigation else { return }
@@ -509,16 +586,20 @@ struct RSSSourcePageWebView: UIViewRepresentable {
             let id = generation
             injectionTask?.cancel()
             injectionTask = Task { [weak webView] in
+                var diagnosticPhase = RSSWebLoadDiagnostics.Phase.cookies
                 defer { if id == generation { injectionTask = nil } }
                 do {
                     guard id == generation, accessState?.isCurrent == true else {
                         if id == generation, let webView { revoke(webView) }
                         return
                     }
+                    diagnosticPhase = .cookies
                     try await webCookies?.flush()
+                    diagnosticPhase = .scripts
                     if sourceScriptsAllowed, loadedSource?.enableJs == true, let script = loadedSource?.injectJs, !script.isEmpty, let webView {
                         _ = try await webView.evaluateJavaScript(script)
                     }
+                    diagnosticPhase = .cookies
                     try await webCookies?.flush()
                     try Task.checkCancellation()
                     guard id == generation, let webView else { return }
@@ -528,8 +609,11 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                     updateDisplayScale(requestedPercent, in: webView)
                     restoreScrollIfReady(webView.scrollView)
                     loading.wrappedValue = false
+                    diagnosticPhase = .webkit
+                    RSSWebLoadDiagnostics.record(diagnosticAttempt, .finished, phase: nativeBrowser ? .browser : diagnosticPhase,
+                                                statusCode: nativeBrowser ? nativeHTTPStatus : nil)
                 } catch is CancellationError { return }
-                catch { if id == generation { fail(error, script: true) } }
+                catch { if id == generation { fail(error, script: true, phase: diagnosticPhase) } }
             }
         }
         func observeScrollSize(_ view: UIScrollView) {
@@ -562,16 +646,20 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { commitScroll(scrollView) }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError failure: Error) {
-            if self.navigation === navigation { fail(failure) }
+            if self.navigation === navigation { fail(failure, phase: .navigation) }
         }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError failure: Error) {
-            if self.navigation === navigation { fail(failure) }
+            if self.navigation === navigation { fail(failure, phase: .provisional) }
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            if !isRevoked { fail(WKError(.webContentProcessTerminated)) }
+            if !isRevoked { fail(WKError(.webContentProcessTerminated), phase: .webProcess) }
         }
-        private func fail(_ failure: Error, script: Bool = false) {
+        private func fail(_ failure: Error, script: Bool = false, phase: RSSWebLoadDiagnostics.Phase = .webkit) {
             guard (failure as NSError).code != NSURLErrorCancelled else { return }
+            if !diagnosticFailureRecorded {
+                RSSWebLoadDiagnostics.record(diagnosticAttempt, .failed, phase: phase, failure: failure)
+                diagnosticFailureRecorded = true
+            }
             loading.wrappedValue = false
             error.wrappedValue = script ? localized("來源網頁腳本執行失敗") : (failure as? RSSWebFailure)?.errorDescription ?? localized("載入失敗")
         }
@@ -623,6 +711,13 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                         for action in result.actions { try deliver(action, authority: .sourceRule) }
                     }
                     if result.intercepted { return }
+                    if nativeBrowser, ["http", "https"].contains(scheme), url.user == nil, url.password == nil,
+                       SourceRequestHeaderScope.origin(url) == currentURL.flatMap(SourceRequestHeaderScope.origin) {
+                        try await requestContext?.validate(source: source, owner: owner)
+                        guard id == generation, accessState?.isCurrent == true, !Task.isCancelled else { return }
+                        // 原始表单body、Referer、Cookie及浏览器状态由WebKit拥有；不取消后再复制成URLSession请求。
+                        replied = true; decisionHandler(.allow); return
+                    }
                     if ["http", "https"].contains(scheme), SourceRequestHeaderScope.origin(url) == currentURL.flatMap(SourceRequestHeaderScope.origin) {
                         var old = currentURL.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
                         var next = URLComponents(url: url, resolvingAgainstBaseURL: false)

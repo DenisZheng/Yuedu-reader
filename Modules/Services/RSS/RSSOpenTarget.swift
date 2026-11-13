@@ -59,9 +59,11 @@ enum RSSOpenTarget: Equatable, Sendable {
         let encoding: String
         let url: URL
         var context: RequestContext? = nil
+        /// 只供原生边界的状态诊断，不传给网页或改变响应处理。
+        var statusCode: Int? = nil
     }
 
-    /// WebKit原生重定向会重发自定义头；首文档先走共享网络边界，再把响应交给WebKit。
+    /// 带私有头或响应规则的首文档先走共享网络边界，防止WebKit重定向继承私有头。
     /// 不重发POST、不把私有头写入页面，也不接管http(s)子资源scheme。
     static func loadDocument(_ request: URLRequest, context: RequestContext? = nil, source: RSSSource, owner: RSSStore? = nil,
                              session: URLSession = LegadoJSBridge.requestSession) async throws -> Document {
@@ -99,7 +101,7 @@ enum RSSOpenTarget: Equatable, Sendable {
             let transformed = context?.responseOptions.bodyJs?.isEmpty == false
             let textual = mime.hasPrefix("text/") || mime.contains("json") || mime.contains("xml") || transformed
             return Document(data: textual ? Data(result.0.utf8) : data, mimeType: transformed ? "text/html" : mime,
-                            encoding: textual ? "utf-8" : http.textEncodingName ?? "utf-8", url: url, context: result.3)
+                            encoding: textual ? "utf-8" : http.textEncodingName ?? "utf-8", url: url, context: result.3, statusCode: result.2)
         }
     }
 
@@ -127,7 +129,7 @@ enum RSSOpenTarget: Equatable, Sendable {
             bytes = Data(body.utf8)
         } else { bytes = data }
         let prepared = SourcePreparedWebRequest(request: request, responseOptions: .init(), variables: [:])
-        return Document(data: bytes, mimeType: mime, encoding: "utf-8", url: url, context: .init(prepared, runtime: runtime, article: nil))
+        return Document(data: bytes, mimeType: mime, encoding: "utf-8", url: url, context: .init(prepared, runtime: runtime, article: nil), statusCode: http.statusCode)
     }
 
     static func rulePage(_ raw: String, source: RSSSource, owner: RSSStore?, context: RequestContext? = nil) async throws -> Self {
