@@ -1,5 +1,9 @@
 # S8：R265/R267 iframe 资源链的只读预审（2026-11-14）
 
+## 当前验收归属（2026-11-14）
+
+用户已确认“保留能力，转人工”：R265/R267真实播放归#58人工／发布验收，仍为未验证，不继续阻塞独立开发。生产iframe／JS支持保持原样；本页“不能自动打开”只描述代理的自动联网边界，不是App禁用iframe。下一步记录卡见[人工／发布清单](s8-release-checklist.md)，执行前仍须另行确认精确目标和人工测试环境。
+
 ## 判断
 
 **本轮不能安全地自动打开R265/R267的真实iframe。** R265仅在既有精确首页GET预算内获取100条，离线解析其生产规则生成的条目HTML；100条均为跨源HTTPS iframe，100个目标都带query，同一个第三方host哈希，未发现直接video/source/audio资源。源配置`enableJs=true`、`loadWithBaseUrl=true`，其iframe内容、脚本和后续媒体子请求未审阅。WebKit的子frame和后续子资源不会受到S8测试专用URLSession发出前边界的统一保护；不能仅凭主页面HTTP200、子frame URL可解析或既有合成fixture播放就自动加载第三方iframe。

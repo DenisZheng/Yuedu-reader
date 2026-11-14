@@ -2,7 +2,7 @@
 
 ## 结论
 
-**能做静态URL过滤，也能在`WKNavigationDelegate`拒绝特定frame文档导航；做不到在公开的WebKit navigation delegate + `WKContentRuleList`组合上实现外部脚本驱动的逐请求准入、实时计数预算或逐子资源取消。因此R265/R267第三方iframe继续不联网加载。** 本轮仅用本地`VideoStillFixtureServer`（loopback）和WebKit，不访问任何真实源/第三方目标，不改生产代码，不改TLS/Cookie/权限。
+**能做静态URL过滤，也能在`WKNavigationDelegate`拒绝特定frame文档导航；做不到在公开的WebKit navigation delegate + `WKContentRuleList`组合上实现外部脚本驱动的逐请求准入、实时计数预算或逐子资源取消。因此本轮自动探针不联网加载R265/R267第三方iframe，生产App的现有iframe／JS支持不变。** 本轮仅用本地`VideoStillFixtureServer`（loopback）和WebKit，不访问任何真实源/第三方目标，不改生产代码，不改TLS/Cookie/权限。
 
 ## 双设备探针
 
@@ -24,7 +24,9 @@
 
 任何公开API能静态block已知pattern或取消整页加载，不等于具有“有上限、每个请求发出前确切匹配并能取消”的运行时门。`URLProtocol`、自定义scheme接管HTTP(S)、忽略证书/信任以及第三方网络节点访问均不采用。
 
-## 下一步
+## 人工分流决定与下一步
+
+2026-11-14用户已确认：**保留能力，转人工**。R265/R267真实播放归#58人工／发布验收，未验状态保留，不阻塞无依赖开发；不是把它改成产品不支持。具体操作卡和剩余门槛见[收口清单](s8-release-checklist.md)。本次决定不授权代理自动打开外站，不新增代理、浏览器引擎、系统权限或TLS例外。
 
 保留R265/R267真实iframe状态为“未验证”。若后续有网站提供、获得允许测试且可静态限定的固定media URL清单，可只对那些公开GET用生产`RSSImageService`/`RSSMediaResourceSession`逐个做有限访问；这不是验证其活页面/JS播放器。要验证真实活动iframe，需要额外的、由用户认可的风险范围或受控隔离网络/Browser engine能力设计，并单独评估产品安全与架构；本次不把候选实现/私有平台技巧作为方案默认值。
 
