@@ -63,6 +63,8 @@ final class VideoPlaybackController {
     private var sizeObservation: NSKeyValueObservation?
     /// Where the episode being loaded opens, applied once it is ready to play.
     private var pendingSeek: Double = 0
+    @ObservationIgnored private var isRSSSeeking = false
+    @ObservationIgnored private var rssSeekRevision: UInt64 = 0
     /// The episode whose link was already resolved again after failing to play: legado
     /// refreshes a failed link once (`retryOnPlayError`), then reports the failure.
     private var refetchedChapter: Int?
@@ -224,6 +226,8 @@ final class VideoPlaybackController {
     }
 
     private func load(at time: Double) {
+        rssSeekRevision &+= 1
+        isRSSSeeking = false
         loadTask?.cancel()
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -334,7 +338,8 @@ final class VideoPlaybackController {
             let seek = pendingSeek
             pendingSeek = 0
             if seek > 0, duration == 0 || seek < duration - 1 {
-                player.seek(to: CMTime(seconds: seek, preferredTimescale: 600))
+                if case .rss = source { self.seek(to: seek) }
+                else { player.seek(to: CMTime(seconds: seek, preferredTimescale: 600)) }
             }
             resume()
             activateNowPlaying()
@@ -399,8 +404,23 @@ final class VideoPlaybackController {
     func seek(to seconds: Double) {
         let target = max(0, duration > 0 ? min(seconds, duration) : seconds)
         currentTime = target
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
-                    toleranceBefore: .zero, toleranceAfter: .zero)
+        if case .rss = source {
+            rssSeekRevision &+= 1
+            let revision = rssSeekRevision
+            let item = player.currentItem
+            isRSSSeeking = true
+            player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                        toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak item] _ in
+                Task { @MainActor [weak self, weak item] in
+                    guard let self, !self.closed, revision == self.rssSeekRevision,
+                          self.player.currentItem === item else { return }
+                    self.isRSSSeeking = false
+                }
+            }
+        } else {
+            player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                        toleranceBefore: .zero, toleranceAfter: .zero)
+        }
     }
 
     func skip(by seconds: Double) {
@@ -441,7 +461,7 @@ final class VideoPlaybackController {
     }
 
     private func timeAdvanced(_ seconds: Double) {
-        guard seconds.isFinite, phase == .playing else { return }
+        guard seconds.isFinite, phase == .playing, !isRSSSeeking else { return }
         currentTime = seconds
         if abs(seconds - lastSavedTime) >= 5 { saveProgress(force: false) }
     }
@@ -459,6 +479,14 @@ final class VideoPlaybackController {
     // MARK: Progress
 
     func saveProgress(force: Bool) {
+        // UI每秒采样；RSS强制保存必须在暂停/关闭前读取真实时钟，不能丢掉两个采样之间的进度。
+        // seek完成前保留用户目标；未就绪/已结束时保留恢复目标/结束归零语义。
+        // 书源和脚本链接的保存路径不变，旧seek回调也不能清除新加载的状态。
+        if force, case .rss = source, !isRSSSeeking, phase == .playing || phase == .paused,
+           player.currentItem?.status == .readyToPlay {
+            let position = player.currentTime().seconds
+            if position.isFinite, position >= 0, position != currentTime { currentTime = position }
+        }
         lastSavedTime = currentTime
         book.audioChapterIndex = chapterIndex
         book.audioTimeSeconds = currentTime

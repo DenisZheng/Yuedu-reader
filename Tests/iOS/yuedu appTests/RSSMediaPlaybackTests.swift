@@ -112,7 +112,10 @@ import XCTest
             throw RSSWebFailure.resourceUnavailable
         }
         func advance(_ value: AVPlayer) async {
-            let start = value.currentTime().seconds
+            // currentItem刚安装时原生时钟仍可能为0；边界必须在待恢复位置之后，避免被首次seek直接跳过。
+            let clock = value.currentTime().seconds
+            let saved = owner.mediaProgress(articleID: articleID, attachmentKey: "primary")?.position ?? 0
+            let start = max(clock.isFinite ? clock : 0, saved)
             let moved = XCTestExpectation(description: "真实页面播放推进")
             let target = CMTime(seconds: start + 0.5, preferredTimescale: 600)
             let token = value.addBoundaryTimeObserver(forTimes: [NSValue(time: target)], queue: .main) { moved.fulfill() }

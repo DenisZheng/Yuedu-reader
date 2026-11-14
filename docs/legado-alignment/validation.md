@@ -18,9 +18,33 @@
 | 媒体前置/#36 | 当前0f31f857基线加诊断后，正常Dev两设备最新各36/36；完整S6也实际执行音频通过。用户确认Mac音频正常，afplay不作门槛；旧间歇失败根因未唯一定位，见[音频记录](../../Technotes/RSSSimulatorAudioClock.md) |
 | S6 | 当前模拟器门槛通过（按用户确认范围）：iPhone/iPad各S5 270/38、S6 99/19 + 网页UI 3项，零失败零跳过。2项真实音频输出时钟PoC移出模拟器集合但保留源码；稳定15a29143真机S6 101/101覆盖HTTP/本地音频时钟，详见[S7范围说明](s7-restore-interruption.md)和[真机记录](device-s6-15a29143.md) |
 | S7 | 双设备自动门槛通过：各S5 270/38、S6 99/19 + UI 3、S7 93/20，零失败零跳过；推送前补齐Release构建及81项回归，见[S7记录](s7-restore-interruption.md)。本批未安装真机，发布项待验 |
-| S8 | 进行中：iPhone/iPad各完成307合成RSS测量、完整配置包及4项受控代表请求。实源深层分页/正文/资源及多页刷新性能仍待验，见[S8验收](s8-acceptance.md)；书源漫画/视频实源修复另列后续，不混作RSS问题 |
+| S8 | 进行中：307源配置/两页刷新规模、受控RSS分页/正文/状态已有证据；完整批次双设备曾各37项/9 suites补R014真实图片、R141真实MP3原生资源层/进度重载与RSS快速退出修复；随后媒体再次失败，本地音频对照两端ready/clock失败；用户纠偏后同一隔离App/同文件XCTest↔独立App双端均ready且时钟推进，原用例、PCM及R141受控真实MP3双端复查通过；转交的交错A/B又以3轮交替先行、5对采样/10次探针提高了对宿主顺序/单次预热混杂的排除置信度，但当天仍未复现停滞，#77根因未知、不能外推真机或永久修复。最新nonmedia子集两端22项/5 suites通过，新增未知私有头发出前阻断与R128一页无图停止，显式排除R141 MP3、R146 TLS图和R217实图；R217另有独立双设备单图真实解码通过，R146不覆盖。独立R146图片连接两端-1202/SSL -9814证书链时效错误，代码审阅未发现客户端TLS绕过或图片解析缺陷，#78仍是外部证书/信任链前置条件；B122原词无匹配DOM/0条、源检查词12节点/12条，搜索输入响应差异已收敛，不修解析器。按用户决定#77转监控、#78改列外部前置条件后，full门槛双设备各47项/12 suites首次整套实跑通过，原始本地音频合同各1项通过。真实网页/iframe/登录、B122后续图片、R146图片（未验收）及设备/发布仍待验，见[S8验收](s8-acceptance.md)；书源漫画/视频问题独立 |
 
-## 15a29143：真机安装与S6自动验收
+## 本地提交前核对（2026-11-14）
+
+范围为`64149fd1`之后的#74网页返回、RSS快速退出进度、模板日志安全以及S8隔离测试/门槛/诊断记录；不宣布S8阶段完成。原始253/307条包、`.codegraph/`、`.workbuddy/`、`__pycache__/`不提交，不推送、不装手机。
+
+#74正常`Reader-Fork-Dev`宿主复核：通过`scripts/sim.sh`解析Xcode与两台模拟器，串行运行`scripts/xctest.sh`，选择`RSSBrowserSessionTests`与`RSSWebDisplayUITests`。两端各12项（7项单元合同、5项UI），零失败/跳过；覆盖网页返回、刷新后返回、同文档history/hash、POST不重送、撤销、AX5/深色及旧缩放/退出。完整结果`/tmp/readerfork-local-commit-webback.ZBbVp8/{iPhone,iPad}.xcresult`；测试构建同时提供当前工程编译证据，不重复clean/build。S8代码未变，复用下文双端full47项/12 suites与WebKit边界3项实际通过结果，不重复公网验收。
+
+音频交错脚本、比较器和新增探针一并保留；交错探针的运行结果为用户转交，本会话只复核脚本/离线单测，不把bundle identifier hash当作构建二进制身份，也不把少量同日通过视为排除所有冷启动/预热因素。#77仍按监控处理。提交前实际运行`python3 -B -m unittest discover -s scripts/tests -p 'test_s8_*.py' -v`共16项通过，5份相关shell语法检查、Python解析、本地化4114键、双份设计skill一致性、文档相对链接、原始包SHA-256和改动文件隐私扫描通过；暂存前后检查只包含审核过的54个相关文件。
+
+## S8补充：#77/#78解除持续阻塞与full门槛首次实跑（2026-11-14）
+
+按用户决定把根因调查、缺陷状态和阶段门槛分开。
+
+- 原始音频合同`RSSMediaPoCTests/testLocalAudioActuallyAdvances`：iPhone/iPad模拟器各单次执行1项通过、零失败零跳过，`/tmp/readerfork-s8-audio-contract-174833-{iPhone,iPad}.xcresult`。未循环、未改断言。#77据此转为“未定位的间歇风险、监控中”，重开条件见[音频记录](s8-audio-clock-diagnostics.md)；不是修复结论。
+- R146图片用例改列外部证书链前置条件：从两种模式的通过集中剔除，verifier单列`externalPreconditionsNotRun=1`，结果树出现该用例即拒绝。状态为未验收。verdict/shell单测10项通过，新增该拒绝对照。
+- `bash scripts/validate_reader_fork_s8.sh full`：iPhone/iPad各47项/12 suites通过，零失败/跳过/预期失败，脚本退出0，`stageAccepted=false`。证据`/tmp/readerfork-s8-full-iPhone.skTNEI/`、`/tmp/readerfork-s8-full-iPad.44CJ0U/`。两端一致：R141 MP3 3事务200/200/206、推进500/502ms、进度重载；R217 WebP 12,838 B/480×300；R014 JPEG 75,292 B/640×440；R146列表/正文4事务、987字符、状态重载，图片未请求。
+
+未验证：原规则网页/iframe真实播放、真实受限登录、iOS17、物理设备、人工VoiceOver与发布项；R146图片；#77根因。只改测试门槛脚本、单测与文档，无生产代码/TLS/播放器改动，未装手机、未commit/push、未清数据。回滚：把R146用例从`EXTERNAL_PRECONDITIONS`移回`EXCLUDED_NONMEDIA`并恢复shell中nonmedia专属skip与单测计数。
+
+## #77/#78 转交诊断结果核对（2026-11-14）
+
+#77的新增交错工具 `scripts/compare_reader_fork_s8_audio_interleaved.sh` 在实现上交替 XCTest/Standalone 先行，默认3轮、上限5轮，任一轮未ready或未推进即停止；`--allow-rotated-container` 只放宽容器路径和输入路径哈希，仍校验bundle哈希、输入内容SHA-256、字节数、宿主身份和AVPlayer状态。工作区离线比较器测试6项通过，shell语法通过。用户转交的结果称3轮交错、另2对补全，共5对/10次探针均ready、推进、`timebaseRate/effectiveRate=1`；本会话没有重跑这些模拟器探针，报告中的`/tmp/readerfork-audio-host-interleaved.*`目录当前也不可见，因此这里只记录为转交结果，不把它当作本会话独立复现。它提高了对“固定宿主顺序/单次预热”的排除置信度，仍不能定位CoreAudio服务间歇卡死，也不能外推真机、可听声音或网页播放器。`RSSMediaPoCTests/testLocalAudioActuallyAdvances`在转交会话中未完成独立复检；其后已在主会话双设备补跑，见上节。
+
+#78的代码路径为 `RSSImageService` → `SourceRequestExecutor` → 系统URLSession；没有serverTrust/challenge放行、关闭ATS或自定义TLS校验，`S8RequestBoundary`只做测试请求准入。现有`-1202/-9814`发生在HTTP响应之前，R146列表/正文同源事务通过，当前证据不支持修图片解析器。保持系统证书校验；如要继续，只做用户另行决定的同一确切目标与Android基准/干净设备受控对照，并只读核查本机时钟。若证书链确实过期，应标记外部前置条件或换代表源；不装CA、不改时间/网络、不关闭校验、不重复公网重试。
+
+
 
 用户明确解除真机暂停后，使用独立15a29143工作树及既有真机DerivedData/个人签名构建，安装到iPhone 17 Pro (iOS27.2)，安装包GitCommitSHA与提交一致。真机101项/20 suites、零失败零跳过，包括本地/HTTP音频、MP4/HLS真实时钟及新增网页显示测试；测试后已重新打开正常App。证据 `/tmp/readerfork-device-current.DekGzG/`，命令/范围/回滚见[真机记录](device-s6-15a29143.md)。本次不能验收iCloud/App Group；Simulator-only三项网页工具栏UI未在手机执行。用户在本次回归后已明确确认当前版本「画面声音正常」。不把尚未完整编译/验收的S7工作区混入手机安装物。
 
@@ -45,6 +69,111 @@ S8仍未闭合：B122真实图片搜索HTTP200返回0项，但使用它真实规
 用户补充的「1第一道路 / 禁漫天堂-漫画」来自另一个399项导出，不是本仓库307项包中的R062或书源。原生首文档47次HTTP403及HTML错误页实验的真人验证循环均保留为失败证据。第三版在获授权后以稳定15a29143基线无线安装：简单singleUrl从首请求起保持同一个WebKit会话。旧VPN节点下Safari和App都循环；用户换节点后Safari恢复、App仍失败；再仅将该源header改为字符串`{}`、使用真实WebKit默认User-Agent，网站正常，日志记录403后同会话200。用户划掉App后重开并两次进入均正常，最终4次响应200、3次完成200、0次新403。
 
 隔离候选定向26项/6 suites、0失败/跳过及签名核验通过；主工作区已整理相同行为与类型化日志，并补默认UA回归，整合后验证单独记录。没有统一覆写所有源的UA、绕过TLS或自动操作验证；旧节点限制和长期稳定性不在通过范围。详细命令、前后证据及回滚见[单网页诊断记录](rss-single-page-diagnostics.md)。主S7/S8工作区仍未装到手机，S8、书源漫画和视频问题继续单列。
+
+## S8补充：WebKit iframe公开边界可行性（2026-11-14）
+
+仅用loopback HTML/嵌套iframe与WebKit本地规则完成双设备3项：精确iframe文档导航可由公开navigation delegate在HTTP前拒绝；`WKContentRuleList`阻断未知子资源/redirect目标，但没有子资源逐请求回调或累计预算，重复获准资源可多次请求。被测6个HTTP事务中只收到3次文档导航回调；另有已有scheme handler held-task取消合同各1项，范围不推广到HTTP(S)。因此不放宽R265/R267真实跨源iframe许可，明确仍未验证。证据/推理及回滚见[WebKit边界PoC](s8-webkit-boundaries.md)。
+
+## S8补充：R217单张真实公开图片与R128无图停止（2026-11-14）
+
+固定307条RSS包sha仍保持既定hash。按只读/无凭据方式预审后新增R217：每端列表1 GET/200，生产解析18条/17个唯一图片目标；所有目标HTTPS、query/fragment/嵌入凭据为0，唯一目标host hash固定，PNG/WebP两种扩展。首目标整URL只以SHA-256留痕。生产闭环重新读取一页，先验证固定shape与URL hash，再仅显式准入一张跨origin WebP：列表GET+图片GET=2个事务、均200；图片12,838 B，经`RSSImageService.inspect`及`displayImage`得到480×300，RSSStore已读/收藏/图片URL重载双端通过。0凭据、0跳转，唯一跨origin事务即所审图片，0额外图请求。R217其余16个独特目标没有访问。两个设备的最终1项精确用例结果在`/tmp/readerfork-s8-r217-image-cookie-audit-{iPhone,iPad}.xcresult`，启动日志同前缀`.log`；此前单页/指纹对照见`/tmp/readerfork-s8-r217-image-target-fingerprint-{iPhone,iPad}.xcresult`。
+
+R128只做过首列表1 GET/200，解析20条、无任何图片引用、0媒体请求，之后冻结无图结果不尝试图片/翻页。R217与R128均进入固定manifest：R128在nonmedia，R217实图闭环在full；当前nonmedia双设备完整运行各22项/5 suites，零失败零跳过、`stageAccepted=false`，10项verdict/shell单测通过。full manifest为48项/12 suites、尚未整套运行。最终nonmedia证据 `/tmp/readerfork-s8-current-nonmedia-iPhone.kDBTd1/`、`/tmp/readerfork-s8-current-nonmedia-iPad.42BVWD/`。R014既有图片独立。#77间歇音频根因、R146 `-1202/-9814`及R265/R267真实iframe不受影响。
+
+保留开发期失败结果：R128首测错把`ruleImage`配置等同于每条都有图片，页面GET后测试断言失败但没有图片请求；R217的错误分类项数/跨源假设在HTTP前即被拒绝。更正后双设备预审及精确闭环通过。无生产代码/TLS/认证改动，无真机安装、commit/push、设备清理；详细范围和回滚见[R217记录](s8-r217-image.md)。
+
+## S8补充：R265/R267 iframe只读预审与TLS限制（2026-11-14）
+
+R265仅用原预审首页1 GET/200获取100条，生产解析条目交离主线程SwiftSoup作静态审计，iPhone/iPad各1项通过：100个iframe、100个跨源、100个带query，0个直接media、0个条目内script/preload、0个内嵌凭据/格式错误，**0个iframe/媒体子请求**。冻结条目/目标host形状，发生变化必须重新审阅，不让新目标自动进入WebKit。R267仅原包静态审查、0网络：其iframe指向同一第三方host但源URL还有query。配置为type0规则网页、enableJs=true；不因父HTML无script认为子frame安全。自建生产规则网页6项和本地WebKit iframe HLS1项双设备各7/7通过，是分开的合成合同，不是R265第三方网页真实播放。证据 `/tmp/readerfork-s8-r265-guarded-{iPhone,iPad}.xcresult`、`/tmp/readerfork-s8-iframe-fixture-{iPhone,iPad}.xcresult`，命令、资源预算与回滚见[iframe预审](s8-iframe-preflight.md)。
+
+R146首图当前仍为系统-1202/SSL -9814链时效失败、无HTTP状态/解码；本轮不重复请求、不改CA/VPN/时间/TLS。R014成功不覆盖它。WebKit第三方子资源不受S8测试专用URLSession精确准入全局约束，未自动加载整站iframe；没有安全可约束的真实目标时保持未验而非模拟器绿灯放行。无新依赖/权限、原包改动、手机安装、commit/push或设备数据清理。
+
+## S8补充：同文件XCTest/独立App音频宿主对照（2026-11-14，根因未定）
+
+此前的Apple API查询与窄搜索不足以判断系统原因。扩大检索后找到旧Simulator同15秒超时/-66681的一手复现、XCTest与App不同的案例，以及VM权限影响音频输出的案例，均不等于当前27.2根因。用新的DEBUG+Simulator-only隔离探针在同一已启动设备、同一App容器的同一个Caches m4a文件（SHA-256与路径哈希双方完全一致）、同一播放器代码与AVAudioSession、同一10秒ready/8秒时钟截止比较XCTest和独立App。没有触及RSSStore、用户源/网络，也没有改路由、时钟或系统设置。
+
+iPhone XCTest 0.495秒、独立App 0.430秒；iPad 0.497/0.420秒，均ready、实际推进、item timebase/effectiveRate=1，XCTest探针各1项Passed。原`RSSMediaPoCTests/testLocalAudioActuallyAdvances`又在双端各1项通过。随后独立PCM及R141真实MP3生产资源链各2项双端通过；R141各3事务200/200/206、推进505/502ms、RSS进度重载与资源停止。证据`/tmp/readerfork-s8-host-ab-gate-{iPhone,iPad}/`、`/tmp/readerfork-s8-current-media-{iPhone,iPad}.xcresult`。A/B只支持当前没有XCTest专属故障，旧15秒/timebase0失败仍保留，次序XCTest先、App后不消除预热可能；音频**间歇根因未定**，不能把双端一次成功写成系统修复或可听真机声音。
+
+A/B初次独立实测两端匹配并通过，首版shell收尾中文紧贴`$EVIDENCE`被bash误读为变量、导致完整脚本退出非零；改为`${EVIDENCE}`后复跑两端完整脚本退出0。新增同输入/宿主/容器精确比较及5项Python验收测试，检查不匹配必须拒绝、单端失败不能伪装相同；脚本不会覆盖已有结果、拒绝非已启动模拟器、只清本轮UUID测试媒体目录且不关闭模拟器。两端nonmedia子集21项/5 suites复跑通过，15项Python门槛单元通过、文档链接/源包哈希及`git diff --check`通过；full46项未运行。详见[音频对照记录](s8-audio-clock-diagnostics.md)，保留#77间歇风险；#78的R146 TLS仍失败，S8继续进行中。
+
+## S8补充：audio-only拆除前状态与PCM对照（2026-11-14，历史失败）
+
+读取既有双端m4a时间线后校正：ready10秒截止时unknown/error=nil；约+15.2秒后KVO进入ready，最终buffer可用/duration4.975、rate1/playing，timebaseRate0和clock0。不是最终始终unknown，更不是ready即播放通过。当前SDK与Context7官方API核对后只增加状态读取，iPhone限定一次m4a探针仍失败：outputSuppressed=false/muted=false/volume1/sourceClock未覆盖/effectiveRate0。另自建无压缩1秒PCM也同样ready延迟、duration1已识别但时钟0；不经RSS/网络/压缩解码，不能只归因m4a。MP4原loopback对照1项通过，不外推所有AVPlayer坏或音轨可听；只读Mac默认设备存在/48000Hz也不认定主机音频正常或异常。
+
+未设置clock/路由优先参与者、静音/音量、超时、系统设置或服务/设备重启，无生产补丁；新PCM独立类不混入S6批准集或非媒体通过集。官方网页直接抓取被fake-IP安全拦截，未放宽SSRF/代理，不把旧发布说明套到当前27.2。#77保留，命令、时间线和附件见[音频只读对照](s8-audio-clock-diagnostics.md)。
+
+## S8补充：未知私有头的请求前阻断（2026-11-14）
+
+审查发现S8测试边界仅拦Cookie/Authorization/Proxy-Authorization不足：新增loopback真实请求负例复现X-API-Key可发出，5项suite因服务器实际收到请求而失败。已改为公共传输头名称许可名单，未知私有头发出前拒绝，原正常GET/HEAD/确切跳转与预算保留；不修改生产认证/CookieJar或源私有头功能。公共头值仍需固定源/登录配置预审，不将名称名单说成通用安全代理。
+
+首次Swift Testing函数名选择实际0项被wrapper拒绝；随后整个5项suite真正红→绿。将5项边界合同纳入nonmedia，10项verdict/shell单元通过，最新脚本双设备完整退出0各21项/5 suites、零失败/跳过。full46项仍未整套运行，nonmedia相对full25项未执行、其中2显式排除，stageAccepted=false，#77/#78保持。证据 `/tmp/readerfork-s8-header-gate-{iPhone,iPad}/`，原红/0项、命令和回滚见[私有头边界记录](s8-header-boundary.md)。未向公网发送fixture key，未改生产认证、原源包或权限，无真机安装/commit/push。
+
+## S8补充：可重复自动回归与误放行保护（2026-11-14）
+
+新增`validate_reader_fork_s8.sh`及verifier：明确full46项/12 suites和nonmedia16项/4 suites，精确用例manifest、普通/restricted日志探针、wrapper/summary/tree/最终控制台共同判定。前置仅接受当前可用iOS Simulator明确ID并复验实际设备，物理/未知/不可用/模糊目标在xctest前拒绝；原始包哈希改变或工程覆盖不执行请求，不覆盖旧xcresult。任何模式stageAccepted=false，full亦不等于阶段/发布验收。
+
+10项Python/shell单元实际通过；新脚本nonmedia双设备完整退出0，各16项/4 suites。full46项只验证manifest/拒绝逻辑，未实际整套运行；nonmedia相对full未执行30项（含2项显式排除），不覆盖#77/#78。实际已失败R146 xcresult亦被verifier拒绝，框架3项通过不能掩盖其1项失败。首版最后echo的macOS bash全角相邻变量解析错误已用真实footer执行复现并修正，再完整双端验证。证据 `/tmp/readerfork-s8-gate-verified-{iPhone,iPad}/`；命令、失败与回滚见[自动回归门槛](s8-regression-gate.md)。
+
+另iPhone原loopback MP4 seek/推进1项通过，限制了本地音频失败的外推；两个额外HTTP视频候选仅有限目录预审200后，因device/uuid/udid参数进一步审查而停止，不计播放器成功、不改标识或URL。无真机安装、commit/push、设备/音频服务重启、弱化TLS或新增依赖。
+
+## S8补充：R146图片TLS时效复验（2026-11-14）
+
+先从实际正文只读取首图准入元数据，再用确切URL哈希、无query/凭据、独立1 GET任务预算，通过生产RSSImageService实际尝试。两端均1图片连接事务、无HTTP状态、0凭据/边界拒绝，系统-1202，底层SSL -9814。当前SDK SecBase.h定义为errSSLCertExpired（chain had an expired cert），不能唯一归因哪一张证书、源站/CDN或代理/本地信任环境。没有绕过TLS、安装CA、更改网络节点/时间或重试。两页/正文4个事务301/200/200/200及状态重载仍通过；图片未进入已证明成功的解码，#78门槛保留。
+
+iPhone独立1项失败，iPad该1项失败且3项安全元数据合成合同通过，不采用后者覆盖失败。最新非媒体子集双设备16项/4 suites零失败零跳过，明确排除真实MP3及R146图片TLS两项；完整用例集合核对，控制台模板原始载荷检查仍通过。证据 `/tmp/readerfork-s8-nonmedia-final/`，独立失败、SDK证据、命令与回滚见[R146 TLS记录](s8-r146-tls.md)。原始系统日志/xcresult不直接外发，测试输出仅白名单元数据。未更改生产TLS或安装手机，未commit/push。
+
+## S8补充：B122空结果实源对照（2026-11-14）
+
+两个无凭据同源GET、完全相同生产请求/规则链：原固定词HTTP200且输入DOM规则节点0/解析0；源内checkKeyWord HTTP200、有效DOM12/解析12。双设备结论一致，响应字节略有变化，不声称相同HTML。原零结果收敛到搜索输入/站点响应差异，不支持修改iOS解析器；未唯一确定词条/站点匹配原因，也不代表详情、封面或漫画图片链通过。旧合成fixture仍仅0网络合同。
+
+最终两端各13项/3 suites零失败零跳过，显式排除R141音频；控制台原始模板载荷检查仍通过，不覆盖#77媒体失败。证据 `/tmp/readerfork-s8-b122-final/`，命令、边界、开发编译失败和回滚见[B122搜索记录](s8-b122-search.md)。原源包哈希不变，未安装手机或commit/push。
+
+## S8补充：模板原始日志泄露与媒体复验失败（2026-11-14）
+
+已用实际控制台合成探针复现AnalyzeUrl直接NSLog绕过统一脱敏，普通/restricted上下文都会输出模板表达式和结果；请求求值测试虽通过，外层日志校验明确失败。最小修复仅删除原始输出，保留求值语义。双设备合成探针和共享桥/非音频实源各12项通过，控制台无合成载荷。iPad首次ClangStatCache阶段超时未执行测试，保留并在同一DerivedData限定复验通过。
+
+扩展实源回归中R141真实MP3未推进；不是框架后4项通过就能覆盖的失败。按既有方法追加纯本地音频对照，两端均ready10秒超时、status=unknown、clock8秒为0；未据此认定Mac主机音频/唯一根因，未自动重试/静音/调超时/重启服务或设备。#77阻碍当前媒体验收，37项历史通过仍属真实记录而非当前放行。命令、证据与回滚见[模板日志安全与复验](s8-template-logs.md)。非音频回归显式排除真实MP3，不能代替媒体门槛。
+
+## S8补充：真实音频与快速退出进度（2026-11-14）
+
+R141首分类→列表@put音频变量→正文java.get→生产原生媒体资源层→AVPlayer推进→RSSStore进度重载，在双设备各3个HTTP事务200、200、206下通过，推进500/503ms、无凭据、资源关闭。R141仍为type=0；不改变路由，不冒充原网页WebKit/iframe或真机声音已验收。R304/R187预审403停止，R306响应形状不匹配预期未继续。
+
+此真实链发现关闭后进度0，已用本地0.25秒素材复现close/pause/background三个失败分支；根因是强制保存读取1秒UI采样旧值，而非网络、写盘或key。仅RSS强制保存改取真实时钟，并保护异步seek目标/当前加载修订、未就绪恢复和结束归零；原始书源/脚本路径与持久化格式不变。第一版直接读时钟的seek回归被本地测试捕获并修正；阅读页测试改为观察恢复位置之后新增0.5秒，未增加sleep/超时。
+
+最终Reader-Fork-RSS-PoC、动态选择iPhone/iPad iOS27.2，各37项/9 suites零失败零跳过（XCTest9、Swift Testing28），xcresult完整集合已核对。本地退出/seek保护、HLS/签名重算/重开/撤销及既有S8资源/Cookie回归均通过。最终证据 `/tmp/readerfork-s8-audio.8r9KFy/final/`；命令、原失败、限制与回滚见[音频与进度记录](s8-audio-progress.md)。未装手机、未commit/push，S8仍未完成。
+
+## S8补充：真实图片与受限Cookie（2026-11-13）
+
+在已有S8证据上新增真实图片与合成Cookie闭环，没有修改生产代码或安装手机。已有普通Session delegate的重定向拒绝会被生产task delegate覆盖；用loopback对照复现后，新增S8专用URLProtocol发出前精确URL/哈希、无凭据GET和准入次数边界，允许请求仍由系统HTTP和原生产执行器处理。R146只准入经两次无Cookie/禁跟随301检查确认的确切HTTPS同源canonical URL，不开放整站或放宽TLS。
+
+最终 `Reader-Fork-RSS-PoC` 隔离宿主、动态选择Xcode/iPhone/iPad（均iOS27.2），各23项/6 suites、零失败零跳过；xcresult已核对精确集合。R014真实链2个GET/200，实际JPEG 75,292 B、原生解码640×440，已读/收藏/图片地址重载通过；Jar=false/true两种合成列表→type=1规则→实际图片→状态重载各4次loopback请求，路径隔离与响应Jar语义通过。其余代表项再次通过，包括R146四个事务301、200、200、200和987字符正文；B122仍只是离线fixture。
+
+命令、失败复现、宿主/缓存隔离、预算与回滚见[资源与Cookie记录](s8-resources-cookies.md)。最终证据 `/tmp/readerfork-s8-resources.22G9AG/final/`，开发失败日志保留于上层。未采用重启后0项框架结果；测试Cookie种入错误触发的既有主线程断言和隔离宿主设置快照初始化错误已在测试中修正，未修改生产实现。原307源性能观察未重跑，未增加性能或发布通过结论。
+
+仍未验证/闭合：实际音视频/iframe播放器、真实受限Cookie/账号登录、B122空结果、R146外部图片TLS、iOS17和物理设备/发布门槛。#58/#64/#65独立，#73关闭；S8保持进行中。
+
+## RSS 网页返回（#74，2026-11-13）
+
+用户反馈独立RSS网页进入子页面后无法回到首页。固定Android基准的 `ReadRssActivity.kt` 在系统返回时先处理网页历史，并跳过刷新产生的重复项；无上一页时才退出阅读。iOS沿用自己的导航语义：当前会话有历史时显示独立“网页返回”，它只返回网页；Close仍关闭整个阅读容器，推入页的系统返回不变。
+
+实现边界：
+
+- 简单singleUrl沿原WebKit会话后退；带私有头、响应规则或页面桥的整页返回仍走 `RSSOpenTarget` / 共享执行器，重新绑定该页Cookie、脚本和图片上下文。只在文档提交后推进历史，最多保留100个导航目标/上下文，不另建响应缓存。
+- 独立网页的已取得HTML使用公开 `loadSimulatedRequest` 加入WebKit历史；没有启用网页返回的文章/登录宿主仍保持原加载方式。保留 `loadWithBaseUrl` 选择，不强行赋予无base页面站点来源。
+- `pushState` / hash返回恢复网页内状态，不重发文档；包括路径变化、从有hash退回无hash，以及无base的about:blank。刷新共享请求页替换当前历史目标，不制造重复后退步骤。监听按WebView生命周期撤销，旧容器不能清除新容器的返回绑定。
+- 删除源或登录修订后返回不可用；共享执行器历史中的POST不自动重送，明确显示既有表单受限错误。没有添加历史监测JS、放宽TLS、扩展网页桥权限或改动用户数据。
+
+最终验证：Xcode动态选择的iOS27.2 SDK，Reader-Fork-Dev，iPhone 18 Pro Max及iPad Pro 13-inch (M5)，均为iOS27.2 (24B8117)模拟器。
+
+- iPhone / iPad各36项 / 8 suites通过，零失败零跳过；包含浏览器历史、刷新后一步返回、共享请求/私有头、恢复后的页面桥、POST不重送、源撤销、导航/图片/视口及请求合同。
+- iPhone / iPad各5项生产工具栏UI通过，零失败零跳过：子页返回首页且不关闭容器、重开清除旧历史、AX5/深色下返回与关闭可点击，以及原有缩放/横屏/连续弹层。xcresult明确核对8个suite和5项UI的精确集合，不采用0项或缺suite的结果。
+- `ruby scripts/check_localizations.rb` 通过：五种语言4114键；两个设计skill逐字节一致，S6脚本语法与 `git diff --check` 通过。S6脚本的UI精确白名单同步增加两项返回用例。
+- 最终证据：`/tmp/readerfork-rss-history-acceptance.JEMzn2/final/` 的各设备unit/ui日志、xcresult、summary及完整tests树；此前同目录上层的附件记录UI截图。初始失败证明 `loadHTMLString` / `loadData` 不提供所需历史；刷新重复项由 `reload-red.log` 复现，再经 `reload-green.log` 和最终整合集验证。独立用例筛选曾执行0项且被wrapper拒绝，未采用该结果。
+- API依据：Apple [loadSimulatedRequest](https://developer.apple.com/documentation/webkit/wkwebview/loadsimulatedrequest(_:response:responsedata:))；WebKit [227599](https://bugs.webkit.org/show_bug.cgi?id=227599)明确区分此API与不新增历史项的 `loadHTMLString` / `loadData`。本机SDK声明从iOS15可用，未引入高于最低iOS17的新API要求。
+
+命令由 `scripts/sim.sh xcode` / `dest iPhone` / `dest iPad` 解析环境，使用 `YUEDU_SCHEME=Reader-Fork-Dev`、`scripts/xctest.sh` 串行运行 `RSSBrowserSessionTests`、`RSSWebNavigationTests`、`RSSNativeWebFlowTests`、`RSSWebInvalidationTests`、`RSSWebDocumentCacheTests`、`RSSWebViewportTests`、`RSSWebRequestTests`、`RSSWebLoadDiagnosticsTests` 和 `RSSWebDisplayUITests`。
+
+未验证：iOS17、物理设备、真人VoiceOver及目标外站的实际返回；本轮只使用自建页面和loopback请求，不代替实源验收。没有安装手机、修改源包或推进S8其他门槛。回滚只撤回 `64149fd1` 之后本项的页面/本地化/测试/设计说明改动，保留此前提交与全部用户数据。
 
 ## RSS 订阅 Tab 导出 JSON 黑屏反馈（用户复测正常）
 

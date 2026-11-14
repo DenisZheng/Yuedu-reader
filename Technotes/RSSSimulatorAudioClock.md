@@ -1,6 +1,10 @@
 # RSS模拟器音频时钟：环境恢复与前置复验
 
-## 当前0f31f857基线复验
+## S8再次失败与只读对照（2026-11-14）
+
+#77历史间歇风险仍保留。用户纠偏后已按同一隔离App/同一音频文件、XCTest与独立App双设备对照：两者当前均ready且时钟推进，原m4a断言、PCM和受控R141真实MP3双端重测通过；没有证明旧故障根因或永久修复，不将当前成功外推到真机声音/网页播放器。两端m4a的ready截止unknown后约15秒变ready，但拆除前timebaseRate0/clock0；新无压缩PCM同样复现，输出抑制false/未静音/sourceClock未覆盖。iPhone loopback MP4 seek/推进仍通过，不能外推所有AVPlayer或Mac主机音频失效。没有关闭设备、重启音频服务、改clock/路由/音量或弱化断言；新诊断不改变S6批准的选择集。失败附件、当前双设备A/B与残余风险详见[S8精确音频诊断](../docs/legado-alignment/s8-audio-clock-diagnostics.md)。
+
+## 0f31f857基线历史复验
 
 用户确认Mac主机音频一直正常。撤回先前把`afplay`命令错误/超时认定为主机音频故障、要求等待主机恢复的判断；该命令不作为iOS App门槛。旧失败有ready超时/最终时钟0，也有ready等待超时但最终time约0.204秒的不同表现，不能混成一个已知根因。
 

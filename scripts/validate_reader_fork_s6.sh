@@ -72,7 +72,8 @@ import json,sys
 summary=json.load(open(sys.argv[1]))
 assert summary["result"]=="Passed" and summary["failedTests"]==0 and summary["skippedTests"]==0,summary
 expected={"RSSWebDisplayUITests/"+name+"()" for name in [
-    "testTwoPanelsCanCloseAndPageKeepsState", "testNativeCloseStaysReachableAtAX5AndDark", "testLandscapeClosePanelsAndReset"]}
+    "testTwoPanelsCanCloseAndPageKeepsState", "testNativeCloseStaysReachableAtAX5AndDark", "testLandscapeClosePanelsAndReset",
+    "testClientSideWebBackReturnsToPageWithoutClosingSheet", "testWebBackAndCloseStayReachableAtAX5"]}
 executed={}
 def walk(node):
     if isinstance(node,dict):
@@ -83,6 +84,6 @@ def walk(node):
 walk(json.load(open(sys.argv[2]))["testNodes"])
 assert set(executed)==expected and all(r=="Passed" for r in executed.values()),executed
 assert summary["totalTestCount"]==len(expected),summary
-print("S6网页缩放/连续弹层/原生退出/横屏/AX5 UI：3项实际通过")
+print(f"S6网页缩放/历史返回/连续弹层/原生退出/横屏/AX5 UI：{len(expected)}项实际通过")
 PY
 echo "证据：$EVIDENCE"

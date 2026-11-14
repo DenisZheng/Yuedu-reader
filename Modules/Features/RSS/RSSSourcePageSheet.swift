@@ -37,8 +37,10 @@ struct RSSSourcePageScreen: View {
     @State private var router = RSSWebActionRouter()
     @State private var isVisible = false
     @State private var displayScalePercent = 100
+    @State private var webNavigation = RSSWebNavigationState()
     var body: some View {
         RSSSourcePageWebView(source: source, target: target, error: $error, loading: $loading, owner: owner,
+            webNavigation: webNavigation,
             onAction: { request in
                 guard let owner else { throw RSSWebFailure.actionUnavailable }
                 try router.receive(request, source: source, owner: owner)
@@ -49,7 +51,10 @@ struct RSSSourcePageScreen: View {
                 if let error {
                     VStack(spacing: DSSpacing.sm) {
                         Text(error).font(DSFont.footnote)
-                        Button { reloadID = UUID() } label: {
+                        Button {
+                            webNavigation.reset()
+                            reloadID = UUID()
+                        } label: {
                             Text(localized("重試")).frame(minWidth: DSLayout.minimumTapTarget, minHeight: DSLayout.minimumTapTarget)
                         }
                         .accessibilityIdentifier("rss.web.retry")
@@ -60,7 +65,15 @@ struct RSSSourcePageScreen: View {
             .navigationTitle(title ?? source.name)
             .toolbarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if webNavigation.canGoBack {
+                        Button { webNavigation.goBack() } label: {
+                            Image(systemName: "arrow.backward")
+                                .frame(minWidth: DSLayout.minimumTapTarget, minHeight: DSLayout.minimumTapTarget)
+                        }
+                        .accessibilityLabel(localized("網頁返回"))
+                        .accessibilityIdentifier("rss.web.back")
+                    }
                     Menu {
                         Picker(localized("網頁縮放"), selection: $displayScalePercent) {
                             ForEach(RSSWebViewport.percentages, id: \.self) { percent in
@@ -82,6 +95,23 @@ struct RSSSourcePageScreen: View {
     }
 }
 
+@MainActor @Observable final class RSSWebNavigationState {
+    private(set) var canGoBack = false
+    @ObservationIgnored fileprivate weak var coordinator: RSSSourcePageWebView.Coordinator?
+
+    func goBack() {
+        guard canGoBack else { return }
+        coordinator?.goBack()
+    }
+
+    fileprivate func update(canGoBack value: Bool) {
+        guard canGoBack != value else { return }
+        canGoBack = value
+    }
+
+    fileprivate func reset() { update(canGoBack: false) }
+}
+
 @MainActor @Observable final class RSSWebAuthenticationBridge {
     var finish: (() async throws -> String)?
 }
@@ -92,6 +122,7 @@ struct RSSSourcePageWebView: UIViewRepresentable {
     @Binding var error: String?
     @Binding var loading: Bool
     var owner: RSSStore? = nil
+    var webNavigation: RSSWebNavigationState? = nil
     var findRequestID: Binding<UUID?> = .constant(nil)
     var restoreScrollY: Double = 0
     var onScrollYChange: ((Double) -> Void)?
@@ -118,10 +149,12 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         view.scrollView.delegate = context.coordinator
         context.coordinator.attachCookies(configuration.websiteDataStore.httpCookieStore)
         context.coordinator.observeScrollSize(view.scrollView)
+        context.coordinator.observeHistory(view)
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {
         context.coordinator.onScrollYChange = onScrollYChange
+        context.coordinator.attachNavigationState(webNavigation, to: view)
         context.coordinator.onAction = onAction
         context.coordinator.isPageActive = isActive
         context.coordinator.authentication = authentication
@@ -147,6 +180,8 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         coordinator.commitScroll(view.scrollView)
         coordinator.cancel()
         coordinator.stopObservingScrollSize()
+        coordinator.stopObservingHistory()
+        coordinator.detachNavigationState()
         coordinator.resetCookies()
         coordinator.authenticationBridge?.finish = nil
         view.scrollView.delegate = nil
@@ -197,6 +232,23 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         private var navigation: WKNavigation?
         private var pendingRestore: Double?
         private var sizeObservation: NSKeyValueObservation?
+        private var historyObservation: NSKeyValueObservation?
+        private var urlObservation: NSKeyValueObservation?
+        private weak var webNavigationState: RSSWebNavigationState?
+        private struct HistoryEntry {
+            var target: RSSOpenTarget
+            var context: RSSOpenTarget.RequestContext?
+            var sourceScriptsAllowed: Bool
+            var scrollY: Double = 0
+        }
+        // 仅记录共享执行器的导航目标；返回仍走原来的加载管线，不另存HTML响应缓存。
+        private var pageHistory: [HistoryEntry] = []
+        private var pageHistoryIndex = -1
+        private var pendingHistoryTarget: RSSOpenTarget?
+        private var pendingHistoryIndex: Int?
+        private var documentHistoryRoot: WKBackForwardListItem?
+        private var containerPreviousItems: [WKBackForwardListItem] = []
+        private var documentPreviousItems: [WKBackForwardListItem] = []
         private var documentIsReady = false
         private var diagnosticAttempt: RSSWebLoadDiagnostics.Attempt?
         private var diagnosticFailureRecorded = false
@@ -272,6 +324,7 @@ struct RSSSourcePageWebView: UIViewRepresentable {
             if let accessToken { accessState?.removeCancellation(accessToken) }
             accessToken = nil
             accessState = nil
+            if webNavigationState?.coordinator === self { webNavigationState?.reset() }
             if let loginObserver { NotificationCenter.default.removeObserver(loginObserver) }
             loginObserver = nil
             navigationTask?.cancel()
@@ -291,12 +344,25 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         }
         func load(_ target: RSSOpenTarget, source: RSSSource, owner: RSSStore?, restoreScrollY: Double, into view: WKWebView,
                   article: RSSArticleRecord? = nil, followingNavigation: Bool = false,
-                  initialContext: RSSOpenTarget.RequestContext? = nil) {
+                  initialContext: RSSOpenTarget.RequestContext? = nil, historyIndex: Int? = nil) {
+            if documentIsReady, pageHistory.indices.contains(pageHistoryIndex) {
+                pageHistory[pageHistoryIndex].scrollY = max(0, view.scrollView.contentOffset.y)
+            }
             cancel()
             diagnosticAttempt = RSSWebLoadDiagnostics.Attempt(source: source)
             diagnosticFailureRecorded = false
             RSSWebLoadDiagnostics.record(diagnosticAttempt, .started, phase: .runtime)
+            documentHistoryRoot = nil
+            pendingHistoryTarget = webNavigationState == nil ? nil : target
+            pendingHistoryIndex = historyIndex
+            if let historyIndex, pageHistory.indices.contains(historyIndex) {
+                requestContext = pageHistory[historyIndex].context
+                sourceScriptsAllowed = pageHistory[historyIndex].sourceScriptsAllowed
+            }
             if !followingNavigation {
+                pageHistory.removeAll()
+                pageHistoryIndex = -1
+                containerPreviousItems.removeAll()
                 loaded = target
                 loadedArticleID = article?.id
                 pageArticle = article
@@ -396,7 +462,13 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                         guard id == generation else { return }
                         diagnosticPhase = .webkit
                         expectedNativeURL = document.url
-                        navigation = view.load(bytes, mimeType: document.mimeType, characterEncodingName: document.encoding, baseURL: document.url)
+                        if webNavigationState != nil {
+                            // loadData的文档不进入历史；已取得的内容用公开API建立可返回的WebKit历史项。
+                            let response = URLResponse(url: document.url, mimeType: document.mimeType, expectedContentLength: bytes.count, textEncodingName: document.encoding)
+                            navigation = view.loadSimulatedRequest(URLRequest(url: document.url), response: response, responseData: bytes)
+                        } else {
+                            navigation = view.load(bytes, mimeType: document.mimeType, characterEncodingName: document.encoding, baseURL: document.url)
+                        }
                         RSSWebLoadDiagnostics.record(diagnosticAttempt, .submitted, phase: diagnosticPhase)
                     case .html(let html, let base), .articleHTML(let html, let base):
                         let isStartup: Bool
@@ -431,7 +503,11 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                         guard id == generation else { return }
                         diagnosticPhase = .webkit
                         expectedNativeURL = document.baseURL ?? URL(string: "about:blank")
-                        navigation = view.loadHTMLString(html, baseURL: document.baseURL)
+                        if webNavigationState != nil, let url = expectedNativeURL {
+                            navigation = view.loadSimulatedRequest(URLRequest(url: url), responseHTML: html)
+                        } else {
+                            navigation = view.loadHTMLString(html, baseURL: document.baseURL)
+                        }
                         RSSWebLoadDiagnostics.record(diagnosticAttempt, .submitted, phase: diagnosticPhase)
                     case .external: loading.wrappedValue = false
                     }
@@ -543,6 +619,7 @@ struct RSSSourcePageWebView: UIViewRepresentable {
             error.wrappedValue = localized("訂閱來源或登入狀態已變更，請重新開啟")
         }
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            publishHistoryState(webView)
             if self.navigation !== navigation {
                 generation &+= 1
                 injectionTask?.cancel()
@@ -580,6 +657,27 @@ struct RSSSourcePageWebView: UIViewRepresentable {
             }
             decisionHandler(.allow)
         }
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            guard webNavigationState != nil, !isRevoked, accessState?.isCurrent == true, self.navigation === navigation else { return }
+            pageURL = webView.url
+            if let target = pendingHistoryTarget {
+                if let index = pendingHistoryIndex {
+                    pageHistoryIndex = index
+                } else {
+                    pageHistory.removeSubrange((pageHistoryIndex + 1)..<pageHistory.count)
+                    pageHistory.append(HistoryEntry(target: target, context: requestContext, sourceScriptsAllowed: sourceScriptsAllowed))
+                    // 有限的页面导航元数据，不让长期网页浏览保留无界请求上下文。
+                    if pageHistory.count > 100 { pageHistory.removeFirst() }
+                    pageHistoryIndex = pageHistory.count - 1
+                }
+                pendingHistoryTarget = nil
+                pendingHistoryIndex = nil
+                documentHistoryRoot = webView.backForwardList.currentItem
+                documentPreviousItems = webView.backForwardList.backList
+                if pageHistoryIndex == 0 { containerPreviousItems = documentPreviousItems }
+            }
+            publishHistoryState(webView)
+        }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard !isRevoked, self.navigation === navigation else { return }
             guard accessState?.isCurrent == true else { revoke(webView); return }
@@ -610,6 +708,7 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                     restoreScrollIfReady(webView.scrollView)
                     loading.wrappedValue = false
                     diagnosticPhase = .webkit
+                    publishHistoryState(webView)
                     RSSWebLoadDiagnostics.record(diagnosticAttempt, .finished, phase: nativeBrowser ? .browser : diagnosticPhase,
                                                 statusCode: nativeBrowser ? nativeHTTPStatus : nil)
                 } catch is CancellationError { return }
@@ -625,6 +724,80 @@ struct RSSSourcePageWebView: UIViewRepresentable {
             }
         }
         func stopObservingScrollSize() { sizeObservation?.invalidate(); sizeObservation = nil }
+        func observeHistory(_ view: WKWebView) {
+            historyObservation = view.observe(\.canGoBack, options: [.initial, .new]) { [weak self, weak view] _, _ in
+                Task { @MainActor [weak self, weak view] in
+                    guard let self, let view else { return }
+                    self.publishHistoryState(view)
+                }
+            }
+            urlObservation = view.observe(\.url, options: [.new]) { [weak self, weak view] _, _ in
+                Task { @MainActor [weak self, weak view] in
+                    guard let self, let view else { return }
+                    self.publishHistoryState(view)
+                }
+            }
+        }
+        func stopObservingHistory() {
+            historyObservation?.invalidate(); historyObservation = nil
+            urlObservation?.invalidate(); urlObservation = nil
+        }
+        func attachNavigationState(_ state: RSSWebNavigationState?, to view: WKWebView) {
+            if webNavigationState !== state {
+                if webNavigationState?.coordinator === self {
+                    webNavigationState?.coordinator = nil
+                    webNavigationState?.reset()
+                }
+                webNavigationState = state
+                state?.coordinator = self
+            }
+            publishHistoryState(view)
+        }
+        func detachNavigationState() {
+            if webNavigationState?.coordinator === self {
+                webNavigationState?.coordinator = nil
+                webNavigationState?.reset()
+            }
+            webNavigationState = nil
+        }
+        private func hasHistory(excluding boundary: [WKBackForwardListItem], in view: WKWebView) -> Bool {
+            guard view.canGoBack, let previous = view.backForwardList.backItem else { return false }
+            return !boundary.contains { $0 === previous }
+        }
+        private func hasHistoryWithinDocument(_ view: WKWebView) -> Bool {
+            documentHistoryRoot != nil && hasHistory(excluding: documentPreviousItems, in: view)
+        }
+        private func publishHistoryState(_ view: WKWebView) {
+            guard webNavigationState?.coordinator === self else { return }
+            let hasPrevious = pageHistoryIndex >= 0 && (nativeBrowser ? hasHistory(excluding: containerPreviousItems, in: view)
+                : pageHistoryIndex > 0 || hasHistoryWithinDocument(view))
+            webNavigationState?.update(canGoBack: hasPrevious && !isRevoked && accessState?.isCurrent == true)
+        }
+        fileprivate func goBack() {
+            guard let view = currentView else { return }
+            goBack(in: view)
+        }
+        private func goBack(in view: WKWebView) {
+            guard !isRevoked, accessState?.isCurrent == true else { publishHistoryState(view); return }
+            navigationTask?.cancel()
+            navigationTask = nil
+            if nativeBrowser || hasHistoryWithinDocument(view) {
+                guard nativeBrowser ? hasHistory(excluding: containerPreviousItems, in: view) : view.canGoBack
+                else { publishHistoryState(view); return }
+                view.goBack()
+            } else if pageHistoryIndex > 0, let source = loadedSource {
+                let index = pageHistoryIndex - 1
+                let entry = pageHistory[index]
+                if case .request(let request, _) = entry.target,
+                   !["GET", "HEAD"].contains((request.httpMethod ?? "GET").uppercased()) {
+                    fail(RSSWebFailure.formBodyUnavailable, phase: .navigation)
+                    return
+                }
+                // 带响应规则/私有头的整页返回必须重走共享执行器，重绑该页脚本与图片上下文。
+                load(entry.target, source: source, owner: loadedOwner, restoreScrollY: entry.scrollY, into: view,
+                     article: pageArticle, followingNavigation: true, historyIndex: index)
+            }
+        }
         private func restoreScrollIfReady(_ view: UIScrollView) {
             guard !isRevoked, accessState?.isCurrent == true, documentIsReady, let offset = pendingRestore,
                   view.contentSize.height > view.bounds.height || offset == 0 else { return }
@@ -647,9 +820,11 @@ struct RSSSourcePageWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError failure: Error) {
             if self.navigation === navigation { fail(failure, phase: .navigation) }
+            publishHistoryState(webView)
         }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError failure: Error) {
             if self.navigation === navigation { fail(failure, phase: .provisional) }
+            publishHistoryState(webView)
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             if !isRevoked { fail(WKError(.webContentProcessTerminated), phase: .webProcess) }
@@ -697,6 +872,9 @@ struct RSSSourcePageWebView: UIViewRepresentable {
             let id = generation
             let mayRunSource = sourceScriptsAllowed
             let currentURL = pageURL
+            let currentDocumentURL = webView.url
+            let reloadedHistoryIndex = webNavigationState != nil && navigationAction.navigationType == .reload && pageHistoryIndex >= 0
+                ? pageHistoryIndex : nil
             navigationTask?.cancel()
             navigationTask = Task { [weak webView] in
                 var replied = false
@@ -711,6 +889,19 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                         for action in result.actions { try deliver(action, authority: .sourceRule) }
                     }
                     if result.intercepted { return }
+                    // 同文档返回（含去掉hash及about:blank）只遍历历史，不重发整个页面。
+                    var previous = currentDocumentURL.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
+                    var next = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                    let fragmentNavigation = previous?.fragment != nil || next?.fragment != nil
+                    previous?.fragment = nil; next?.fragment = nil
+                    if let previousURL = previous?.url, previousURL == next?.url,
+                       fragmentNavigation || (navigationAction.navigationType == .backForward && hasHistoryWithinDocument(webView)),
+                       (["http", "https"].contains(scheme) && SourceRequestHeaderScope.origin(url) == currentURL.flatMap(SourceRequestHeaderScope.origin))
+                            || previousURL.absoluteString == "about:blank" {
+                        try await requestContext?.validate(source: source, owner: owner)
+                        guard id == generation, accessState?.isCurrent == true, !Task.isCancelled else { return }
+                        replied = true; decisionHandler(.allow); return
+                    }
                     if nativeBrowser, ["http", "https"].contains(scheme), url.user == nil, url.password == nil,
                        SourceRequestHeaderScope.origin(url) == currentURL.flatMap(SourceRequestHeaderScope.origin) {
                         try await requestContext?.validate(source: source, owner: owner)
@@ -729,7 +920,9 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                         try Task.checkCancellation()
                         guard id == generation, accessState?.isCurrent == true else { return }
                         replied = true; decisionHandler(.cancel)
-                        load(target, source: source, owner: owner, restoreScrollY: 0, into: webView, followingNavigation: true)
+                        let scrollY = reloadedHistoryIndex.map { pageHistory[$0].scrollY } ?? 0
+                        load(target, source: source, owner: owner, restoreScrollY: scrollY, into: webView,
+                             followingNavigation: true, historyIndex: reloadedHistoryIndex)
                     } else if let destination = RSSLinkRoute.route(url).url {
                         try deliver(.external(destination), authority: .page)
                     } else { throw RSSWebFailure.navigationBlocked }

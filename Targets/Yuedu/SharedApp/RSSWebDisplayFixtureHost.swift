@@ -24,11 +24,19 @@ struct RSSWebDisplayFixtureHost: View {
     [hidden]{display:none!important}
     .close{position:absolute;right:16px;top:16px;width:180px;height:80px;font-size:24px}
     #page-action{margin:80px 20px;min-width:150px;min-height:60px}
+    #open-child,#page-label{position:fixed;left:16px;top:16px;z-index:2}
+    #open-child{min-width:180px;min-height:60px;font-size:18px}
+    #page-label{top:84px;font-size:18px}
     </style></head><body>
     <button id="page-action" onclick="this.textContent='Action '+(++window.actions)">Action 0</button>
+    <button id="open-child" onclick="history.pushState({page:'child'}, '', '#child'); document.getElementById('page-label').textContent='Child page'">Open child page</button>
+    <p id="page-label">Home page</p>
     <div class="panel" id="second" hidden><button class="close" onclick="document.getElementById('second').hidden=true">Close panel 2</button></div>
     <div class="panel" id="first"><button class="close" onclick="document.getElementById('first').hidden=true;document.getElementById('second').hidden=false">Close panel 1</button></div>
-    <script>window.actions=0</script>
+    <script>
+    window.actions=0;
+    window.addEventListener('popstate', function(){ document.getElementById('page-label').textContent='Home page'; });
+    </script>
     </body></html>
     """
 }

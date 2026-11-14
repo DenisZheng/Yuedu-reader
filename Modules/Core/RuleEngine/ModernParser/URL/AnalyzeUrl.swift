@@ -362,11 +362,8 @@ class AnalyzeUrl {
             // Try JS evaluator for arbitrary expressions
             if let evaluator = jsEvaluator {
                 let bindings = buildJsBindings()
-                let result = evaluator(trimmed, bindings)
-                if let result, result != trimmed {
-                    NSLog("[企點診斷] AnalyzeUrl 模板 「%@」→「%@」", trimmed, result)
-                }
-                return result
+                // 表达式及结果可能含Token、请求参数或正文，不能绕过统一脱敏直接写系统日志。
+                return evaluator(trimmed, bindings)
             }
             // Fallback: try RuleData variable
             let v = getVariable(trimmed)

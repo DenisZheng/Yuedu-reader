@@ -43,6 +43,8 @@ private struct RSSPoCApplication: App {
             } else if let path = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_FIXTURE"],
                let storage = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_STORAGE"] {
                 RSSImportUIFixtureHost(file: URL(fileURLWithPath: path), directory: URL(fileURLWithPath: storage))
+            } else if ProcessInfo.processInfo.arguments.contains("-rss-audio-host-comparison") {
+                RSSAudioHostComparison.probeView()
             } else {
                 Color.clear.accessibilityIdentifier("rss-poc-isolated-host")
             }

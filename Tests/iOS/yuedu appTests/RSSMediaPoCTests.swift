@@ -6,7 +6,7 @@ import XCTest
 @testable import yuedu_app
 
 /// 仅记录诊断时间线；跨KVO/测试执行器的条目由同一锁保护，不参与播放器决策。
-private final class AudioTestTimeline: @unchecked Sendable {
+final class AudioTestTimeline: @unchecked Sendable {
     private let lock = NSLock()
     private let started = ProcessInfo.processInfo.systemUptime
     private var entries: [String] = []
@@ -171,9 +171,14 @@ final class RSSMediaPoCTests: XCTestCase {
         timeline.record("restore session returned")
     }
 
-    private static func audioState(player: AVPlayer, item: AVPlayerItem) -> String {
+    static func audioState(player: AVPlayer, item: AVPlayerItem) -> String {
         let session = AVAudioSession.sharedInstance()
-        return "status=\(item.status.rawValue) error=\(String(describing: item.error)) time=\(player.currentTime().seconds) rate=\(player.rate) control=\(player.timeControlStatus.rawValue) waiting=\(player.reasonForWaitingToPlay?.rawValue ?? "none") bufferEmpty=\(item.isPlaybackBufferEmpty) likely=\(item.isPlaybackLikelyToKeepUp) duration=\(item.duration.seconds) timebaseRate=\(item.timebase.map(CMTimebaseGetRate) ?? -1)\ncategory=\(session.category.rawValue) mode=\(session.mode.rawValue) sampleRate=\(session.sampleRate) outputs=\(session.currentRoute.outputs.map(\.portType.rawValue))"
+        let suppressed: String
+        if #available(iOS 26.0, *) { suppressed = String(player.audioOutputSuppressedDueToNonMixableAudioRoute) }
+        else { suppressed = "unavailable" }
+        // 只读诊断，不设置sourceClock、优先路由、静音或音量来制造时钟推进。
+        let output = "playerStatus=\(player.status.rawValue) outputSuppressed=\(suppressed) muted=\(player.isMuted) volume=\(player.volume) sourceClockOverridden=\(player.sourceClock != nil) effectiveTimebaseRate=\(item.timebase.map(CMTimebaseGetEffectiveRate) ?? -1)"
+        return "\(output)\nstatus=\(item.status.rawValue) error=\(String(describing: item.error)) time=\(player.currentTime().seconds) rate=\(player.rate) control=\(player.timeControlStatus.rawValue) waiting=\(player.reasonForWaitingToPlay?.rawValue ?? "none") bufferEmpty=\(item.isPlaybackBufferEmpty) likely=\(item.isPlaybackLikelyToKeepUp) duration=\(item.duration.seconds) timebaseRate=\(item.timebase.map(CMTimebaseGetRate) ?? -1)\ncategory=\(session.category.rawValue) mode=\(session.mode.rawValue) sampleRate=\(session.sampleRate) outputs=\(session.currentRoute.outputs.map(\.portType.rawValue))"
     }
 
     @discardableResult

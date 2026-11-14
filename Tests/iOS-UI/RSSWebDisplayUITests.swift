@@ -29,6 +29,45 @@ final class RSSWebDisplayUITests: XCTestCase {
     }
 
     @MainActor
+    func testClientSideWebBackReturnsToPageWithoutClosingSheet() {
+        checkWebBack(largeText: false, dark: false)
+    }
+
+    @MainActor
+    func testWebBackAndCloseStayReachableAtAX5() {
+        checkWebBack(largeText: true, dark: true)
+    }
+
+    @MainActor
+    private func checkWebBack(largeText: Bool, dark: Bool) {
+        let app = launch(largeText: largeText, dark: dark)
+        defer { app.terminate() }
+        open(app)
+        XCTAssertFalse(app.buttons["rss.web.back"].exists)
+        let openChild = app.webViews.buttons["Open child page"]
+        XCTAssertTrue(openChild.waitForExistence(timeout: 5), app.debugDescription)
+        openChild.tap()
+        XCTAssertTrue(app.webViews.staticTexts["Child page"].waitForExistence(timeout: 5), app.debugDescription)
+        let webBack = app.buttons["rss.web.back"]
+        XCTAssertTrue(webBack.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["rss.web.close"].isHittable)
+        XCTAssertTrue(webBack.isHittable)
+        attach(app, largeText ? "web-history-child-ax5" : "web-history-child")
+
+        webBack.tap()
+        XCTAssertTrue(app.webViews.staticTexts["Home page"].waitForExistence(timeout: 5), app.debugDescription)
+        let hiddenBack = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: webBack)
+        XCTAssertEqual(XCTWaiter.wait(for: [hiddenBack], timeout: 5), .completed, app.debugDescription)
+        XCTAssertTrue(app.buttons["rss.web.close"].isHittable, "网页后退不能关闭整个阅读界面")
+        XCTAssertTrue(app.webViews.firstMatch.exists)
+        attach(app, largeText ? "web-history-home-ax5" : "web-history-home")
+        close(app)
+        open(app)
+        XCTAssertFalse(app.buttons["rss.web.back"].exists, "重开后不能保留旧页面的历史操作")
+        close(app)
+    }
+
+    @MainActor
     func testNativeCloseStaysReachableAtAX5AndDark() {
         let original = XCUIDevice.shared.orientation
         XCUIDevice.shared.orientation = .portrait

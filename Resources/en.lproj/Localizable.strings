@@ -3363,6 +3363,7 @@
 "解鎖" = "Unlock";
 "輸入分組名稱（留空＝未分組）" = "Enter a group name (leave blank for Ungrouped)";
 "返回" = "Back";
+"網頁返回" = "Back in Web Page";
 "連結已儲存" = "Link Saved";
 "連結已儲存，下次開啟閱讀時匯入。" = "Link saved. It will be imported the next time you open Yuedu.";
 "輸入驗證碼" = "Enter Verification Code";

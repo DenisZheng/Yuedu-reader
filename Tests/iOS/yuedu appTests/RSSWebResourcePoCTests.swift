@@ -118,8 +118,166 @@ final class RSSWebResourcePoCTests: XCTestCase {
 
     func testWebMP4DynamicURLActuallyPlays() async throws { try await playWebMedia("video-still-landscape.mp4", inFrame: false) }
     func testWebHLSDynamicURLActuallyPlaysInsideIframe() async throws { try await playWebMedia("video-still-hls.m3u8", inFrame: true) }
+
+    func testPublicWebKitBoundariesBlockUnknownSubresourcesButCannotCountRequests() async throws {
+        let server = try VideoStillFixtureServer(directory: fixtures, routes: [
+            "/page": .init(body: Data("<script>window.boundaryResult = new Promise(resolve => addEventListener('message', event => resolve(event.data), {once:true}));</script><iframe id='child'></iframe>".utf8)),
+            "/frame": .init(body: Data("""
+                <iframe id="nested" src="/nested-frame"></iframe>
+                <img id="unknown-image" src="/unreviewed-image">
+                <script>
+                window.runBoundaryProbe = async function() {
+                    const image = document.getElementById('unknown-image');
+                    const imageWidth = await new Promise(resolve => {
+                        if (image.complete) resolve(image.naturalWidth);
+                        else { image.onload = () => resolve(image.naturalWidth); image.onerror = () => resolve(0); }
+                    });
+                    const approved = [];
+                    for (let i = 0; i < 2; i++) {
+                        const response = await fetch('/pixel?approved=1', {cache:'no-store'});
+                        approved.push(response.status);
+                        await response.arrayBuffer();
+                    }
+                    const unknownFetchBlocked = await fetch('/unreviewed-fetch', {cache:'no-store'}).then(() => false, () => true);
+                    const redirectBlocked = await fetch('/redirect-pixel', {cache:'no-store'}).then(() => false, () => true);
+                    parent.postMessage({imageWidth, approved, unknownFetchBlocked, redirectBlocked}, '*');
+                };
+                addEventListener('load', () => window.runBoundaryProbe(), {once:true});
+                </script>
+                """.utf8)),
+            "/nested-frame": .init(body: Data("<img src='/unreviewed-nested-image'>".utf8)),
+            "/pixel": .init(body: Data("approved".utf8), type: "text/plain"),
+            "/redirect-pixel": .init(body: Data(), status: "302 Found", headers: ["Location": "/denied-redirect-target"])
+        ])
+        let base = try await server.start()
+        defer { server.stop() }
+        let frameURL = try crossOriginLocalURL(base.appendingPathComponent("frame"))
+        let nestedFrameURL = try crossOriginLocalURL(base.appendingPathComponent("nested-frame"))
+        let pageURL = base.appendingPathComponent("page")
+        let pageHTML = "<script>window.boundaryResult = new Promise(resolve => addEventListener('message', event => resolve(event.data), {once:true}));</script><iframe id='child' src='\(frameURL.absoluteString)'></iframe>"
+        server.route { request in
+            request.path == "/page" ? .init(body: Data(pageHTML.utf8)) : nil
+        }
+        let approvedImageFetch = try XCTUnwrap(URL(string: "/pixel?approved=1", relativeTo: frameURL)?.absoluteURL)
+        let redirectFetch = frameURL.deletingLastPathComponent().appendingPathComponent("redirect-pixel")
+        let contentStoreDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("s8-wk-resource-rules-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: contentStoreDirectory, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: contentStoreDirectory) }
+            catch { XCTFail("清理本次本地WebKit规则fixture失败") }
+        }
+        let contentStore = try XCTUnwrap(WKContentRuleListStore(url: contentStoreDirectory))
+        let encoded = try denyLocalFixtureResourcesExcept([pageURL, frameURL, nestedFrameURL, approvedImageFetch, redirectFetch], port: XCTUnwrap(base.port))
+        let ruleIdentifier = "s8-\(UUID().uuidString)"
+        let rules = try await contentStore.compileContentRuleList(forIdentifier: ruleIdentifier, encodedContentRuleList: encoded)
+        let configuration = configuration()
+        configuration.userContentController.add(try XCTUnwrap(rules))
+        let page = try RSSPoCWebPage(configuration: configuration)
+        defer { page.close() }
+        let navigation = FixtureNavigationPolicyProbe(allowedPaths: ["/page", "/frame", "/nested-frame"])
+        page.view.navigationDelegate = navigation
+        let pageLoaded = expectation(description: "主页面完成")
+        navigation.onMainPageFinished = { pageLoaded.fulfill() }
+        navigation.onMainPageFailure = { pageLoaded.fulfill() }
+        XCTAssertNotNil(page.view.load(URLRequest(url: pageURL)))
+        let mainLoadResult = await XCTWaiter.fulfillment(of: [pageLoaded], timeout: 10)
+        XCTAssertEqual(mainLoadResult, .completed)
+        XCTAssertFalse(navigation.mainPageFailed)
+
+        let result = try await page.view.callAsyncJavaScript("""
+            return await Promise.race([
+                window.boundaryResult,
+                new Promise(resolve => setTimeout(() => resolve({fixtureTimeout:true}), 5000))
+            ]);
+            """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+        XCTAssertNil(result?["fixtureTimeout"], "本地WebKit白名单fixture未在固定时限内完成探针")
+        XCTAssertEqual(result?["imageWidth"] as? Int, 0, "未批准的iframe图片应由声明式规则静态阻断")
+        XCTAssertEqual(result?["approved"] as? [Int], [200, 200])
+        XCTAssertEqual(result?["unknownFetchBlocked"] as? Bool, true)
+        XCTAssertEqual(result?["redirectBlocked"] as? Bool, true, "跳转后的未批准目标不得抵达fixture服务")
+        XCTAssertEqual(navigation.actions.map(\.path).sorted(), ["/frame", "/nested-frame", "/page"])
+        XCTAssertTrue(navigation.actions.contains { $0.path == "/frame" && !$0.isMainFrame },
+                      "导航delegate可以识别iframe文档导航")
+        XCTAssertTrue(navigation.actions.contains { $0.path == "/nested-frame" && !$0.isMainFrame },
+                      "导航delegate也可以识别本地嵌套frame文档导航")
+
+        let requests = server.requests
+        XCTAssertEqual(requests.filter { $0.path == "/page" }.count, 1)
+        XCTAssertEqual(requests.filter { $0.path == "/frame" }.count, 1)
+        XCTAssertEqual(requests.filter { $0.path == "/nested-frame" }.count, 1)
+        XCTAssertEqual(requests.filter { $0.path == "/pixel" && $0.query == "approved=1" }.count, 2,
+                       "相同的精确白名单URL可以被子frame重复请求；ContentRuleList没有运行时计数预算")
+        XCTAssertEqual(requests.filter { $0.path == "/redirect-pixel" }.count, 1)
+        XCTAssertFalse(requests.contains { ["/unreviewed-image", "/unreviewed-nested-image", "/unreviewed-fetch", "/denied-redirect-target"].contains($0.path) })
+        XCTAssertEqual(requests.count, 6, "delegate只看文档导航；本地服务收到六次HTTP请求")
+        print("S8_WEBKIT_BOUNDARY fixture=loopback documentNavigationCallbacks=3 allowedDocuments=3 nestedFrames=1 repeatedApprovedSubresourceHTTP=2 blockedUnknownSubresourceHTTP=0 redirectDestinationHTTP=0 actualHTTP=\(requests.count) requestBudget=notProvidedByNavigationDelegateOrContentRuleList")
+        try await contentStore.removeContentRuleList(forIdentifier: ruleIdentifier)
+    }
+
+    func testNavigationDelegateRejectsUnapprovedCrossOriginIframeBeforeRequest() async throws {
+        let server = try VideoStillFixtureServer(directory: fixtures, routes: [
+            "/page": .init(body: Data("<iframe id='child' src='/frame'></iframe>".utf8)),
+            "/frame": .init(body: Data("<p>fixture</p>".utf8)),
+            "/denied-frame": .init(body: Data("<p>must-not-load</p>".utf8))
+        ])
+        let base = try await server.start()
+        defer { server.stop() }
+        let page = try RSSPoCWebPage(configuration: configuration())
+        defer { page.close() }
+        let navigation = FixtureNavigationPolicyProbe(allowedPaths: ["/page", "/frame"])
+        page.view.navigationDelegate = navigation
+        let pageLoaded = expectation(description: "主页面完成")
+        let rejectedFrame = expectation(description: "未批准iframe导航在HTTP前拒绝")
+        navigation.onMainPageFinished = { pageLoaded.fulfill() }
+        navigation.onMainPageFailure = { pageLoaded.fulfill() }
+        navigation.onRejected = { path, isMainFrame in
+            if path == "/denied-frame" && !isMainFrame { rejectedFrame.fulfill() }
+        }
+        XCTAssertNotNil(page.view.load(URLRequest(url: base.appendingPathComponent("page"))))
+        let mainLoadResult = await XCTWaiter.fulfillment(of: [pageLoaded], timeout: 10)
+        XCTAssertEqual(mainLoadResult, .completed)
+        XCTAssertFalse(navigation.mainPageFailed)
+        let deniedURL = try crossOriginLocalURL(base.appendingPathComponent("denied-frame"))
+        _ = try await page.view.callAsyncJavaScript("""
+            document.getElementById('child').src = target;
+            return true;
+            """, arguments: ["target": deniedURL.absoluteString], in: nil, contentWorld: .page)
+        let rejectedFrameResult = await XCTWaiter.fulfillment(of: [rejectedFrame], timeout: 5)
+        XCTAssertEqual(rejectedFrameResult, .completed)
+        XCTAssertTrue(navigation.actions.contains { $0.path == "/denied-frame" && !$0.isMainFrame })
+        XCTAssertFalse(server.requests.contains { $0.path == "/denied-frame" },
+                       "被导航delegate拒绝的跨源frame文档在本地HTTP服务没有产生请求")
+        print("S8_WEBKIT_BOUNDARY fixture=loopback rejectedIframeNavigation=true rejectedFrameHTTP=0 requestsBeforeCancellation=policy-cancel")
+    }
+
     func testEncryptedHLSRequestsKeyAndSegmentsWithScopedCookie() async throws {
         try await playWebMedia("secure/encrypted.m3u8", inFrame: false, encrypted: true)
+    }
+
+    private func crossOriginLocalURL(_ url: URL) throws -> URL {
+        var parts = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        parts.host = "localhost"
+        return try XCTUnwrap(parts.url)
+    }
+
+    private func denyLocalFixtureResourcesExcept(_ allowed: [URL], port: Int) throws -> String {
+        func rule(_ filter: String, _ action: String) -> [String: Any] {
+            ["trigger": ["url-filter": filter], "action": ["type": action]]
+        }
+        var rules = [
+            rule("127\\.0\\.0\\.1:\(port)/", "block"),
+            rule("localhost:\(port)/", "block")
+        ]
+        for url in allowed {
+            guard ["127.0.0.1", "localhost"].contains(url.host ?? ""),
+                  url.path.range(of: #"^/[A-Za-z0-9/-]+$"#, options: .regularExpression) != nil else {
+                throw URLError(.badURL)
+            }
+            let host = url.host == "127.0.0.1" ? "127\\.0\\.0\\.1" : "localhost"
+            let query = url.query.map { "\\?" + NSRegularExpression.escapedPattern(for: $0) } ?? ""
+            rules.append(rule("\(host):\(port)\(url.path)\(query)$", "ignore-previous-rules"))
+        }
+        return String(decoding: try JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys]), as: UTF8.self)
     }
 
     private func playWebMedia(_ media: String, inFrame: Bool, encrypted: Bool = false) async throws {
@@ -193,5 +351,52 @@ final class RSSWebResourcePoCTests: XCTestCase {
             context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
         }
     }
+}
 
+@MainActor
+private final class FixtureNavigationPolicyProbe: NSObject, WKNavigationDelegate {
+    struct Action {
+        var path: String
+        var isMainFrame: Bool
+    }
+
+    private let allowedPaths: Set<String>
+    private(set) var actions: [Action] = []
+    private(set) var mainPageFailed = false
+    var onMainPageFinished: (() -> Void)?
+    var onMainPageFailure: (() -> Void)?
+    var onRejected: ((String, Bool) -> Void)?
+
+    init(allowedPaths: Set<String>) { self.allowedPaths = allowedPaths }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+        let path = navigationAction.request.url?.path ?? ""
+        let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        actions.append(Action(path: path, isMainFrame: isMainFrame))
+        guard allowedPaths.contains(path) else {
+            decisionHandler(.cancel)
+            onRejected?(path, isMainFrame)
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if webView.url?.path == "/page" { onMainPageFinished?() }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        failMainPageIfNeeded(webView)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        failMainPageIfNeeded(webView)
+    }
+
+    private func failMainPageIfNeeded(_ webView: WKWebView) {
+        guard webView.url?.path == "/page" else { return }
+        mainPageFailed = true
+        onMainPageFailure?()
+    }
 }

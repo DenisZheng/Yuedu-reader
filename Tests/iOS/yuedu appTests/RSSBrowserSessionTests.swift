@@ -106,6 +106,157 @@ struct RSSBrowserSessionTests {
         #expect(try await web.evaluateJavaScript("window.storageRecovered") as? String == "yes")
     }
 
+    @Test("网页返回回到首页，不关闭页面容器或重发子页请求", arguments: [false, true])
+    func webHistoryBackReturnsToPreviousDocument(sharedExecutor: Bool) async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let requiredHeaders = sharedExecutor ? ["x-history": "fixture"] : [:]
+        let server = try VideoStillFixtureServer(directory: root, routes: [
+            "/home": .init(body: Data("<p id='page'>Home</p><a id='child' href='/child'>Open child</a>".utf8), requiredHeaders: requiredHeaders),
+            "/child": .init(body: Data("<p id='page'>Child</p>".utf8), requiredHeaders: requiredHeaders)
+        ])
+        let base = try await server.start()
+        defer {
+            server.stop()
+            if FileManager.default.fileExists(atPath: root.path) {
+                do { try FileManager.default.removeItem(at: root) } catch { Issue.record(error) }
+            }
+        }
+        var source = RSSSource(name: "Browser history fixture", url: base.appendingPathComponent("home").absoluteString)
+        source.importedFromLegado = true
+        source.singleUrl = true
+        source.cacheFirst = false
+        source.enabledCookieJar = true
+        source.header = sharedExecutor ? #"{"X-History":"fixture"}"# : "{}"
+        source.preloadJs = sharedExecutor ? "window.readHistoryFixture=()=>source.get('unused');" : nil
+        let target = try #require(try await RSSOpenTarget.resolve(source: source))
+        let state = State()
+        let webNavigation = RSSWebNavigationState()
+        let hosted = try host(RSSSourcePageWebView(source: source, target: target,
+            error: Binding(get: { state.error }, set: { state.error = $0 }),
+            loading: Binding(get: { state.loading }, set: { state.loading = $0 }),
+            webNavigation: webNavigation))
+        defer { hosted.isHidden = true; hosted.rootViewController = nil }
+        let deadline = ContinuousClock.now + .seconds(8)
+        while state.loading, ContinuousClock.now < deadline { await Task.yield() }
+        try #require(!state.loading && state.error == nil)
+        let web = try #require(findWeb(hosted))
+        #expect(!webNavigation.canGoBack)
+        #expect(server.requests.count == 1)
+        #expect((server.requests[0].headers["sec-fetch-mode"] == "navigate") == !sharedExecutor)
+
+        _ = try await web.evaluateJavaScript("document.getElementById('child').click(); void 0")
+        let childDeadline = ContinuousClock.now + .seconds(8)
+        while (web.url?.path != "/child" || web.isLoading || !webNavigation.canGoBack), ContinuousClock.now < childDeadline {
+            await Task.yield()
+        }
+        try #require(web.url?.path == "/child" && !web.isLoading && webNavigation.canGoBack)
+        #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Child")
+        #expect(server.requests.count == 2)
+        #expect((server.requests[1].headers["sec-fetch-mode"] == "navigate") == !sharedExecutor)
+
+        // Android会跳过刷新造成的重复历史；刷新子页后仍应一步返回首页。
+        web.reload()
+        let reloadDeadline = ContinuousClock.now + .seconds(8)
+        while (server.requests.filter { $0.path == "/child" }.count != 2 || web.isLoading || state.loading),
+              ContinuousClock.now < reloadDeadline { await Task.yield() }
+        try #require(server.requests.filter { $0.path == "/child" }.count == 2 && !state.loading && state.error == nil)
+        webNavigation.goBack()
+        let backDeadline = ContinuousClock.now + .seconds(8)
+        while (web.url?.path != "/home" || web.isLoading || webNavigation.canGoBack), ContinuousClock.now < backDeadline {
+            await Task.yield()
+        }
+        try #require(web.url?.path == "/home" && !web.isLoading && !webNavigation.canGoBack)
+        #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Home")
+        #expect(server.requests.filter { $0.path == "/child" }.count == 2)
+        if sharedExecutor {
+            #expect(server.requests.allSatisfy { $0.headers["x-history"] == "fixture" && $0.headers["sec-fetch-mode"] == nil })
+            #expect(try await web.evaluateJavaScript("window.readHistoryFixture()") as? String == "", "返回后原页面桥必须绑定到恢复后的请求上下文")
+        }
+    }
+
+    @Test("同文档pushState与hash返回恢复首页且不发起额外文档请求",
+          arguments: [(false, "#child", true), (false, "hash", true), (true, "#child", true), (true, "hash", true),
+                      (true, "#child", false), (true, "hash", false), (false, "/child", true), (true, "/child", true)])
+    func webHistoryBackReturnsWithinDocument(injectedHTML: Bool, destination: String, withBaseURL: Bool) async throws {
+        let html = """
+        <!doctype html><html><body><p id="page">Home</p><script>
+        function updatePage() { document.getElementById('page').textContent = location.hash === '#child' || location.pathname === '/child' ? 'Child' : 'Home'; }
+        addEventListener('popstate', updatePage);
+        addEventListener('hashchange', updatePage);
+        </script></body></html>
+        """
+        let server = try VideoStillFixtureServer(directory: .temporaryDirectory, routes: [
+            "/home": .init(body: Data(html.utf8), type: "text/html")
+        ])
+        let base = try await server.start()
+        defer { server.stop() }
+        var source = RSSSource(name: "Same-document history fixture", url: base.appendingPathComponent("home").absoluteString)
+        source.importedFromLegado = true; source.singleUrl = true; source.enabledCookieJar = true
+        source.header = "{}"; source.cacheFirst = false; source.loadWithBaseUrl = withBaseURL
+        let target: RSSOpenTarget
+        if injectedHTML { target = .html(html, baseURL: source.url) }
+        else { target = try #require(try await RSSOpenTarget.resolve(source: source)) }
+        let state = State()
+        let webNavigation = RSSWebNavigationState()
+        let window = try host(RSSSourcePageWebView(source: source, target: target,
+            error: Binding(get: { state.error }, set: { state.error = $0 }),
+            loading: Binding(get: { state.loading }, set: { state.loading = $0 }), webNavigation: webNavigation))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let firstDeadline = ContinuousClock.now + .seconds(8)
+        while state.loading, ContinuousClock.now < firstDeadline { await Task.yield() }
+        try #require(!state.loading && state.error == nil)
+        let web = try #require(findWeb(window))
+        #expect(!webNavigation.canGoBack)
+        let initialURL = web.url
+        _ = try await web.evaluateJavaScript(destination == "hash" ? "location.hash = 'child'; void 0" : "history.pushState({}, '', '\(destination)'); updatePage(); void 0")
+        let childDeadline = ContinuousClock.now + .seconds(8)
+        while !webNavigation.canGoBack, ContinuousClock.now < childDeadline { await Task.yield() }
+        #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Child")
+        #expect(web.canGoBack)
+        #expect(web.backForwardList.backList.count == 1)
+        try #require(webNavigation.canGoBack)
+        webNavigation.goBack()
+        let backDeadline = ContinuousClock.now + .seconds(8)
+        while (web.url != initialURL || webNavigation.canGoBack || state.loading), ContinuousClock.now < backDeadline { await Task.yield() }
+        #expect(state.error == nil)
+        #expect(!webNavigation.canGoBack)
+        #expect(web.url == initialURL)
+        #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Home")
+        #expect(server.requests.count == (injectedHTML ? 0 : 1))
+    }
+
+    @Test("返回不会自动重送共享执行器的POST表单")
+    func historyDoesNotResubmitPost() async throws {
+        let server = try VideoStillFixtureServer(directory: .temporaryDirectory, routes: [
+            "/form": .init(body: Data("<a id='child' href='/child'>Open child</a>".utf8), allowedMethods: ["POST"]),
+            "/child": .init(body: Data("<p id='page'>Child</p>".utf8))
+        ])
+        let base = try await server.start()
+        defer { server.stop() }
+        var source = RSSSource(name: "History POST fixture", url: base.appendingPathComponent("form").absoluteString)
+        source.importedFromLegado = true; source.singleUrl = true; source.cacheFirst = false
+        var request = URLRequest(url: base.appendingPathComponent("form"))
+        request.httpMethod = "POST"; request.httpBody = Data("fixture=readonly".utf8)
+        let state = State()
+        let webNavigation = RSSWebNavigationState()
+        let window = try host(RSSSourcePageWebView(source: source, target: .request(request),
+            error: Binding(get: { state.error }, set: { state.error = $0 }),
+            loading: Binding(get: { state.loading }, set: { state.loading = $0 }), webNavigation: webNavigation))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let firstDeadline = ContinuousClock.now + .seconds(8)
+        while state.loading, ContinuousClock.now < firstDeadline { await Task.yield() }
+        try #require(!state.loading && state.error == nil)
+        let web = try #require(findWeb(window))
+        _ = try await web.evaluateJavaScript("document.getElementById('child').click(); void 0")
+        let deadline = ContinuousClock.now + .seconds(8)
+        while (!webNavigation.canGoBack || state.loading), ContinuousClock.now < deadline { await Task.yield() }
+        try #require(webNavigation.canGoBack && state.error == nil)
+        webNavigation.goBack()
+        #expect(state.error == RSSWebFailure.formBodyUnavailable.errorDescription)
+        #expect(server.requests.filter { $0.path == "/form" }.count == 1)
+        #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Child")
+    }
+
     @Test("浏览器路径跨同源导航后仍响应源删除和登录撤销", arguments: [false, true])
     func browserRevocationSurvivesNavigation(deleteSource: Bool) async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -124,9 +275,10 @@ struct RSSBrowserSessionTests {
         store.addSource(source)
         let state = State()
         let target = try #require(try await RSSOpenTarget.resolve(source: source, owner: store))
+        let webNavigation = RSSWebNavigationState()
         let window = try host(RSSSourcePageWebView(source: source, target: target,
             error: Binding(get: { state.error }, set: { state.error = $0 }),
-            loading: Binding(get: { state.loading }, set: { state.loading = $0 }), owner: store))
+            loading: Binding(get: { state.loading }, set: { state.loading = $0 }), owner: store, webNavigation: webNavigation))
         defer { window.isHidden = true; window.rootViewController = nil }
         var deadline = ContinuousClock.now + .seconds(8)
         while state.loading, ContinuousClock.now < deadline { await Task.yield() }
@@ -137,6 +289,7 @@ struct RSSBrowserSessionTests {
         try #require(web.url?.path == "/next" && !state.loading)
         #expect(server.requests.map(\.path) == ["/start", "/next"])
         #expect(server.requests.allSatisfy { $0.headers["sec-fetch-mode"] == "navigate" })
+        try #require(webNavigation.canGoBack)
         if deleteSource { store.removeSources(ids: [source.id]) }
         else { store.authenticationChanged(for: source.id) }
         deadline = ContinuousClock.now + .seconds(8)
@@ -146,6 +299,9 @@ struct RSSBrowserSessionTests {
               ContinuousClock.now < deadline { await Task.yield() }
         #expect(try await web.evaluateJavaScript("document.getElementById('live') === null") as? Bool == true)
         #expect(!web.configuration.defaultWebpagePreferences.allowsContentJavaScript)
+        #expect(!webNavigation.canGoBack)
+        webNavigation.goBack()
+        #expect(server.requests.count == 2, "撤销后不能用旧返回操作重新发起请求")
         try await store.flushPersistence()
     }
 
