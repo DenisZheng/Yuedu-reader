@@ -62,12 +62,13 @@ import Testing
         let view = RSSArticleCollection(articles: articles, presentation: presentation, header: { EmptyView() }, footer: { EmptyView() }) { article in
             RSSArticleRow(source: source, article: article, timeFormatter: formatter, owner: store, presentation: presentation)
             .frame(maxWidth: .infinity)
+            // 在条目处观察就绪信号；懒容器聚合偏好可能遗漏同一帧内最后一次图片更新。
+            .onPreferenceChange(RSSArticleThumbnail.ReadyImages.self) { ids in Task { @MainActor in capture.acceptImages(ids) } }
             .background { GeometryReader { geometry in Color.clear.preference(key: Frames.self, value: [article.id: geometry.frame(in: .named("fixture"))]) } }
         }
         .coordinateSpace(name: "fixture")
         .environment(\.dynamicTypeSize, accessibility ? .accessibility3 : .large)
         .onPreferenceChange(Frames.self) { frames in Task { @MainActor in capture.accept(frames) } }
-        .onPreferenceChange(RSSArticleThumbnail.ReadyImages.self) { ids in Task { @MainActor in capture.acceptImages(ids) } }
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first { $0.isKeyWindow }
         let window = UIWindow(windowScene: scene)

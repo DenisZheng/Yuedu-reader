@@ -68,7 +68,10 @@ enum StorageLocations {
 
     /// The bookshelf index. Deleting this used to empty the user's shelf.
     static var booksMetadataFile: URL {
-        support.appendingPathComponent("books_meta.json")
+        #if DEBUG
+        if let file = BookStoreTestSeed.metadataFile { return file }
+        #endif
+        return support.appendingPathComponent("books_meta.json")
     }
 
     /// Installed book sources.

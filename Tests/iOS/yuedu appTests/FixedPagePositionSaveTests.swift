@@ -3,6 +3,7 @@ import Foundation
 import SwiftUI
 import Testing
 import UIKit
+import XCTest
 @testable import yuedu_app
 
 /// 漫畫閱讀器讀著讀著存進度，不能讓書庫發布變更。
@@ -30,6 +31,168 @@ struct FixedPagePositionSaveTests {
         harness.leave()
         #expect(harness.publishes == 1, "leaving the reader shows the shelf where the reader is")
         #expect(harness.store.books.first { $0.id == harness.bookID }?.mangaPage == 3)
+    }
+
+    /// 回饋 #183：線上漫畫開書後翻頁、從 App 切換器殺掉，重開回到第一頁。開書剛寫過書架
+    /// （`updateLastOpened`），同一章內翻頁只改 `mangaPage`，存檔判斷不把它當變化，等 60 秒才寫；
+    /// 離開前景時也沒有待寫的存檔可以沖掉。
+    @Test("a page turned within a chapter right after opening survives the app being killed (FB-183)")
+    func pageTurnRightAfterOpeningIsWritten() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FixedPagePositionSaveTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("books_meta.json")
+        let store = BookStore(metadataFileURL: file)
+        var book = ReadingBook(title: "Manga", author: "", contentFilename: "")
+        book.isOnline = true
+        book.onlineChapters = (0..<3).map {
+            OnlineChapterRef(index: $0, title: "Chapter \($0 + 1)", url: "https://example.invalid/chapter/\($0)")
+        }
+        store.replaceBooksFromSync([book])
+        store.waitForQueuedWrites()
+
+        // Opening the book writes the shelf.
+        store.updateLastOpened(bookId: book.id)
+        store.flushPendingMetadataSave()
+        await BookStore.queuedWritesLanded()
+
+        // The reader's quiet save for a page turned in the same chapter.
+        store.updateMangaPosition(bookId: book.id, chapter: 0, page: 5, totalChapters: 3, notifyLibraryViews: false)
+        // The scene leaves the foreground; the app is then killed.
+        store.flushPendingMetadataSave()
+        await BookStore.queuedWritesLanded()
+
+        let relaunched = BookStore(metadataFileURL: file)
+        #expect(relaunched.books.first { $0.id == book.id }?.mangaPage == 5)
+    }
+
+    /// The reader waits 0.8 s on a page before saving it; an app sent to the background inside
+    /// that wait saves the page there and then, as the text reader does on resign-active.
+    @Test("resigning active saves the page on screen without waiting for the dwell (FB-183)")
+    func resigningActiveSavesTheCurrentPage() async throws {
+        let harness = try await Harness()
+        defer { harness.tearDown() }
+        let strip = try #require(harness.reader.reader as? FixedPageWebtoonViewController)
+
+        strip.goToPage(5, animated: false)
+        try #require(strip.currentPageIndex() == 5)
+        NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+        #expect(harness.store.books.first { $0.id == harness.bookID }?.mangaPage == 5)
+
+        harness.store.flushPendingMetadataSave()
+        await BookStore.queuedWritesLanded()
+        let relaunched = BookStore(metadataFileURL: harness.directory.appendingPathComponent("books_meta.json"))
+        #expect(relaunched.books.first { $0.id == harness.bookID }?.mangaPage == 5)
+    }
+
+    /// FB-179: after a reinstall the shelf comes back from iCloud without any book's table of
+    /// contents (each device keeps its own). The reader opened blank, and closing it saved
+    /// chapter 0 page 0 over the synced position, which the next sync uploaded.
+    @Test("an online manga opened without its chapters keeps its synced place when its list cannot be fetched (FB-179)")
+    func blankReaderSavesNothing() async throws {
+        let fixture = try ReinstalledManga()
+        defer { fixture.tearDown() }
+        struct Unreachable: Error {}
+        let state = FixedPageReaderState()
+        let reader = FixedPageReaderViewController(
+            book: fixture.book, store: fixture.store, state: state, chapterFetcher: MockChapterFetcher(),
+            refreshTableOfContents: { _ in throw Unreachable() }
+        )
+        let window = try fixture.show(reader)
+        defer { window.isHidden = true; window.rootViewController = nil }
+
+        let failed = XCTestExpectation(description: "收到目录请求失败")
+        let observation = state.$errorMessage.first { $0 != nil }.sink { _ in failed.fulfill() }
+        defer { observation.cancel() }
+        #expect(await XCTWaiter.fulfillment(of: [failed], timeout: 3) == .completed)
+        #expect(state.errorMessage != nil, "a list that could not be fetched is shown, with 重試")
+
+        reader.beginAppearanceTransition(false, animated: false)
+        reader.endAppearanceTransition()
+        let saved = try #require(fixture.store.books.first { $0.id == fixture.book.id })
+        #expect(saved.mangaChapterIndex == 7)
+        #expect(saved.mangaPage == 12)
+    }
+
+    @Test("an online manga opened without its chapters fetches them and opens at its synced place (FB-179)")
+    func fetchesTheListAndOpensAtTheSyncedPlace() async throws {
+        let fixture = try ReinstalledManga()
+        defer { fixture.tearDown() }
+        let fetcher = MockChapterFetcher()
+        for _ in 0..<6 {
+            await fetcher.enqueuePackage(
+                chapterIndex: 7, package: Harness.package(of: fixture.book, chapter: 7, pages: 20))
+        }
+        let store = fixture.store
+        let bookId = fixture.book.id
+        let state = FixedPageReaderState()
+        let reader = FixedPageReaderViewController(
+            book: fixture.book, store: store, state: state, chapterFetcher: fetcher,
+            refreshTableOfContents: { id in
+                // What `refreshOnlineBookMetadata` leaves: the list stored for the book.
+                var book = try #require(store.readingBook(id: id))
+                book.onlineChapters = (0..<10).map {
+                    OnlineChapterRef(index: $0, title: "Chapter \($0 + 1)", url: "https://example.invalid/chapter/\($0)")
+                }
+                store.replaceBooksFromSync([book])
+            }
+        )
+        let window = try fixture.show(reader)
+        defer { window.isHidden = true; window.rootViewController = nil }
+
+        let opened = XCTestExpectation(description: "同步章节的20页已加载")
+        let observation = state.$totalPages.first { $0 == 20 }.sink { _ in opened.fulfill() }
+        defer { observation.cancel() }
+        #expect(await XCTWaiter.fulfillment(of: [opened], timeout: 5) == .completed)
+        try #require(state.totalPages == 20, "the saved chapter never opened")
+        #expect(state.currentChapterIndex == 7)
+        #expect(state.chapterListItems.count == 10)
+        #expect(reader.reader?.currentPageIndex() == 12)
+
+        reader.beginAppearanceTransition(false, animated: false)
+        reader.endAppearanceTransition()
+        let saved = try #require(store.books.first { $0.id == bookId })
+        #expect(saved.mangaChapterIndex == 7)
+        #expect(saved.mangaPage == 12)
+    }
+
+    /// A reinstalled shelf's online manga: its place synced (chapter 8, page 13), its chapters not.
+    @MainActor
+    private struct ReinstalledManga {
+        let directory: URL
+        let store: BookStore
+        let book: ReadingBook
+
+        init() throws {
+            directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("FixedPagePositionSaveTests-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            store = BookStore(metadataFileURL: directory.appendingPathComponent("books_meta.json"))
+            var book = ReadingBook(title: "Manga", author: "", contentFilename: "")
+            book.isOnline = true
+            book.mangaChapterIndex = 7
+            book.mangaPage = 12
+            book.currentPosition = 0.35
+            store.replaceBooksFromSync([book])
+            store.waitForQueuedWrites()
+            store.readerSettings.setFixedPageConfiguration(.recommendedDefault(for: .webtoon), for: book.id)
+            self.book = book
+        }
+
+        func show(_ reader: UIViewController) throws -> UIWindow {
+            let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+            window.rootViewController = reader
+            window.makeKeyAndVisible()
+            return window
+        }
+
+        func tearDown() {
+            store.waitForQueuedWrites()
+            try? FileManager.default.removeItem(at: directory)
+        }
     }
 
     @Test("a strip closed while it is still moving stops watching its frames")
@@ -193,8 +356,8 @@ struct FixedPagePositionSaveTests {
             try? FileManager.default.removeItem(at: directory)
         }
 
-        private static func package(of book: ReadingBook, chapter: Int) -> ChapterPackage {
-            let content = (0..<pagesPerChapter)
+        static func package(of book: ReadingBook, chapter: Int, pages: Int = pagesPerChapter) -> ChapterPackage {
+            let content = (0..<pages)
                 .map { #"<img src="https://example.invalid/c\#(chapter)/p\#($0).jpg">"# }
                 .joined(separator: "\n")
             return ChapterPackage(

@@ -46,6 +46,7 @@ struct ReadingPositionSyncTests {
             id: { $0.bookId },
             hash: hash,
             fallbackUpdatedAt: { savedAt[$0.bookId] ?? .distantPast },
+            firstMergeKeepsRemote: ICloudSyncManager.unsyncedPositionYieldsToCloud,
             now: now
         )
         let written = result.shouldApplyLocally ? device.store.applySyncItems(result.values) : 0
@@ -96,6 +97,33 @@ struct ReadingPositionSyncTests {
         #expect(iPad.store.loadSync(for: bookId) == further)
     }
 
+    /// FB-179: reinstalled, the reader opened a book before its position arrived and saved
+    /// chapter 1 just now. The first merge on the fresh install (no shadow) must not let that
+    /// newer file go up over the place read before.
+    @Test func aReinstalledDeviceTakesTheCloudsPlaceOverTheChapterItOpenedAt() async throws {
+        let bookId = UUID().uuidString
+        let place = CoreTextReadingPosition(spineIndex: 40, charOffset: 512)
+        var cloud = [SyncRecord(
+            id: bookId,
+            value: ReadingPositionSyncItem(bookId: bookId, position: place, countsPictures: true),
+            updatedAt: lastSync,
+            deleted: false
+        )]
+        let reinstalled = try Device()
+        try await reinstalled.read(bookId, to: .chapterStart(0), at: lastSync.addingTimeInterval(86_400))
+
+        let first = sync(reinstalled, cloud: &cloud, now: lastSync.addingTimeInterval(86_460))
+        #expect(first.shouldApply)
+        #expect(reinstalled.store.loadSync(for: bookId) == place, "the reader restores the synced place")
+        #expect(cloud.first { $0.id == bookId }?.value?.spineIndex == 40, "the cloud keeps it")
+
+        // Read on from there: the device has a shadow now, and newest-wins is back.
+        let further = CoreTextReadingPosition(spineIndex: 41, charOffset: 0)
+        try await reinstalled.read(bookId, to: further, at: lastSync.addingTimeInterval(90_000))
+        _ = sync(reinstalled, cloud: &cloud, now: lastSync.addingTimeInterval(90_060))
+        #expect(cloud.first { $0.id == bookId }?.value?.spineIndex == 41)
+    }
+
     @Test func onlyBookPositionFilesAreSynced() async throws {
         let device = try Device()
         let bookId = UUID().uuidString
@@ -118,6 +146,19 @@ struct ReadingPositionSyncTests {
         let other = ReadingPositionSyncItem(bookId: bookId, position: .chapterStart(8), countsPictures: true, textVersion: 1)
         #expect(device.store.applySyncItems([other]) == 0)
         #expect(device.store.syncItems().map(\.item) == [mine])
+    }
+
+    @Test("首次同步的进度保护不把另一正文版本的位置覆盖到当前版本")
+    func firstSyncKeepsDifferentTextVersionsApart() {
+        let bookId = UUID().uuidString
+        let current = ReadingPositionSyncItem(bookId: bookId, position: .chapterStart(3), countsPictures: true, textVersion: 2)
+        let previous = ReadingPositionSyncItem(bookId: bookId, position: .chapterStart(8), countsPictures: true, textVersion: 1)
+        let result = ICloudSyncManager.resolveMerge(local: [current],
+            remote: [SyncRecord(id: bookId, value: previous, updatedAt: lastSync, deleted: false)], shadow: [:],
+            id: { $0.bookId }, hash: hash, fallbackUpdatedAt: { _ in lastSync.addingTimeInterval(60) },
+            firstMergeKeepsRemote: ICloudSyncManager.unsyncedPositionYieldsToCloud)
+        #expect(result.values == [current])
+        #expect(!result.shouldApplyLocally)
     }
 
     @Test func anUnstampedPositionArrivesUnstamped() throws {
