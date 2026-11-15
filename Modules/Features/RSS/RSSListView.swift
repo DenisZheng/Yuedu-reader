@@ -294,10 +294,9 @@ struct RSSListView: View {
                 contentType: RSSOPMLDocument.exportContentType,
                 defaultFilename: "yuedu-rss.opml"
             ) { reportExportResult($0, format: .opml) }
-            .fileImporter(
+            .documentCopyImporter(
                 isPresented: $showJSONImporter,
                 allowedContentTypes: [.json, .data],
-                allowsMultipleSelection: false,
                 onCompletion: importLegadoJSON
             )
             .fileExporter(
@@ -640,10 +639,10 @@ struct RSSListView: View {
         })
     }
 
-    private func importLegadoJSON(_ result: Result<[URL], Error>) {
+    private func importLegadoJSON(_ result: Result<ImportedDocumentCopy, Error>) {
         switch result {
-        case .success(let urls):
-            if let url = urls.first { jsonReview = .init(input: .file(url)) }
+        case .success(let file):
+            jsonReview = .init(input: .file(file.url), copiedFile: file)
         case .failure(let error):
             guard (error as NSError).code != NSUserCancelledError else { return }
             importMessage = DiagnosticRedactor.redact(error.localizedDescription)

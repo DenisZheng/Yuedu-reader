@@ -94,6 +94,8 @@
 
 ## 构建、测试与证据
 
+2026-11-15用户确认：Debug 真机验证直接本地编译、安装和调试，复用 `scripts/device_dev_test.sh`；Release 构建使用 GitHub Actions。此约定不授权自动删除数据、改正式签名或发布。
+
 不硬编码 Xcode、模拟器名称或系统版本，调用时解析：
 
 ```bash

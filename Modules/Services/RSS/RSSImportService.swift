@@ -125,7 +125,12 @@ enum RSSImportService {
             guard size.isRegularFile == true, let bytes = size.fileSize, bytes <= limits.bytesPerDocument else {
                 throw Issue.responseTooLarge
             }
-            let data = try Data(contentsOf: url, options: .mappedIfSafe)
+            let data: Data
+            do {
+                data = try DocumentImportReader.read(url, maximumBytes: limits.bytesPerDocument)
+            } catch DocumentImportReader.Failure.tooLarge {
+                throw Issue.responseTooLarge
+            }
             try await loader.expand(data, depth: 0, location: "1")
         case .remote(let url): try await loader.remote(url.absoluteString, depth: 0, location: "1")
         case .prepared(let loaded): return loaded

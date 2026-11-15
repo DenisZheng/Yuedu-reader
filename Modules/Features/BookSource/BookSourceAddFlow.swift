@@ -60,6 +60,7 @@ final class BookSourceAddFlow: ObservableObject {
     @Published var importJSON = ""
     @Published var importURLString = ""
     @Published var networkImportLoading = false
+    @Published private(set) var fileImportLoading = false
     @Published var message: Message?
 
     let store: BookSourceStore
@@ -71,6 +72,8 @@ final class BookSourceAddFlow: ObservableObject {
     /// Parsed sources waiting for the sheet in front of them to finish dismissing before the
     /// confirmation list can be presented.
     private var queuedImportSources: [BookSource]?
+    private var fileImportTask: Task<Void, Never>?
+    private var fileImportRequest = UUID()
 
     init(store: BookSourceStore = .shared) {
         self.store = store
@@ -137,6 +140,9 @@ final class BookSourceAddFlow: ObservableObject {
     }
 
     func cancelImport() {
+        fileImportTask?.cancel()
+        fileImportRequest = UUID()
+        fileImportLoading = false
         fileImportSequence.cancel()
         showsImport = false
         importJSON = ""
@@ -151,35 +157,53 @@ final class BookSourceAddFlow: ObservableObject {
         presentQueuedImportReview()
     }
 
-    func handleImportFile(_ result: Result<URL, Error>) {
+    func handleImportFile(_ result: Result<ImportedDocumentCopy, Error>) {
         switch result {
-        case .success(let url):
-            let isSecurityScoped = url.startAccessingSecurityScopedResource()
-            defer {
-                if isSecurityScoped {
-                    url.stopAccessingSecurityScopedResource()
+        case .success(let file):
+            fileImportTask?.cancel()
+            let request = UUID()
+            fileImportRequest = request
+            fileImportLoading = true
+            fileImportTask = Task {
+                defer {
+                    if fileImportRequest == request {
+                        fileImportLoading = false
+                        fileImportTask = nil
+                    }
+                }
+                do {
+                    let sources = try await Self.readImportedCopy(file, store: store)
+                    guard fileImportRequest == request, !Task.isCancelled else { return }
+                    queueImportReview(sources)
+                } catch is CancellationError {
+                    // 取消不展示失败，也不能让晚到结果重新打开确认页。
+                } catch {
+                    guard fileImportRequest == request, !Task.isCancelled else { return }
+                    fail(DiagnosticRedactor.redact(error.localizedDescription))
                 }
             }
-            let data: Data
-            do {
-                data = try BookSourceStore.importData(contentsOf: url)
-            } catch let error as BookSourceStore.ImportError {
-                fail(error.localizedDescription)
-                return
-            } catch {
-                AppLogger.error("Book source file could not be read", error: error,
-                                context: ["extension": url.pathExtension])
-                fail(localized("無法讀取文件"))
-                return
-            }
-            do {
-                queueImportReview(try store.parseForImport(data: data, fileExtension: url.pathExtension))
-            } catch {
-                fail(error.localizedDescription)
-            }
         case .failure(let error):
-            fail(error.localizedDescription)
+            fail(DiagnosticRedactor.redact(error.localizedDescription))
         }
+    }
+
+    func waitForFileImport() async {
+        await fileImportTask?.value
+    }
+
+    nonisolated private static func readImportedCopy(_ file: ImportedDocumentCopy, store: BookSourceStore) async throws -> [BookSource] {
+        try Task.checkCancellation()
+        let started = SourcePerfTrace.now
+        let onMain = { Thread.isMainThread }()
+        defer {
+            SourcePerfTrace.record("bookSource.import.copy", "main=\(onMain)",
+                                   since: started, thresholdMs: 1, mainThreadStallBreadcrumb: false)
+        }
+        let data = try BookSourceStore.importData(contentsOf: file.url)
+        try Task.checkCancellation()
+        let sources = try store.parseForImport(data: data, fileExtension: file.url.pathExtension)
+        try Task.checkCancellation()
+        return sources
     }
 
     func importText(_ json: String) {
@@ -314,7 +338,7 @@ private struct BookSourceAddFlowPresentations: ViewModifier {
                     BookSourceImportSheet(flow: flow)
                 }
             }
-            .fileImporter(
+            .documentCopyImporter(
                 isPresented: $flow.showsFirstLevelImportFile,
                 allowedContentTypes: BookSourceAddFlow.importContentTypes,
                 onCompletion: flow.handleImportFile
@@ -431,8 +455,12 @@ private struct BookSourceImportSheet: View {
                         .padding(.horizontal)
                 }
                 .buttonStyle(.plain)
+                .disabled(flow.fileImportLoading)
                 .padding(.top, 12)
 
+                if flow.fileImportLoading {
+                    ProgressView(localized("匯入來源配置"))
+                }
                 Spacer()
             }
             .navigationTitle(localized("匯入來源配置"))
@@ -458,7 +486,7 @@ private struct BookSourceImportSheet: View {
                 }
             }
         }
-        .fileImporter(
+        .documentCopyImporter(
             isPresented: $flow.showsImportFile,
             allowedContentTypes: BookSourceAddFlow.importContentTypes,
             onCompletion: flow.handleImportFile

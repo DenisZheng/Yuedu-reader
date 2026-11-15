@@ -746,11 +746,11 @@ class BookSourceStore: @MainActor ObservableObject {
     /// it. Foundation reads File Provider and iCloud Drive files in full even when asked
     /// to map them, so the size has to be checked first.
     nonisolated static func importData(contentsOf url: URL) throws -> Data {
-        // A file system that reports no size is read; `parseForImport` checks the bytes.
-        if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > maxImportBytes {
+        do {
+            return try DocumentImportReader.read(url, maximumBytes: maxImportBytes)
+        } catch DocumentImportReader.Failure.tooLarge(let size) {
             throw ImportError.tooLarge(size)
         }
-        return try Data(contentsOf: url, options: .mappedIfSafe)
     }
 
     /// Parses without writing anything, so the import confirmation list can show what a file

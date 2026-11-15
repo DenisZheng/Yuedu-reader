@@ -719,3 +719,56 @@ YCK205完整真实入口已修复：按钮页→3.x一键导入→原生确认�
 用户授权后提交并Push `5ac9b1b9`，[Actions 43691532133](https://github.com/DenisZheng/Yuedu-reader/actions/runs/43691532133)在Xcode26.6／Swift6.3.3／SDK26.5完成43分6秒归档、打包与上传，三步最终success。下载后ZIP/checksum、版本3.0（5）、LegadoPro五语显示名、主App与两个扩展身份、权限、未签名／无profile、arm64 iPhoneOS minos17.0均实际核验。SHA-256为`cb28a56e39e6792420f8dfb27d08adc2c3c17974b643de75178cd4bcdd3ebf22`；主程序UUID为`F1B97B1E-4852-3807-AD51-6A8AF71DAD50`。
 
 完整命令、产物入口、gh首次上游404的处理和未验证项见[云交付记录](legadopro-3.0-cloud.md)。新副本已放用户下载目录，不覆盖旧包或RC1。未替用户重签／安装，手机首次启动仍待用户复验，不能把归档通过写成原闪退已解决。
+
+## 真机JSON导入：调试与无断点确认耗时
+
+用户后续确认App可启动并进入书源／RSS导入，但自签Release文件点击无响应；最新本地Debug两类导入成功。详细设备识别纠正、权限拒绝、开发签名信任、原失败与当前范围见[真机JSON诊断](json-import-device-diagnosis.md)。Debug按用户最新要求本地编译安装，Release继续使用Actions。
+
+- `scripts/device_dev_test.sh`实际本地Debug编译、安装、启动，SDK27.2／目标iOS27.2.1，决定性输出`TEST BUILD SUCCEEDED`、`App installed`、`Launched application`。没有执行Swift测试，不以build-for-testing等同测试通过。
+- 原脚本TMPDIR斜线在xcconfig生成`//`注释截断，先复现签名路径误变T目录，规范化原WORK路径后复用同一DerivedData；`python3 -B -m unittest scripts.tests.test_device_dev_script -v`先1项失败后1项OK，未关闭签名检查。补齐新增iCloud测试的CloudKit import。
+- 自签调试被明确拒绝后停止；用户批准Debug并自行信任开发签名后附加成功。一次回调卡住确定为断点暂停，已恢复；后续全部分离调试器。Time Profiler目标Offline记录超时，退出13且无trace，不宣称有采样证据。
+- 临时DEBUG数字日志已验证实际行为：用户先书源后RSS，本次书源885项，合并5ms、发布3ms、确认函数28ms；RSS变更300项、399源，后台编码落盘43ms（main=false），保存事务455ms。读取诊断文件退出0。RSS455ms不含生成变更方案、任务排队与最终UI绘制，书源确认不等待后台落盘。
+- 本窗口主线程停顿612/324/340ms，没有5–30秒证据；不能把日常RSS源库管理的多次写入算成同一次导入重复落盘，也未证明前后数据起点相同。没有更换SDK或保存算法，不能把本次正常当作SDK问题已经排除或原Release故障已修复。
+- 未提交／Push本轮诊断改动，未重新发布或覆盖RC1，原始源包和设备日志不分发。诊断完成时撤回临时数字日志即可，不需删除用户源库。后续同Release IPA开发签名对照需要用户单独批准，S8人工仍未闭合。
+
+### 对照与收尾补充
+
+用户批准后自行卸载，原App数据不再可备份；同原SDK26.5云Release IPA仅在暂存副本重新开发签名，指令／字符串段与UUID一致，签名验证退出0。安装成功后用户手动信任，启动退出0；无断点下用户书源与RSS均正常导入。由于卸载也改变起点，不断言轻松签某个权限已锁定；但不再以SDK26.5必然不兼容为由换SDK或猜测改导入代码。
+
+收尾精准撤回临时日志，三个生产导入文件与HEAD一致。`python3 -B -m unittest scripts.tests.test_device_dev_script -v`为1项OK；`YUEDU_SCHEME=Reader-Fork-Dev bash scripts/xctest.sh -- -only-testing:'yuedu appTests/AuthAndICloudConfigurationTests'`为模拟器4项／1 suite通过，最终`TEST SUCCEEDED`。只保留已验证的开发脚本路径修正、测试CloudKit import和文档，不自动commit／push。
+
+用户另要求本地IPA：SDK27.2的Debug真归档`ARCHIVE SUCCEEDED`，暂存副本去签名／profile后打包。下载目录新增`LegadoPro-3.0-build5-local-Debug-SDK27.2-unsigned.ipa`及`.sha256`，71,968,086字节，SHA-256为`399292252d5a26a5cbad061d7dd4992ca5b3d74ac88aa004fa3df317669409b7`；ZIP、三个Bundle身份／版本／平台、可执行权限、所有Mach-O未签名／无profile及二进制无临时标签已核对。未安装这份包或覆盖旧IPA，交付当时用户年度自签后的结果尚未验证；完整命令与限制见[真机JSON诊断](json-import-device-diagnosis.md)。
+
+## 年度自签IPA的实际身份／权限审计
+
+用户后续报告该本地SDK27.2包自签后仍“点JSON不返回”，并提供`LegadoPro_3.0_20261115_200253.ipa`。只读审计ZIP、`codesign --display --xml --entitlements -`、`security cms -D`和`codesign --verify --deep --strict`，退出0；三个可执行文件指令／字符串段及UUID与原包一致，无新增动态库，实际SDK27.2/minos17.0未变。原IPA审计前后SHA相同，未修改。
+
+实际发现：三个不同Bundle ID的CodeDirectory Identifier正确，但都签入同一固定、与Bundle ID不匹配的application-identifier，且用同一个固定App ID profile；三个签入字典与profile许可模板完全一致。iCloud-services签入字符串`*`而非Apple要求的字符串数组，还签入了无关App Groups。Info额外增加UISupportsDocumentBrowser=true、将MinimumOSVersion17.0改10.0并移除硬件能力声明；原文件共享／原地打开开关已为true且未变。get-task-allow=false正常，不能当JSON选择根因。
+
+详见[自签静态审计](selfsigned-ipa-audit-2026-11-15.md)。这些是已证实的包／授权合同差异，不是已执行的签名修复。仍需真实签名设置或服务商修正、签后IPA复查与手机选择行为复验；不伪造profile、不硬改越权App ID、不自动改Bundle ID／删扩展／数据。没有重新编译、安装或公开上传用户包，也未绕过V2EX网页读取的安全拦截。
+
+## 自签文件选择的源码对照与设备日志
+
+用户补充Aminark/legado-ios默认自签可选JSON，随后要求直接采集当前失败包日志。固定参考commit`5f033e4d00ff0ac7055aec7020c536ab800c8cbc`只读比较：参考书源入口显式原生asCopy=true、delegate持有scope、真实关闭后后台协调读；本Fork书源已回调即刻start，但同步读取／解析且缺协调；RSS另走后续异步load。普通书籍三文件不能直接作为书源/RSS故障链。详见[源码对照](json-picker-source-comparison.md)。没有复制GPL产品源码或改Swift。
+
+原生`log collect`普通权限尝试退出77（要求root），停止后用户批准并自行在Mac终端管理员采集，未向Agent提供密码。归档本地保存，助手`log show --archive ... --info --debug --style ndjson`退出0，取得8071条带时间的相关事件，区间21:49:11–21:53:49（+0800）。关键三条各48次：书签无法解析、NSCocoaErrorDomain257无法创建URL、准备交付的文件数组为空。当前SDK头文件确认257=NSFileReadNoPermissionError。具体失败阶段为系统向App交付所选文件URL时授权书签被拒绝，不是JSON内容解码／普通书籍copy报错；不能单凭日志断言哪个签名字段导致，不能声称回调绝无触发或已修复。
+
+[设备日志定位](json-picker-device-log-2026-11-15.md)保存命令、脱敏时间线和限制，原始归档不公开。SDK、签名设置、App数据与代码均未改变；当前仅完成诊断，后续原生复制模式或正常App交付日志对照仍需行为验证，S8不标通过。
+
+## TutorialPedia 257文章适用性核验
+
+读取用户保存到根目录的文章，原文未改。[文章核验](json-picker-article-review.md)指出其混用macOS App Sandbox/iOS，当前SDK的withSecurityScope创建／解析选项明确iOS不可用，URL.hasSecurityScopedResource非公开成员。实际`xcrun swiftc -typecheck -target arm64-apple-ios17.0 -sdk <当前SDK> .git/article-ios-api-probe.swift`退出1，报“URL has no member hasSecurityScopedResource”和“withSecurityScope is unavailable in iOS”。这是文章API负向核验，不是App构建／测试失败或修复通过。
+
+文章UIKit的旧.import复制意图与公开现代asCopy=true一致，是针对本次有效URL交付失败的下一轮对照方向；安全scope示例、文档关联、永久书签不是当前系统书签解码失败的直接修复。未照文添加macOS权限、永久书签或把所有scope返回false当统一拒绝；没有改App。Apple DocC直连也被fake-IP安全检查阻止，未绕路，依据来自Context7官方文档及本机SDK／类型检查。
+
+随后按实测三条错误链通过MCP／网页定位并用GitHub MCP核验nxnative#1148原评论：2026-11-14报告同签名／安装方式仅改变匹配AppID后恢复原地文件夹选择，同不匹配身份下asCopy=true单文件副本导入可用；2026-11-15维护者接受受控结果关闭issue。这与本Fork旧失败包身份不匹配／当前日志／可用参考复制导入相符，增强“原地授权失败、复制导入可兼容”的解释，但不是本Fork实际修复通过。推荐小范围真实JSON入口复制导入对照，不把目录长期访问也强制复制，不改身份／权限／SDK。链接与范围见[文章及检索核验](json-picker-article-review.md)。
+
+## JSON原生复制导入实现与本地Debug交付
+
+用户授权改代码后，书源两个文件入口及RSS JSON入口改为共同的公开UIKit asCopy=true单文件选择器；scope对象保持至读取结束／确认页退出，选择结果与真实关闭齐全后仅交付一次，取消和旧轮回调不复活。后台协调读取复用原BookSourceStore／RSSImportService的解析、确认与大小限制，不改普通书籍三个文件、不新增依赖、store或parser，不改签名身份、profile、原文件／用户数据。详见[实现与交付](json-copy-import-implementation.md)。
+
+动态Xcode／模拟器、Reader-Fork-Dev串行执行`scripts/xctest.sh`选择DocumentCopyImportTests、RSSImportServiceTests、ReviewImportRegressionTests，最终退出0：`Test run with 23 tests in 3 suites passed`、`** TEST SUCCEEDED **`。首次异步Thread.isMainThread编译限制已按现有模式修正；系统未呈现时扩展名getter的非关键断言移除，实际import模式／时序／权限／业务边界断言保留通过。不把内部文件测试当重签File Provider验收。
+
+复用既有真机DerivedData、Debug、generic/platform=iOS、本地未签名archive退出0（`** ARCHIVE SUCCEEDED **`）；打包退出0，ZIP/profile/签名结构与复制SHA核验完成，SDK27.2/minos17.0，LegadoPro3.0（5）。下载目录新增`LegadoPro-3.0-build5-local-Debug-JSON-copy-import-unsigned.ipa`（72,013,515字节），SHA-256为`59824f6c337e00a9fceeaa80e1c61813806fa4d2961088c3272737ed8b835827`，旁有sha256校验文件。未覆盖旧IPA、未重签或安装，未commit/push/触发Actions。
+
+`ruby scripts/check_localizations.rb`退出0。用户随后确认上述新Debug包自签后“OK了，可以了”，本次JSON文件选择／导入原症状恢复；这是用户真机反馈，不冒充助手自动执行，也不展开为逐入口独立记录或所有源兼容。用户同时授权提交并push本轮相关修复。收尾额外执行`python3 -B -m unittest discover -s scripts/tests -p 'test_device_dev_script.py' -v`，1项／OK，验证此前TMPDIR路径修正。S8仍不标完成，最低iOS17／iPad／VoiceOver等人工范围不冒充通过。

@@ -3,6 +3,8 @@ import SwiftUI
 struct RSSImportReviewRequest: Identifiable, Equatable {
     let id = UUID()
     var input: RSSImportService.Input
+    // 系统副本的访问保持到本轮确认页退出，异步读取不会丢失授权。
+    var copiedFile: ImportedDocumentCopy? = nil
     // 每个冻结的导入请求有独立身份；状态机比较请求身份，不重新比较整个源包。
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 }

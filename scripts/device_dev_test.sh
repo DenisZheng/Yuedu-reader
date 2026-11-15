@@ -11,6 +11,8 @@ cd "$ROOT"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-$(bash scripts/sim.sh xcode)}"
 WORK="${READER_FORK_DEVICE_WORK:-${TMPDIR:-/tmp}/readerfork-device}"
 mkdir -p "$WORK"
+# TMPDIR通常以斜线结尾；规范化路径，避免xcconfig将双斜线及其后内容当作注释。
+WORK="$(cd "$WORK" && pwd -P)"
 cat > "$WORK/empty.entitlements" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
