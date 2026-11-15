@@ -713,3 +713,9 @@ YCK205完整真实入口已修复：按钮页→3.x一键导入→原生确认�
 - `ruby scripts/check_localizations.rb`五语InfoPlist.strings各17键、Localizable.strings各4267键、分享扩展各1键一致；actionlint v1.7.12官方归档checksum核验后运行工作流检查退出码0；文档本地链接与`git diff --check`通过。
 - 没有本地编译或新增模拟器运行。新增Swift运行时测试尚未执行；等待新的固定提交Actions归档与用户自签手机启动复验，不能宣称原闪退已经消除。
 - 不覆盖RC1 tag或资产，不清空用户数据，不修改签名账号／主数据身份。回滚本轮相关代码和配置不需数据迁移，恢复iCloud仍需权限与设备回归。S8人工验收仍未闭合。
+
+### 固定提交云构建与新包核验
+
+用户授权后提交并Push `5ac9b1b9`，[Actions 43691532133](https://github.com/DenisZheng/Yuedu-reader/actions/runs/43691532133)在Xcode26.6／Swift6.3.3／SDK26.5完成43分6秒归档、打包与上传，三步最终success。下载后ZIP/checksum、版本3.0（5）、LegadoPro五语显示名、主App与两个扩展身份、权限、未签名／无profile、arm64 iPhoneOS minos17.0均实际核验。SHA-256为`cb28a56e39e6792420f8dfb27d08adc2c3c17974b643de75178cd4bcdd3ebf22`；主程序UUID为`F1B97B1E-4852-3807-AD51-6A8AF71DAD50`。
+
+完整命令、产物入口、gh首次上游404的处理和未验证项见[云交付记录](legadopro-3.0-cloud.md)。新副本已放用户下载目录，不覆盖旧包或RC1。未替用户重签／安装，手机首次启动仍待用户复验，不能把归档通过写成原闪退已解决。
