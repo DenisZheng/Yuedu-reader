@@ -135,6 +135,7 @@ final class WebViewFetcher: NSObject, WKNavigationDelegate {
         // Disable media autoplay to save resources
         config.mediaTypesRequiringUserActionForPlayback = .all
         config.suppressesIncrementalRendering = true
+        PageRequestDrain.install(on: config.userContentController)
 
         let wv = WKWebView(
             frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
@@ -182,6 +183,29 @@ final class WebViewFetcher: NSObject, WKNavigationDelegate {
     }
 
 
+    /// The rendered page's `outerHTML`, held to `WebFetcher.responseByteLimit` as an HTTP body is:
+    /// the length is measured inside the page, and a page past the limit sends back only its
+    /// length, so the oversized string never crosses into this process to be parsed. JS lengths
+    /// are UTF-16 units — two bytes each in the string this process would hold.
+    @MainActor
+    private static func boundedOuterHTML(of webView: WKWebView, url: URL) async throws -> String {
+        let maxUnits = WebFetcher.responseByteLimit / 2
+        let script = """
+            (function () {
+                var html = document.documentElement.outerHTML;
+                return html.length > \(maxUnits) ? html.length : html;
+            })()
+            """
+        let value = try await webView.evaluateJavaScript(script)
+        if let html = value as? String { return html }
+        if let units = value as? Int {
+            let bytes = units * 2
+            WebFetcher.logOversized(url: url, bytes: bytes, limit: WebFetcher.responseByteLimit, transport: "webView")
+            throw FetchError.responseTooLarge(bytes: bytes, limit: WebFetcher.responseByteLimit)
+        }
+        return ""
+    }
+
     /// - Parameters:
     ///   - url: Target URL
     ///   - headers: Custom HTTP headers
@@ -212,14 +236,12 @@ final class WebViewFetcher: NSObject, WKNavigationDelegate {
                     webView.load(request)
                 }
 
-                // Wait for JS rendering
+                // Legado's wait after the load, then the page's own requests.
                 try await Task.sleep(nanoseconds: UInt64(jsWait * 1_000_000_000))
+                await PageRequestDrain.wait(in: webView)
 
                 // Extract full HTML
-                let html =
-                    try await webView.evaluateJavaScript(
-                        "document.documentElement.outerHTML"
-                    ) as? String ?? ""
+                let html = try await Self.boundedOuterHTML(of: webView, url: url)
 
                 if LegadoJSBridge.isCloudflareChallengedBody(html) {
                     throw FetchError.cloudflareChallengeRequired(url.absoluteString)
@@ -268,10 +290,11 @@ final class WebViewFetcher: NSObject, WKNavigationDelegate {
                 if jsWait > 0 {
                     try await Task.sleep(nanoseconds: UInt64(jsWait * 1_000_000_000))
                 }
+                await PageRequestDrain.wait(in: webView)
                 if !jsAfterLoad.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     _ = try? await webView.evaluateJavaScript(jsAfterLoad)
                 }
-                let html = try await webView.evaluateJavaScript("document.documentElement.outerHTML") as? String ?? ""
+                let html = try await Self.boundedOuterHTML(of: webView, url: url)
                 if LegadoJSBridge.isCloudflareChallengedBody(html) {
                     throw FetchError.cloudflareChallengeRequired(url.absoluteString)
                 }
@@ -710,6 +733,14 @@ final class WebViewFetcher: NSObject, WKNavigationDelegate {
         for (k, v) in headers {
             request.setValue(v, forHTTPHeaderField: k)
         }
+        // The page's own requests and `navigator.userAgent` read the WebView's identity, not
+        // the first request's header: a source's map carries its User-Agent (Legado's default
+        // when it names none — `BookSource.withLegadoUserAgent`), and Legado's
+        // `BackstageWebView` presents that. `releaseWebView` gives the lease's WebView back
+        // with the app's own identity.
+        if let userAgent = request.value(forHTTPHeaderField: "User-Agent") {
+            webView.customUserAgent = userAgent
+        }
         if request.value(forHTTPHeaderField: "Cookie") == nil,
             let cookieHeader = cookieHeader(for: url)
         {
@@ -737,7 +768,15 @@ final class WebViewFetcher: NSObject, WKNavigationDelegate {
         return HTTPCookie.requestHeaderFields(with: cookies)["Cookie"]
     }
 
+    /// A pooled WebView whose pages load no network image, as Legado's `BackstageWebView`, and
+    /// no network font (`SourcePageResourceBlocking`).
     private func acquireWebView() async throws -> WKWebView {
+        let webView = try await leaseWebView()
+        await SourcePageResourceBlocking.install(on: webView.configuration.userContentController)
+        return webView
+    }
+
+    private func leaseWebView() async throws -> WKWebView {
         if let wv = pool.popLast() {
             activeCount += 1
             peakActiveCount = max(peakActiveCount, activeCount)
@@ -777,6 +816,8 @@ final class WebViewFetcher: NSObject, WKNavigationDelegate {
         // start a new navigation and cancel it (-999) when the next caller loads
         // a new request, causing the new caller to receive the -999 error.
         webView.stopLoading()
+        // A lease may have presented its source's User-Agent (`prepareRequest`).
+        webView.customUserAgent = SourceWebIdentity.phoneUserAgent
         loadingMap.removeValue(forKey: webView)?.cancel()
         activeCount = max(0, activeCount - 1)
 
@@ -795,6 +836,13 @@ final class WebViewFetcher: NSObject, WKNavigationDelegate {
     }
 
     // MARK: - WKNavigationDelegate
+
+    /// Accepts the server's certificate, as Legado's WebViews do (`ServerTrustPolicy`).
+    func webView(
+        _ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        ServerTrustPolicy.answer(challenge)
+    }
 
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor in

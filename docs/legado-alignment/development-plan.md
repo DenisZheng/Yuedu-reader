@@ -1,6 +1,6 @@
 # RSS 对齐 Legado：最终开发方案 v2.0
 
-> 产品决策：Q1–Q13 已确认；已生成项目 AGENTS.md，按执行计划实施。Q10–Q13 补充：移除 Google/Firebase 和收费体系，保留 iCloud/WebDAV；备份对齐 Android 的分类与恢复机制，首期不做两端备份整包互通。
+> 产品决策：Q1–Q13 已确认；已生成项目 AGENTS.md，按执行计划实施。Q10–Q13 补充：移除 Google/Firebase 和收费体系，保留 iCloud/WebDAV；备份对齐 Android 的分类与恢复机制，首期不做两端备份整包互通。2026-11-14补充：[ADR-0005](../adr/0005-app-wide-server-trust.md)接受App可控制连接的无效服务器证书，保留TLS 1.2下限与其他安全边界；不接受自动擦除模拟器。
 > 范围：独立本地 Fork 的 RSS 完整闭环，不是全项目一次性重写。
 > 原始方案：[v1.0 原文](development-plan-v1.0.md)；审查依据：[v1.0 审查](development-plan-review.md)；实施步骤：[执行计划](implementation-plan.md)。
 

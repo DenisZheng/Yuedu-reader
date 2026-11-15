@@ -36,9 +36,13 @@ struct OfficialRuleModulesTests {
                 try RuleModuleValidator.validate(Data(contentsOf: file), appVersion: RuleModuleVersion.app)
             }
         }
-        let bundled = Set(OfficialRuleModules.bundledFiles.map(\.lastPathComponent))
+        // -no-official-modules阻止运行时启用，不应掩盖实际Bundle资源是否完整。
+        let files = ((Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: nil) ?? [])
+            + (Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: "Assets") ?? []))
+            .filter { $0.lastPathComponent.hasPrefix(OfficialRuleModules.filePrefix) }
+        let bundled = Set(files.map(\.lastPathComponent))
         #expect(bundled == Set(sources.map(\.lastPathComponent)), "the bundle has exactly the repository's files")
-        #expect(OfficialRuleModules.load(OfficialRuleModules.bundledFiles, appVersion: RuleModuleVersion.app).count == sources.count)
+        #expect(OfficialRuleModules.load(files, appVersion: RuleModuleVersion.app).count == sources.count)
     }
 
     @Test("a file is read only under its own reserved id; one that fails is left out; ids keep their order")
@@ -70,6 +74,8 @@ struct OfficialRuleModulesTests {
 
         let library = RuleModuleLibrary(store: store, appVersion: "3.0", officialFiles: { OfficialRuleModules.files(in: official) },
                                         availability: nil)
+        library.setEnabled(true, id: "bangumi")
+        library.setEnabled(true, id: "narou")
         await library.load()
         #expect(library.modules.map(\.module.id) == ["bangumi", "narou", "example.mine"])
         #expect(library.official.map(\.module.id) == ["bangumi", "narou"])
@@ -82,6 +88,8 @@ struct OfficialRuleModulesTests {
         defaults.set("CHN", forKey: PublicLibraryAvailability.countryKey)
         let china = RuleModuleLibrary(store: store, appVersion: "3.0", officialFiles: { OfficialRuleModules.files(in: official) },
                                       availability: PublicLibraryAvailability(defaults: defaults))
+        china.setEnabled(true, id: "bangumi")
+        china.setEnabled(true, id: "narou")
         await china.load()
         #expect(china.modules.map(\.module.id) == ["bangumi", "example.mine"])
     }

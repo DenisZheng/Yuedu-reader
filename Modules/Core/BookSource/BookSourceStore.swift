@@ -497,11 +497,33 @@ class BookSourceStore: @MainActor ObservableObject {
     /// **entire** source file, and republished the whole `@Published` array — three
     /// thousand times. One pass, one save.
     func setRespondTimes(_ times: [UUID: Int64]) {
-        guard !times.isEmpty else { return }
+        recordCheckResults(respondTimes: times, marks: [:])
+    }
+
+    /// The results of the sources a 書源驗證 has finished so far: respond times, and the groups
+    /// and `// Error:` comment Legado writes onto a checked source (`BookSourceCheckMarks`).
+    /// One change and one save, with no `lastUpdateTime` bump, like `setRespondTimes`.
+    func recordCheckResults(respondTimes: [UUID: Int64], marks: [UUID: BookSourceCheckMarks]) {
+        guard !respondTimes.isEmpty || !marks.isEmpty else { return }
         var updated = sources
-        guard Self.applyRespondTimes(times, to: &updated) else { return }
+        let timed = Self.applyRespondTimes(respondTimes, to: &updated)
+        let marked = Self.applyCheckMarks(marks, to: &updated)
+        guard timed || marked else { return }
         replaceSources(updated)
-        save(reason: "respondTimes")
+        save(reason: "checkResults")
+    }
+
+    private static func applyCheckMarks(
+        _ marks: [UUID: BookSourceCheckMarks],
+        to sources: inout [BookSource]
+    ) -> Bool {
+        guard !marks.isEmpty else { return false }
+        var changed = false
+        for idx in sources.indices {
+            guard let mark = marks[sources[idx].id] else { continue }
+            if sources[idx].applyCheckMarks(mark) { changed = true }
+        }
+        return changed
     }
 
     private static func applyRespondTimes(_ times: [UUID: Int64], to sources: inout [BookSource]) -> Bool {
@@ -558,12 +580,18 @@ class BookSourceStore: @MainActor ObservableObject {
     /// Same contracts as those three: no `lastUpdateTime` bump, and a source in both sets is
     /// deleted. Returns how many sources were deleted.
     @discardableResult
-    func applyCheckOutcome(respondTimes: [UUID: Int64], disable: Set<UUID>, delete: Set<UUID>) -> Int {
+    func applyCheckOutcome(
+        respondTimes: [UUID: Int64],
+        marks: [UUID: BookSourceCheckMarks] = [:],
+        disable: Set<UUID>,
+        delete: Set<UUID>
+    ) -> Int {
         var updated = sources
         let timed = Self.applyRespondTimes(respondTimes, to: &updated)
+        let marked = Self.applyCheckMarks(marks, to: &updated)
         let disabled = Self.applyEnabled(false, to: disable.subtracting(delete), in: &updated)
         let removedCount = delete.isEmpty ? 0 : Self.remove(delete, from: &updated)
-        guard timed || disabled || removedCount > 0 else { return 0 }
+        guard timed || marked || disabled || removedCount > 0 else { return 0 }
         replaceSources(updated)
         if removedCount > 0 {
             dropPins(of: delete)
@@ -592,43 +620,57 @@ class BookSourceStore: @MainActor ObservableObject {
         save(reason: "enabledByUser")
     }
 
-    /// Rewrites `bookSourceGroup` for a set of sources (重命名分組 / 合併到其他分組). An empty
-    /// `group` clears the field, which returns those sources to the built-in default group.
+    /// Swaps one group for another in each source's `bookSourceGroup`, keeping the source's
+    /// other groups — 重命名分組, 合併到其他分組, 移動到分組, 加入分組 and 移出分組 all write
+    /// through here. The field holds several groups (`BookSourceCheckMarks.groups(in:)`) and a
+    /// 書源驗證 adds its own (搜索失效, …), so writing the whole field would drop them. This is
+    /// Legado's `upGroup` (and, with an empty side, its `addGroup` / `removeGroup`).
+    ///
+    /// - Parameters:
+    ///   - old: The group the sources leave. Empty leaves nothing — the built-in 默認分組,
+    ///     whose members have no group, or a source that is only joining one.
+    ///   - new: The group they join, split like the field, so typing 「甲,乙」 joins both.
+    ///     Empty joins nothing, which returns a source with no other group to 默認分組.
+    ///
     /// Group membership is source content, so this advances the sync clock — otherwise the
     /// last-write-wins merge would resurrect the old group name from another device.
-    func setGroup(_ group: String, ids: Set<UUID>) {
+    func replaceGroup(_ old: String, with new: String, ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
-        let trimmed = group.trimmingCharacters(in: .whitespacesAndNewlines)
+        let old = old.trimmingCharacters(in: .whitespacesAndNewlines)
+        let joining = BookSourceCheckMarks.groups(in: new)
         let now = Self.currentMillis()
         var updated = sources
         var changed = false
-        for idx in updated.indices
-        where ids.contains(updated[idx].id) && updated[idx].bookSourceGroup != trimmed {
-            updated[idx].bookSourceGroup = trimmed
+        for idx in updated.indices where ids.contains(updated[idx].id) {
+            guard updated[idx].replaceGroup(old, with: joining) else { continue }
             updated[idx].lastUpdateTime = now
             changed = true
         }
         guard changed else { return }
         replaceSources(updated)
-        save(reason: "setGroup")
+        save(reason: "replaceGroup")
     }
 
-    /// Every distinct non-empty `bookSourceGroup` with how many sources it holds, in
-    /// first-appearance order — the destinations 移動到分組 / 合併到其他分組 offer.
+    /// Every distinct group with how many sources it holds, in first-appearance order — the
+    /// destinations 移動到分組 / 合併到其他分組 offer. A source counts once in each of its
+    /// groups (`BookSourceCheckMarks.groups(in:)`), so 「玄幻,搜索失效」 adds to both.
     ///
     /// Call this when a picker opens, never per row: it is a full pass over `sources` with a
-    /// trim per entry, and the group menus used to run one such pass each (see the note in
+    /// split per entry, and the group menus used to run one such pass each (see the note in
     /// `BookSourceRowViews.swift`).
     ///
-    /// - Parameter excluded: A group to leave out — the one the sources are moving away from.
-    nonisolated func groupCounts(excluding excluded: String = "") -> [(name: String, count: Int)] {
+    /// - Parameter excluded: Groups to leave out — the one the sources are moving away from,
+    ///   or every group a source joining another already holds.
+    nonisolated func groupCounts(excluding excluded: Set<String> = []) -> [(name: String, count: Int)] {
         var order: [String] = []
         var counts: [String: Int] = [:]
-        for source in sources {
-            let name = source.bookSourceGroup.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty, name != excluded else { continue }
-            if counts[name] == nil { order.append(name) }
-            counts[name, default: 0] += 1
+        for source in sources where !source.bookSourceGroup.isEmpty {
+            let names = BookSourceCheckMarks.groups(in: source.bookSourceGroup)
+            for (position, name) in names.enumerated()
+            where !excluded.contains(name) && !names[..<position].contains(name) {
+                if counts[name] == nil { order.append(name) }
+                counts[name, default: 0] += 1
+            }
         }
         return order.map { (name: $0, count: counts[$0] ?? 0) }
     }
@@ -736,6 +778,9 @@ class BookSourceStore: @MainActor ObservableObject {
             throw ImportError.invalidData
         }
         if let imported = Self.parseSources(json) {
+            guard imported.allSatisfy({ !$0.bookSourceUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                throw ImportError.invalidData
+            }
             return imported
         }
         // Produce useful diagnostic messages
@@ -813,7 +858,10 @@ class BookSourceStore: @MainActor ObservableObject {
         _ imported: [BookSource],
         options: BookSourceImportOptions = .direct
     ) throws -> Int {
-        guard !imported.isEmpty else { throw ImportError.parseError }
+        guard !imported.isEmpty,
+              imported.allSatisfy({ !$0.bookSourceUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw ImportError.parseError
+        }
         // iCloud/Firestore sync merges book sources last-write-wins, using `lastUpdateTime` as
         // the per-item clock (ties/older-remote win). A source's author-declared `lastUpdateTime`
         // is baked into the JSON — it is NOT a "modified locally now" time — so a freshly imported
@@ -1266,6 +1314,36 @@ class BookSourceStore: @MainActor ObservableObject {
         }
 
         var diagnosticDescription: String { String(describing: self) }
+    }
+}
+
+extension BookSource {
+    /// `BookSourceStore.replaceGroup` for one source: `old` leaves and `joining` takes its
+    /// place, every other group keeps its position, and nothing is added twice. The field is
+    /// rewritten joined with `,` (as Legado does) only when the groups changed, so a source
+    /// whose groups were already right keeps its original separators.
+    /// - Parameters:
+    ///   - old: Already trimmed. Empty leaves nothing and appends `joining`.
+    ///   - joining: Already split.
+    /// - Returns: whether `bookSourceGroup` changed. A source that no longer holds a
+    ///   non-empty `old` — edited after the menu that names it was opened — is left alone.
+    mutating func replaceGroup(_ old: String, with joining: [String]) -> Bool {
+        var groups = BookSourceCheckMarks.groups(in: bookSourceGroup)
+        let before = groups
+        var position = groups.endIndex
+        if !old.isEmpty {
+            guard let index = groups.firstIndex(of: old) else { return false }
+            // Every copy: a hand-edited 「甲,乙,甲」 would otherwise keep 甲 after leaving it.
+            groups.removeAll { $0 == old }
+            position = index
+        }
+        for name in joining where !groups.contains(name) {
+            groups.insert(name, at: position)
+            position += 1
+        }
+        guard groups != before else { return false }
+        bookSourceGroup = groups.joined(separator: ",")
+        return true
     }
 }
 

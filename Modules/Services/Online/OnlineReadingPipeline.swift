@@ -87,11 +87,13 @@ enum ChapterFetchPriority: Int {
 }
 
 actor ChapterFetchManager {
-    // Safe: always first accessed from @MainActor context (AppDependencies.live or @MainActor tests).
-    static let shared = ChapterFetchManager(webViewFetcher: MainActor.assumeIsolated { WebViewFetcher.shared })
+    /// The one chapter fetch manager: the reader's coordinator (`AppDependencies.live`) and every
+    /// other caller (TTS, AI, video, browser) share its in-flight dedup, priorities, generation
+    /// tokens and quarantine counts. Built without the main actor — its first touch can come from
+    /// any executor (Crashlytics f71d7b80: `OnlineChapterContentService.payload` on a worker).
+    static let shared = ChapterFetchManager()
 
     private let bookSourceFetcher: BookSourceFetcher
-    private let webViewFetcher: WebViewFetcher
     private let moduleReader: ModuleBookReader
     private var tasks: [String: Task<ChapterPackage, Error>] = [:]
     private var states: [String: OnlineChapterLoadState] = [:]
@@ -110,11 +112,9 @@ actor ChapterFetchManager {
 
     init(
         bookSourceFetcher: BookSourceFetcher = .shared,
-        webViewFetcher: WebViewFetcher,
         moduleReader: ModuleBookReader = .live
     ) {
         self.bookSourceFetcher = bookSourceFetcher
-        self.webViewFetcher = webViewFetcher
         self.moduleReader = moduleReader
     }
 
@@ -246,8 +246,22 @@ actor ChapterFetchManager {
         )
     }
 
-    func chapterState(bookId: UUID, chapterIndex: Int) -> OnlineChapterLoadState {
-        if bookSourceFetcher.isChapterCached(bookId: bookId, chapterIndex: chapterIndex) {
+    /// What `prefetchChapters` asks before fetching: `.cached` exactly when the reader would
+    /// accept the chapter on disk. That is `isChapterCached(book:chapterIndex:)`, the probe
+    /// `ReaderViewModel.ensureChapterReady` uses, and it judges the file as `fetchChapter` does:
+    /// against the ref's URL (sanitized, then as written) and its TOC title.
+    ///
+    /// It needs the ref, not just the index. A TOC refresh keeps the old chapter files
+    /// (`BookStore` reconciles with `.preserveContent`), so after a source moved its chapter
+    /// URLs or inserted a chapter, the file at an index can belong to another URL or another
+    /// chapter. A probe that only looked for a file called that chapter cached, the gate below
+    /// skipped it, and every reader of the chapter rejected the file (`urlMismatch`) — the
+    /// neighbour sat on 載入中 with no fetch ever started (FB-59, YD-F846-VFX5, build 135).
+    ///
+    /// Going through `cachedChapterPackage` also clears a cached package the reader would not
+    /// reuse; `fetchChapter` clears the same package on the same condition before refetching.
+    func chapterState(book: ReadingBook, chapterIndex: Int) -> OnlineChapterLoadState {
+        if isChapterCached(book: book, chapterIndex: chapterIndex) {
             return .cached
         }
         // Disk is the truth — the same rule legado applies with `BookHelp.hasContent`. A
@@ -255,7 +269,7 @@ actor ChapterFetchManager {
         // the files without telling this map, and `prefetchChapters` skips anything that is
         // not `.missing`/`.failed`, so believing it killed prefetch for the entire book until
         // the next relaunch.
-        let stored = states[key(bookId: bookId, chapterIndex: chapterIndex)] ?? .missing
+        let stored = states[key(bookId: book.id, chapterIndex: chapterIndex)] ?? .missing
         return stored == .cached ? .missing : stored
     }
 
@@ -494,7 +508,21 @@ actor ChapterFetchManager {
         )
 
         let moduleReader = moduleReader
+        let readAheadGate = Self.readAheadGateKey(bookId: bookId, priority: priority)
         let task = Task(priority: priority.taskPriority) { () throws -> ChapterPackage in
+            // Read-ahead takes a slot of the book's gate before touching the network; the
+            // chapter on screen, a jump and a download never wait here.
+            if let readAheadGate {
+                let width = await MainActor.run {
+                    NetworkSearchSettings.clampedDownloadConcurrency(GlobalSettings.shared.searchConcurrency)
+                }
+                try await PerHostSemaphore.shared.acquire(host: readAheadGate, maxConcurrent: width)
+            }
+            defer {
+                if let readAheadGate {
+                    Task { await PerHostSemaphore.shared.release(host: readAheadGate) }
+                }
+            }
             // A module's book: online with no source, so before the browser import's branch.
             if let reference = book.module {
                 let built = try await moduleReader.chapterPackage(bookId: book.id, ref: ref, reference: reference)
@@ -680,11 +708,29 @@ actor ChapterFetchManager {
         }
     }
 
+    /// The `PerHostSemaphore` key that paces one book's read-ahead, or `nil` for a fetch that
+    /// must not wait behind it.
+    ///
+    /// 網路設定 →「預讀章節數」 can ask for ten chapters ahead plus two behind (FB-125), and every one
+    /// of them is a request to the one host the book's source lives on. `.prefetch` and
+    /// `.background` fetches therefore run at most `clampedDownloadConcurrency(並發數)` at a
+    /// time per book — the ceiling the offline download and the TOC page fan-out already use for
+    /// "many requests to one site". The rest queue behind them (FIFO, so roughly in the
+    /// window's nearest-first order), and a `.jump` to a queued chapter cancels its wait.
+    /// `.immediate`, `.jump` and `.download` are not gated: the chapter on screen never waits
+    /// for read-ahead, and downloads have their own slots in `OfflineDownloadManager`.
+    static func readAheadGateKey(bookId: UUID, priority: ChapterFetchPriority) -> String? {
+        switch priority {
+        case .prefetch, .background: return "chapterReadAhead#\(bookId.uuidString)"
+        case .immediate, .jump, .download: return nil
+        }
+    }
+
     func prefetchChapters(
         book: ReadingBook, indices: [Int], priority: ChapterFetchPriority, store: BookStore?
     ) {
         for idx in indices {
-            let state = chapterState(bookId: book.id, chapterIndex: idx)
+            let state = chapterState(book: book, chapterIndex: idx)
             guard state == .missing || state == .failed else { continue }
             Task(priority: priority.taskPriority) {
                 _ = try? await fetchChapter(
@@ -859,7 +905,7 @@ actor ChapterFetchManager {
             // A Cloudflare page ends up here as `cloudflareChallengeRequired`, like any other
             // failure: nothing opens a verification page by itself (Legado never does). The
             // reader passes the check from the reading menu's 開啟網頁.
-            let result = try await webViewFetcher.fetchContentWithNextPage(
+            let result = try await WebViewFetcher.shared.fetchContentWithNextPage(
                 url: url,
                 headers: headers,
                 timeout: AppConfig.webViewFetchTimeout,
@@ -1155,29 +1201,36 @@ final class OnlineBookCoordinator: Sendable {
         }
     }
 
-    func prefetchAround(book: ReadingBook, center: Int, store: BookStore?) async {
-        guard let refs = book.onlineChapters, !refs.isEmpty else { return }
-        let last = refs.count - 1
-
-        // Forward priority: N+1, N+2 use prefetch (user is far more likely to read forward)
-        let forwardIndices = [center + 1, center + 2]
-            .filter { $0 >= 0 && $0 <= last }
-        // Backward fallback: N-1, N-2 use background (preserve back-navigation)
-        let backwardIndices = [center - 1, center - 2]
-            .filter { $0 >= 0 && $0 <= last }
-
-        if !forwardIndices.isEmpty {
-            await chapterFetchManager.prefetchChapters(
-                book: book, indices: forwardIndices, priority: .prefetch, store: store)
-        }
-        if !backwardIndices.isEmpty {
-            await chapterFetchManager.prefetchChapters(
-                book: book, indices: backwardIndices, priority: .background, store: store)
-        }
+    /// The chapters worth having before the reader reaches them, nearest first: N+1 … N+`ahead`
+    /// at `.prefetch` (readers mostly go forward; `ahead` is 網路設定 →「預讀章節數」, FB-125),
+    /// N-1, N-2 at `.background` (back-navigation).
+    /// The reader's own prefetch (`ReaderViewModel.prefetchAround`) and this coordinator's
+    /// share it, so the two can never disagree about what "around" means. How many of these
+    /// run at once is `ChapterFetchManager`'s read-ahead gate, not the window's length.
+    static func adjacentPrefetchWindow(
+        center: Int,
+        chapterCount: Int,
+        ahead: Int
+    ) -> [(index: Int, priority: ChapterFetchPriority)] {
+        let valid = 0..<chapterCount
+        let ahead = NetworkSearchSettings.clampedChapterPrefetchCount(ahead)
+        let forward = (1...ahead).map { center + $0 }.filter(valid.contains)
+            .map { (index: $0, priority: ChapterFetchPriority.prefetch) }
+        let backward = [center - 1, center - 2].filter(valid.contains)
+            .map { (index: $0, priority: ChapterFetchPriority.background) }
+        return forward + backward
     }
 
-    func chapterState(bookId: UUID, chapterIndex: Int) async -> OnlineChapterLoadState {
-        await chapterFetchManager.chapterState(bookId: bookId, chapterIndex: chapterIndex)
+    func prefetchAround(book: ReadingBook, center: Int, store: BookStore?) async {
+        guard let refs = book.onlineChapters, !refs.isEmpty else { return }
+        let ahead = await MainActor.run { GlobalSettings.shared.chapterPrefetchCount }
+        let window = Self.adjacentPrefetchWindow(center: center, chapterCount: refs.count, ahead: ahead)
+        for priority in [ChapterFetchPriority.prefetch, .background] {
+            let indices = window.filter { $0.priority == priority }.map(\.index)
+            guard !indices.isEmpty else { continue }
+            await chapterFetchManager.prefetchChapters(
+                book: book, indices: indices, priority: priority, store: store)
+        }
     }
 
     // MARK: - Sanity Checks

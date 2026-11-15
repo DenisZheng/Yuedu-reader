@@ -179,7 +179,7 @@ struct WorkDetailView: View {
                 versionsLoaded = true
                 // A 青空文庫 copy stands for itself until the catalog is read; reading it changes
                 // this task's id, and the versions are read again with the work.
-                if aozora.catalog == nil,
+                if RuleModuleLibrary.shared.isPublicLibraryEnabled(.aozora), aozora.catalog == nil,
                    versions.contains(where: { $0.record.copyID != nil && $0.record.key.instance.type == .aozora }) {
                     await aozora.load()
                 }
@@ -1029,7 +1029,7 @@ struct WorkDetailView: View {
         case .gutenberg(let book):
             if items[version.nodeKey] == nil { await loadGutenberg(book, key: version.nodeKey) }
         case .aozora:
-            if aozora.catalog == nil { await aozora.load() }
+            if RuleModuleLibrary.shared.isPublicLibraryEnabled(.aozora), aozora.catalog == nil { await aozora.load() }
         case .opdsEntry(_, let connectionID), .webDAVFile(_, let connectionID):
             do {
                 writeCapabilities = try await dependencies.remoteLibraryWriting.capabilities(connectionID: connectionID, directoryURL: nil)

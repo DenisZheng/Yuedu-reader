@@ -16,15 +16,18 @@ final class SourceProviderRegistry {
     private let connections: OPDSCatalogStore
     private let availability: PublicLibraryAvailability
     private let aozora: AozoraCatalogStore
+    private let moduleLibrary: RuleModuleLibrary
 
     init(
         connections: OPDSCatalogStore = .shared,
         availability: PublicLibraryAvailability? = nil,
-        aozora: AozoraCatalogStore? = nil
+        aozora: AozoraCatalogStore? = nil,
+        modules: RuleModuleLibrary? = nil
     ) {
         self.connections = connections
         self.availability = availability ?? .shared
         self.aozora = aozora ?? .shared
+        self.moduleLibrary = modules ?? .shared
     }
 
     /// The OPDS-speaking provider of a feed route: the built-in Gutenberg, or a saved OPDS or
@@ -59,8 +62,8 @@ final class SourceProviderRegistry {
             case .opds, .calibre: providers.append(OPDSProvider(connection: connection, store: connections))
             }
         }
-        providers.append(gutenberg)
-        providers.append(aozoraProvider)
+        if moduleLibrary.isPublicLibraryEnabled(.gutenberg) { providers.append(gutenberg) }
+        if moduleLibrary.isPublicLibraryEnabled(.aozora) { providers.append(aozoraProvider) }
         return providers.filter { $0.availability != .hiddenInRegion }
     }
 
@@ -113,8 +116,8 @@ final class SourceProviderRegistry {
             case .opds, .calibre: providers.append(OPDSProvider(connection: connection, store: connections))
             }
         }
-        providers.append(gutenberg)
-        providers.append(aozoraProvider)
+        if modules.isPublicLibraryEnabled(.gutenberg) { providers.append(gutenberg) }
+        if modules.isPublicLibraryEnabled(.aozora) { providers.append(aozoraProvider) }
         providers += Self.moduleProviders(in: modules)
         providers.append(AIRecommendationProvider())
         providers += DiscoverViewModel.exploreSources(in: sources).map { BookSourceProvider(source: $0, firstPages: firstPages) }

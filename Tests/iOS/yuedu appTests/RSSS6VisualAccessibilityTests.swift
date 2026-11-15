@@ -40,7 +40,9 @@ import UIKit
                     defer { window.isHidden = true; window.rootViewController = nil }
                     let deadline = ContinuousClock.now + .seconds(6)
                     @MainActor func missing() -> [String] { let found = labels(window); return expected.filter { label in !found.contains { $0.contains(label) } } }
-                    while !missing().isEmpty, ContinuousClock.now < deadline { await Task.yield() }
+                    // 标签可早于按钮的accessibility trait出现；等待真实可激活控件，不用标签可见猜测完成。
+                    while (!missing().isEmpty || !buttons(window).contains { ($0.accessibilityLabel ?? "") == expected.last }),
+                          ContinuousClock.now < deadline { await Task.yield() }
                     #expect(missing().isEmpty, "\(name) \(scheme) 缺少VoiceOver元素：\(missing())，实际：\(labels(window))")
                     let retry = buttons(window).first { ($0.accessibilityLabel ?? "") == expected.last }
                     #expect(retry != nil, "\(name) 的操作必须是可激活按钮")

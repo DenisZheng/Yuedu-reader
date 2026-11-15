@@ -72,23 +72,23 @@ Storage (local-first) · Sync (iCloud / WebDAV)
 | `Tests/` | 單元測試（`Tests/iOS`）、UI 測試（`Tests/iOS-UI`）與測試素材 |
 | `docs/` | 使用指南、CoreText 文件、更新日誌，以及測試會讀取的排版語料 |
 | `Technotes/` | 設計筆記與事後檢討 |
-| `functions/`、`gateway/` | Firebase Cloud Functions 與帳號閘道；Firestore／Storage 規則在根目錄 |
+| `gateway/` | 未接入 Fork 的原版閘道參考；已移除 Firebase functions/設定/規則與目錄發布 workflow |
 | `scripts/` | 模擬器、測試、在地化與目錄工具 |
 | `xcconfig/`、`Configuration/`、`ci_scripts/` | 建置設定、StoreKit 測試設定與 Xcode Cloud 腳本 |
 
 ## 建置
 
-**環境需求：** Xcode 27.1 以上 · iOS 17.0+ · Swift 6
+**環境需求：** iOS 17.0+ · Swift 6 語言模式 · 本地套件需要 Swift 6.2+ 工具鏈。執行時以 `scripts/sim.sh` 解析可用 Xcode 與模擬器，不硬編碼本機 SDK。
 
 ```bash
-git clone https://github.com/CHANG-JUI-LIN/Yuedu-reader.git
+git clone https://github.com/DenisZheng/Yuedu-reader.git
 cd Yuedu-reader
 open Yuedu-Reader.xcodeproj
 ```
 
-專案需要根目錄有一份 `GoogleService-Info.plist`。它不在 repo 裡（已列入 gitignore），沒有它建置會失敗：請在你自己的 Firebase 專案新增一個 iOS App，把它的 plist 放到根目錄。
+選擇 `Reader-Fork-Dev` scheme 與可用模擬器。Fork 不再需要 `GoogleService-Info.plist`、Google/Firebase 帳號或購買權益；實機安裝、iCloud/App Group 仍需自己的簽章設定，不可用時不阻止本地閱讀。
 
-接著選擇模擬器（或實機）執行。自行建置的版本需要自己的簽章設定與 Bundle Identifier；公開重新散布的分支版本必須使用不同的 App 名稱、圖示與品牌素材，且不得暗示獲得官方背書。
+六個內建JSON模組與青空/Project Gutenberg公共書庫預設停用，不自動發起首頁或搜尋請求；仍可在設定→模組手動啟用，見[預設模組策略](docs/legado-alignment/builtin-modules-defaults.md)。公開重新散布必須使用不同的 App 名稱、圖示與品牌素材，不得暗示原版或青空文庫認可。以下 App Store 介紹保留原版背景，不代表本 Fork 收費或已獲發布批准。
 
 ## App Store 官方版本
 

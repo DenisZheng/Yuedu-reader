@@ -17,7 +17,7 @@ final class FixedPageWebtoonViewController: UIViewController, FixedPageModeReade
 
     weak var container: FixedPageReaderContainer?
 
-    private let fixedPageReaderConfiguration: FixedPageReaderConfiguration
+    private(set) var fixedPageReaderConfiguration: FixedPageReaderConfiguration
     private let targetWidth: FixedPageTargetWidth
     private(set) var pages: [FixedPage] = []
     let layout: FixedPageWebtoonLayout
@@ -115,6 +115,12 @@ final class FixedPageWebtoonViewController: UIViewController, FixedPageModeReade
         collectionView.showsVerticalScrollIndicator = false
         collectionView.alwaysBounceVertical = fixedPageReaderConfiguration.layout == .continuousVerticalScroll
         collectionView.contentInsetAdjustmentBehavior = .never
+        // A tap on the status bar is not a way to the first chapter. The strip holds every
+        // chapter from the book's start, so UIKit's scroll-to-top — which takes any tap that
+        // lands on the status bar, the one a reader makes reaching for the top-right corner
+        // while the controls are up — rolled the reader back to chapter 1 (FB-178).
+        // Aidoku's webtoon reader, which this one follows, turns it off for the same reason.
+        collectionView.scrollsToTop = false
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.register(FixedPageWebtoonCell.self, forCellWithReuseIdentifier: FixedPageWebtoonCell.reuseID)
@@ -199,6 +205,12 @@ final class FixedPageWebtoonViewController: UIViewController, FixedPageModeReade
         let link = CADisplayLink(target: self, selector: #selector(handleAutoScrollTick(_:)))
         link.add(to: .main, forMode: .common)
         autoScrollDisplayLink = link
+    }
+
+    /// Changes the speed in place: the tick reads the configuration every frame, so a
+    /// run in progress picks it up on its next frame without restarting (FB-150).
+    func setAutoScrollSpeed(_ speed: Int) {
+        fixedPageReaderConfiguration.autoScrollSpeed = speed
     }
 
     func stopAutoScroll() {

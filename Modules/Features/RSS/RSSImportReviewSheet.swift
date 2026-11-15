@@ -1,8 +1,10 @@
 import SwiftUI
 
-struct RSSImportReviewRequest: Identifiable {
+struct RSSImportReviewRequest: Identifiable, Equatable {
     let id = UUID()
     var input: RSSImportService.Input
+    // 每个冻结的导入请求有独立身份；状态机比较请求身份，不重新比较整个源包。
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 }
 
 struct RSSImportReviewSheet: View {
@@ -121,6 +123,10 @@ private struct RSSImportRowLabel: View {
                 .font(DSFont.subheadline).foregroundStyle(DSColor.textSecondary)
             if row.changedFields > 0 {
                 Text(String(format: localized("%d 個配置欄位變更"), row.changedFields))
+                    .font(DSFont.footnote).foregroundStyle(DSColor.textSecondary)
+            }
+            if row.correctedFields > 0 {
+                Text(String(format: localized("已修正 %d 個欄位類型"), row.correctedFields))
                     .font(DSFont.footnote).foregroundStyle(DSColor.textSecondary)
             }
             if row.unknownFields > 0 {

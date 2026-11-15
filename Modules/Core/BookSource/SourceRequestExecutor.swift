@@ -84,17 +84,15 @@ struct SourceRequestExecutor: Sendable {
             guard runtimeState?.isCurrent != false else { throw CancellationError() }
             return try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group -> (Data, URLResponse) in
                 group.addTask {
-                    guard let maximumBytes else { return try await session.data(for: configuredRequest, delegate: redirect) }
-                    let (bytes, response) = try await session.bytes(for: configuredRequest, delegate: redirect)
-                    defer { bytes.task.cancel() }
-                    guard maximumBytes > 0, response.expectedContentLength <= maximumBytes else { throw URLError(.dataLengthExceedsMaximum) }
-                    var data = Data(); data.reserveCapacity(min(maximumBytes, max(0, Int(response.expectedContentLength))))
-                    for try await byte in bytes {
-                        if data.count % 16_384 == 0 { try Task.checkCancellation() }
-                        guard data.count < maximumBytes else { throw URLError(.dataLengthExceedsMaximum) }
-                        data.append(byte)
+                    let limit = maximumBytes ?? WebFetcher.responseByteLimit
+                    guard limit > 0 else { throw URLError(.dataLengthExceedsMaximum) }
+                    do {
+                        return try await BoundedResponseLoader.load(configuredRequest, session: session, limit: limit,
+                            transport: "sourceExecutor", taskDelegate: redirect)
+                    } catch FetchError.responseTooLarge {
+                        // 保留SourceRequestExecutor已有的大小错误合同，调用者不必依赖底层收集器类型。
+                        throw URLError(.dataLengthExceedsMaximum)
                     }
-                    return (data, response)
                 }
                 group.addTask {
                     try await Task.sleep(for: .seconds(timeout))

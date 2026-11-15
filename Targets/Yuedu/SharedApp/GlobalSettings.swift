@@ -572,6 +572,7 @@ class GlobalSettings {
     private static let appearanceBoundDarkReaderThemeKey = "yd_appearance_bound_dark_reader_theme"
     static let readerChromeColorsKey = "yd_reader_chrome_colors"
     static let readerChromeHiddenIDsKey = "yd_reader_chrome_hidden_ids"
+    static let readerChromeToolOrderIDsKey = "yd_reader_chrome_tool_order_ids"
     static let readerChromeIconsKey = "yd_reader_chrome_icons"
     private static let interfaceGlowIntensityKey = "yd_interface_glow_intensity"
     private static let interfaceGlowColorKey = "yd_interface_glow_color"
@@ -622,6 +623,9 @@ class GlobalSettings {
     private static let ttsSystemVoiceIdentifiersKey = "yd_tts_system_voice_ids"
     private static let ttsMultiRoleEnabledKey = "yd_tts_multi_role_enabled"
     private static let ttsRoleVoicesKey = "yd_tts_role_voices"
+    private static let ttsAIDialogueEnabledKey = "yd_tts_ai_dialogue_enabled"
+    private static let ttsAutoCastEnabledKey = "yd_tts_auto_cast_enabled"
+    private static let ttsEmotionEnabledKey = "yd_tts_emotion_enabled"
     private static let readerTextColorOverridesKey = "yd_reader_text_color_overrides"
     static let readerCustomBackgroundsKey = "yd_reader_custom_backgrounds"
     nonisolated static let readerCustomBackgroundIDKey = "yd_reader_custom_background_id"
@@ -637,6 +641,7 @@ class GlobalSettings {
     private static let launchImageLightFileNameKey = "yd_launch_image_light_file_name"
     private static let launchImageDarkFileNameKey = "yd_launch_image_dark_file_name"
     private static let rootTabVisibleIDsKey = "yd_root_tab_visible_ids"
+    static let rootTabOrderIDsKey = "yd_root_tab_order_ids"
     private static let rootTabHidesLabelsKey = "yd_root_tab_hides_labels"
     private static let rootTabIconSizeKey = "yd_root_tab_icon_size"
     static let rootTabIconAssetsKey = "yd_root_tab_icon_assets"
@@ -1419,6 +1424,15 @@ class GlobalSettings {
         }
     }
 
+    /// `storageID`s of the bottom bar's tools in the order the reader arranged them (#36).
+    /// Empty = `ReaderChromeToolItem.allCases`; read through `CustomItemOrder.resolve`.
+    var readerChromeToolOrderIDs: [String] {
+        didSet {
+            UserDefaults.standard.set(readerChromeToolOrderIDs, forKey: Self.readerChromeToolOrderIDsKey)
+            updateActiveThemeExtras { $0.readerChromeToolOrderIDs = readerChromeToolOrderIDs }
+        }
+    }
+
     /// User-imported replacements for those buttons' symbols.
     var readerChromeIcons: [ReaderChromeIconAsset] {
         didSet {
@@ -1520,6 +1534,15 @@ class GlobalSettings {
                 UserDefaults.standard.set(rootTabVisibleIDs, forKey: Self.rootTabVisibleIDsKey)
                 updateActiveThemeExtras { $0.visibleTabIDs = rootTabVisibleIDs }
             }
+        }
+    }
+    /// `RootTabItem` raw values in the order the reader arranged the tabs (#92), hidden tabs
+    /// included so one shown again comes back where it was. Empty = `RootTabItem.tabs`;
+    /// read through `CustomItemOrder.resolve`. Which tabs show stays `rootTabVisibleIDs`.
+    var rootTabOrderIDs: [String] {
+        didSet {
+            UserDefaults.standard.set(rootTabOrderIDs, forKey: Self.rootTabOrderIDsKey)
+            updateActiveThemeExtras { $0.tabOrderIDs = rootTabOrderIDs }
         }
     }
     var rootTabHidesLabels: Bool {
@@ -1810,6 +1833,12 @@ class GlobalSettings {
             UserDefaults.standard.set(searchAutoPauseCount, forKey: "yd_search_auto_pause_count")
         }
     }
+    /// 網路設定 →「預讀章節數」: how many chapters past the one being read an online book
+    /// fetches ahead of the reader (FB-125). One of `NetworkSearchSettings.chapterPrefetchOptions`;
+    /// 2 is the window the reader always had.
+    var chapterPrefetchCount: Int {
+        didSet { UserDefaults.standard.set(chapterPrefetchCount, forKey: "yd_chapter_prefetch_count") }
+    }
     var searchCacheDays: Int {
         didSet {
             UserDefaults.standard.set(searchCacheDays, forKey: "yd_search_cache_days")
@@ -1827,6 +1856,33 @@ class GlobalSettings {
     /// — same as Legado — because it turns one request per source into two.
     var changeSourceLoadToc: Bool {
         didSet { UserDefaults.standard.set(changeSourceLoadToc, forKey: "yd_change_source_load_toc") }
+    }
+    /// The 來源配置 group 換源 searches (Legado's 換源 分組 menu); empty is every enabled one.
+    /// A group with no enabled source left is reset to all when a search starts, as Legado's
+    /// `ChangeBookSourceViewModel.startSearch` does.
+    var changeSourceGroup: String {
+        didSet { UserDefaults.standard.set(changeSourceGroup, forKey: "yd_change_source_group") }
+    }
+    /// 校驗作者 (Legado `changeSourceCheckAuthor`): 換源 keeps only results whose author is
+    /// compatible with the book's. Off by default, as Legado: the name alone decides.
+    var changeSourceCheckAuthor: Bool {
+        didSet { UserDefaults.standard.set(changeSourceCheckAuthor, forKey: "yd_change_source_check_author") }
+    }
+    /// 加載詳情 (Legado `changeSourceLoadInfo`): a result with no TOC address has its detail page
+    /// read during 換源, so its row shows the detail page's latest chapter. Off by default.
+    var changeSourceLoadInfo: Bool {
+        didSet { UserDefaults.standard.set(changeSourceLoadInfo, forKey: "yd_change_source_load_info") }
+    }
+    /// 加載字數 (Legado `changeSourceLoadWordCount`): each result's TOC and the chapter being read
+    /// are fetched, so the row shows that chapter's length and the response time, and the list
+    /// ranks real chapters first. Off by default — it costs two more requests per result.
+    var changeSourceLoadWordCount: Bool {
+        didSet { UserDefaults.standard.set(changeSourceLoadWordCount, forKey: "yd_change_source_load_word_count") }
+    }
+    /// 自動換源 (Legado `autoChangeSource`): a shelf book whose 來源配置 was deleted switches, on
+    /// opening, to the first source that has it and whose TOC loads. On by default, as Legado.
+    var autoChangeSource: Bool {
+        didSet { UserDefaults.standard.set(autoChangeSource, forKey: "yd_auto_change_source") }
     }
 
     /// Auto iCloud sync: merge with iCloud on launch and when backgrounding.
@@ -1922,6 +1978,71 @@ class GlobalSettings {
     /// the narrator's voice, which is what an unattributed line gets too.
     var ttsRoleVoices: [String: String] {
         didSet { UserDefaults.standard.set(ttsRoleVoices, forKey: Self.ttsRoleVoicesKey) }
+    }
+
+    /// 多角色朗讀 asks the AI who speaks each line and how, chapter by chapter, before it is
+    /// read. On by default once the reader has multi-role on and an AI service set up — it is
+    /// what makes the feature work at all for dialogue without a 「某某說」.
+    var ttsAIDialogueEnabled: Bool {
+        didSet { UserDefaults.standard.set(ttsAIDialogueEnabled, forKey: Self.ttsAIDialogueEnabledKey) }
+    }
+    /// Characters nobody cast get a voice matched to their gender and age.
+    var ttsAutoCastEnabled: Bool {
+        didSet { UserDefaults.standard.set(ttsAutoCastEnabled, forKey: Self.ttsAutoCastEnabledKey) }
+    }
+    /// Lines are spoken with the emotion the AI marked.
+    var ttsEmotionEnabled: Bool {
+        didSet { UserDefaults.standard.set(ttsEmotionEnabled, forKey: Self.ttsEmotionEnabledKey) }
+    }
+
+    /// Azure AI Speech: the resource's region. The key lives in the Keychain.
+    var azureTtsRegion: String {
+        didSet { UserDefaults.standard.set(azureTtsRegion, forKey: "yd_tts_azure_region") }
+    }
+    /// `AzureTTSVoiceRef.storage` of the narrator voice Azure was last set to.
+    var azureTtsVoice: String {
+        didSet { UserDefaults.standard.set(azureTtsVoice, forKey: "yd_tts_azure_voice") }
+    }
+    var openAITtsBaseURL: String {
+        didSet { UserDefaults.standard.set(openAITtsBaseURL, forKey: "yd_tts_openai_base_url") }
+    }
+    var openAITtsModel: String {
+        didSet { UserDefaults.standard.set(openAITtsModel, forKey: "yd_tts_openai_model") }
+    }
+    var openAITtsVoice: String {
+        didSet { UserDefaults.standard.set(openAITtsVoice, forKey: "yd_tts_openai_voice") }
+    }
+    var mimoTtsBaseURL: String {
+        didSet { UserDefaults.standard.set(mimoTtsBaseURL, forKey: "yd_tts_mimo_base_url") }
+    }
+    var mimoTtsVoice: String {
+        didSet { UserDefaults.standard.set(mimoTtsVoice, forKey: "yd_tts_mimo_voice") }
+    }
+
+    /// The cloud service in use, if the narrator is one of them.
+    var activeCloudTTSService: CloudTTSService? {
+        guard !ttsUseSystemVoice else { return nil }
+        return CloudTTSService.service(forSourceIdentifier: httpTtsUrlTemplate)
+    }
+
+    /// The voice each cloud service was last set to, so switching back restores it.
+    func cloudTTSVoice(for service: CloudTTSService) -> String {
+        switch service {
+        case .azure: return azureTtsVoice
+        case .openAI: return openAITtsVoice
+        case .mimo: return mimoTtsVoice
+        }
+    }
+
+    func selectCloudTTSVoice(_ voice: String, service: CloudTTSService) {
+        switch service {
+        case .azure: azureTtsVoice = voice
+        case .openAI: openAITtsVoice = voice
+        case .mimo: mimoTtsVoice = voice
+        }
+        httpTtsUrlTemplate = service.sourceIdentifier(voice: voice)
+        httpTtsHeaders = [:]
+        ttsUseSystemVoice = false
     }
 
     /// Whether the AI assistant is limited to what the reader has already read.
@@ -2343,6 +2464,7 @@ class GlobalSettings {
         launchImageDarkFileName = UserDefaults.standard.string(forKey: Self.launchImageDarkFileNameKey)
         readerChromeColors = Self.loadReaderChromeColors()
         readerChromeHiddenIDs = UserDefaults.standard.stringArray(forKey: Self.readerChromeHiddenIDsKey) ?? []
+        readerChromeToolOrderIDs = UserDefaults.standard.stringArray(forKey: Self.readerChromeToolOrderIDsKey) ?? []
         readerChromeIcons = Self.loadReaderChromeIcons()
         interfaceGlowIntensity = Self.sanitizedInterfaceGlowIntensity(
             (UserDefaults.standard.object(forKey: Self.interfaceGlowIntensityKey) as? Double)
@@ -2364,6 +2486,7 @@ class GlobalSettings {
             UserDefaults.standard.stringArray(forKey: Self.rootTabVisibleIDsKey)
                 ?? Self.defaultRootTabVisibleIDs
         )
+        rootTabOrderIDs = UserDefaults.standard.stringArray(forKey: Self.rootTabOrderIDsKey) ?? []
         rootTabHidesLabels = UserDefaults.standard.bool(forKey: Self.rootTabHidesLabelsKey)
         let loadedRootTabIconSize =
             (UserDefaults.standard.object(forKey: Self.rootTabIconSizeKey) as? Double)
@@ -2416,12 +2539,25 @@ class GlobalSettings {
             (UserDefaults.standard.object(forKey: "yd_search_concurrency") as? Int) ?? 16
         searchAutoPauseCount =
             (UserDefaults.standard.object(forKey: "yd_search_auto_pause_count") as? Int) ?? 0
+        chapterPrefetchCount = NetworkSearchSettings.clampedChapterPrefetchCount(
+            (UserDefaults.standard.object(forKey: "yd_chapter_prefetch_count") as? Int)
+                ?? NetworkSearchSettings.defaultChapterPrefetchCount
+        )
         searchCacheDays =
             (UserDefaults.standard.object(forKey: "yd_search_cache_days") as? Int) ?? 5
         autoFillBookMetadata =
             (UserDefaults.standard.object(forKey: "yd_auto_fill_book_metadata") as? Bool) ?? true
         changeSourceLoadToc =
             (UserDefaults.standard.object(forKey: "yd_change_source_load_toc") as? Bool) ?? false
+        changeSourceGroup = UserDefaults.standard.string(forKey: "yd_change_source_group") ?? ""
+        changeSourceCheckAuthor =
+            (UserDefaults.standard.object(forKey: "yd_change_source_check_author") as? Bool) ?? false
+        changeSourceLoadInfo =
+            (UserDefaults.standard.object(forKey: "yd_change_source_load_info") as? Bool) ?? false
+        changeSourceLoadWordCount =
+            (UserDefaults.standard.object(forKey: "yd_change_source_load_word_count") as? Bool) ?? false
+        autoChangeSource =
+            (UserDefaults.standard.object(forKey: "yd_auto_change_source") as? Bool) ?? true
         iCloudAutoSync =
             (UserDefaults.standard.object(forKey: "yd_icloud_auto_sync") as? Bool) ?? true
         edgeTtsVoiceID = UserDefaults.standard.string(forKey: "yd_edge_tts_voice_id") ?? EdgeTTSVoice.defaultVoice.id
@@ -2440,6 +2576,22 @@ class GlobalSettings {
         ttsRoleVoices =
             (UserDefaults.standard.dictionary(forKey: Self.ttsRoleVoicesKey)
                 as? [String: String]) ?? [:]
+        ttsAIDialogueEnabled =
+            (UserDefaults.standard.object(forKey: Self.ttsAIDialogueEnabledKey) as? Bool) ?? true
+        ttsAutoCastEnabled =
+            (UserDefaults.standard.object(forKey: Self.ttsAutoCastEnabledKey) as? Bool) ?? true
+        ttsEmotionEnabled =
+            (UserDefaults.standard.object(forKey: Self.ttsEmotionEnabledKey) as? Bool) ?? true
+        azureTtsRegion = UserDefaults.standard.string(forKey: "yd_tts_azure_region") ?? "eastasia"
+        azureTtsVoice = UserDefaults.standard.string(forKey: "yd_tts_azure_voice") ?? "zh-CN-XiaoxiaoNeural"
+        openAITtsBaseURL = UserDefaults.standard.string(forKey: "yd_tts_openai_base_url")
+            ?? OpenAICompatibleTTSConfiguration.defaultOpenAIBaseURL
+        openAITtsModel = UserDefaults.standard.string(forKey: "yd_tts_openai_model")
+            ?? OpenAICompatibleTTSConfiguration.defaultOpenAIModel
+        openAITtsVoice = UserDefaults.standard.string(forKey: "yd_tts_openai_voice") ?? OpenAITTSVoices.defaultVoice
+        mimoTtsBaseURL = UserDefaults.standard.string(forKey: "yd_tts_mimo_base_url")
+            ?? OpenAICompatibleTTSConfiguration.defaultMiMoBaseURL
+        mimoTtsVoice = UserDefaults.standard.string(forKey: "yd_tts_mimo_voice") ?? MiMoTTSVoices.defaultVoice
         aiSpoilerSafe = (UserDefaults.standard.object(forKey: "yd_ai_spoiler_safe") as? Bool) ?? true
         sourceDisclaimerAccepted = UserDefaults.standard.bool(forKey: "yd_source_disclaimer_accepted")
         bookSourceListGrouped =

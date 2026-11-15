@@ -23,9 +23,9 @@ final class RegexExtractor: RuleExtractor {
         let nsContent = content as NSString
         let fullRange = NSRange(location: 0, length: nsContent.length)
 
-        let matches = RegexSanitizer.withTimeout(seconds: 2.0, work: {
-            regex.matches(in: content, range: fullRange)
-        }, fallback: [] as [NSTextCheckingResult])
+        let matches = RegexMatching.matches(
+            of: regex, in: content, range: fullRange, firstOnly: false, timeout: 2.0
+        ) ?? []
 
         guard !matches.isEmpty else { return [] }
 
@@ -56,9 +56,9 @@ final class RegexExtractor: RuleExtractor {
         let nsContent = content as NSString
         let fullRange = NSRange(location: 0, length: nsContent.length)
 
-        guard let match = RegexSanitizer.withTimeout(seconds: 2.0, work: {
-            regex.firstMatch(in: content, range: fullRange)
-        }, fallback: nil) else {
+        guard let match = RegexMatching.matches(
+            of: regex, in: content, range: fullRange, firstOnly: true, timeout: 2.0
+        )?.first else {
             return ""
         }
 
@@ -84,36 +84,10 @@ final class RegexExtractor: RuleExtractor {
 
 // MARK: - RegexReplacer
 
-/// Applies `##pattern##replacement` post-processing after extraction.
+/// Applies `##pattern##replacement` post-processing after extraction, as Legado's
+/// `AnalyzeRule.replaceRegex` does (legado-E, MD3 and upstream agree).
 /// Group references `$0`–`$99` in `replacement` are resolved by NSRegularExpression.
-/// Append `###` to the rule to replace only the first match.
 enum RegexReplacer {
-
-    /// Transform only the first regex match and return that transformed match.
-    ///
-    /// Legado uses this behavior for a rule whose extraction part is empty and
-    /// whose replacement suffix is `###`, for example
-    /// `##href=".../(\d+)/0/"##https://example.com/book/$1/###`.
-    /// The unmatched surrounding HTML is intentionally discarded.
-    static func firstMatchReplacement(
-        result: String,
-        pattern: String,
-        replacement: String,
-        timeout: TimeInterval = 2.0
-    ) -> String {
-        guard !pattern.isEmpty else { return "" }
-        guard let regex = RegexCache.shared.regex(for: pattern) else { return "" }
-
-        let fullRange = NSRange(result.startIndex..., in: result)
-        return RegexSanitizer.withTimeout(seconds: timeout, work: {
-            guard let match = regex.firstMatch(in: result, range: fullRange) else {
-                return ""
-            }
-            return regex.replacementString(
-                for: match, in: result, offset: 0, template: replacement
-            )
-        }, fallback: "")
-    }
 
     /// Replace regex matches in `result`.
     /// - Parameters:
@@ -121,9 +95,16 @@ enum RegexReplacer {
     ///   - pattern: The regex pattern (supports `(?i)` inline flags). Java-specific
     ///              syntax is sanitized automatically via `RegexSanitizer`.
     ///   - replacement: Template string with `$0`–`$99` group references.
-    ///   - replaceFirst: If `true`, only the first match is replaced.
-    ///   - timeout: Maximum seconds to allow; returns original on catastrophic backtracking.
-    /// - Returns: The modified string, or the original if the pattern is empty/invalid/timed-out.
+    ///   - replaceFirst: The rule ended in `###`: the result is the first match alone,
+    ///     transformed — `match.value.replaceFirst(regex, replacement)` — and the text around
+    ///     it is dropped; no match gives "". This holds whatever extraction rule came before
+    ///     the `##`: `.mubtn@a@href##/(\d+)##https://host/info.php?aid=$1###` turns the href
+    ///     `chapter/172275/` into `https://host/info.php?aid=172275`, not
+    ///     `chapterhttps://host/info.php?aid=172275/`.
+    ///   - timeout: Maximum seconds to allow; on catastrophic backtracking the original comes
+    ///     back (`""` under `replaceFirst`, as for no match).
+    /// - Returns: The modified string. A pattern that does not compile gives `replacement`
+    ///   under `replaceFirst`, and otherwise a literal (non-regex) replacement, as in Legado.
     static func replaceRegex(
         result: String,
         pattern: String,
@@ -132,26 +113,30 @@ enum RegexReplacer {
         timeout: TimeInterval = 2.0
     ) -> String {
         guard !pattern.isEmpty else { return result }
-        guard let regex = RegexCache.shared.regex(for: pattern) else { return result }
+        guard let regex = RegexCache.shared.regex(for: pattern) else {
+            return replaceFirst
+                ? replacement
+                : result.replacingOccurrences(of: pattern, with: replacement)
+        }
 
         let fullRange = NSRange(result.startIndex..., in: result)
 
-        return RegexSanitizer.withTimeout(seconds: timeout, work: {
-            if replaceFirst {
-                guard let match = regex.firstMatch(in: result, range: fullRange) else {
-                    return result
-                }
-                let template = regex.replacementString(
-                    for: match, in: result, offset: 0, template: replacement
-                )
-                let mutable = NSMutableString(string: result)
-                mutable.replaceCharacters(in: match.range, with: template)
-                return mutable as String
-            } else {
-                return regex.stringByReplacingMatches(
-                    in: result, range: fullRange, withTemplate: replacement
-                )
+        if replaceFirst {
+            guard let match = RegexMatching.matches(
+                of: regex, in: result, range: fullRange, firstOnly: true, timeout: timeout
+            )?.first, let range = Range(match.range, in: result) else {
+                return ""
             }
-        }, fallback: result)
+            // Kotlin's `match.value.replaceFirst(regex, replacement)`: the regex runs again
+            // on the matched text alone, so a lookaround that needed the surrounding text
+            // leaves the match as it is.
+            let value = String(result[range])
+            return RegexMatching.replacing(
+                regex, in: value, template: replacement, firstOnly: true, timeout: timeout
+            ) ?? ""
+        }
+        return RegexMatching.replacing(
+            regex, in: result, template: replacement, firstOnly: false, timeout: timeout
+        ) ?? result
     }
 }

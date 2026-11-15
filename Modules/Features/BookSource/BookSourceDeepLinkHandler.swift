@@ -1,101 +1,108 @@
-import Foundation
 import Combine
+import Foundation
 
-// MARK: - BookSourceDeepLinkHandler
-
-// State machine driving the system-level book-source import sheet. The App
-// entry point calls `handle(url:)` from `.onOpenURL`; when the URL is a valid
-// book-source import deep link, the handler flips to `.confirming` and the App
-// presents `BookSourceImportConfirmSheet` bound to this handler. The user then
-// confirms, the handler downloads and imports via the same `BookSourceStore`
-// path the in-app WebView importer uses, and reports the result.
-//
-// Same store path as every other importer, through `BookSourceImportCoordinator`:
-// parse, review, then write the selected rows. There is no second cache/loader/decoder
-// for this concern.
+/// 系统与站内链接共用的源包导入状态机；先限额下载并分类，再进入对应业务的确认页。
+/// 预览前不写库、不执行源脚本；取消和新请求使晚到结果失效。
 @MainActor
 final class BookSourceDeepLinkHandler: ObservableObject {
     enum Phase: Equatable {
         case idle
         case confirming(sourceURL: URL)
-        /// Downloading and parsing. Nothing is written in this phase.
         case importing
-        /// The parsed pack is on screen in the confirmation list, awaiting the user's picks.
-        /// The plan itself lives on `coordinator`; a phase has to stay `Equatable`.
         case reviewing
+        case reviewingRSS(RSSImportReviewRequest)
         case succeeded(count: Int)
         case failed(message: String)
     }
 
     @Published private(set) var phase: Phase = .idle
+    let coordinator: BookSourceImportCoordinator
+    let rssStore: RSSStore
+    private let bookStore: BookSourceStore
+    private let fetch: RSSImportService.Fetch?
+    private var work: Task<Void, Never>?
+    private var generation = 0
 
-    /// Holds the confirmation list and its import options. A deep link can arrive while
-    /// 書源管理 is nowhere on screen, so this route owns its own coordinator rather than
-    /// reaching for that screen's.
-    let coordinator = BookSourceImportCoordinator()
+    init(bookStore: BookSourceStore = .shared, rssStore: RSSStore = .shared,
+         fetch: RSSImportService.Fetch? = nil) {
+        self.bookStore = bookStore
+        self.rssStore = rssStore
+        self.fetch = fetch
+        self.coordinator = BookSourceImportCoordinator(store: bookStore)
+    }
 
-    /// Entry point from `.onOpenURL`. Non-import URLs are silently dropped.
-    /// A new import URL replaces a finished (succeeded/failed) phase, but is
-    /// ignored while an import is already in flight so we never cancel a
-    /// download the user already confirmed.
     func handle(url: URL) {
         if case .importing = phase { return }
-        guard let sourceURL = BookSourceImportDeepLink.sourceURL(from: url) else {
-            return
-        }
+        guard let sourceURL = BookSourceImportDeepLink.sourceURL(from: url), RSSImportService.validURL(sourceURL) else { return }
+        cancel()
         phase = .confirming(sourceURL: sourceURL)
     }
 
-    /// Called by the confirm sheet's primary button. Downloads `sourceURL`
-    /// and imports via `BookSourceStore`, mirroring the WebView importer.
     func confirm() {
         guard case .confirming(let sourceURL) = phase else { return }
+        generation &+= 1
+        let revision = generation
         phase = .importing
-        Task { await performImport(from: sourceURL) }
+        work = Task {
+            defer { if revision == generation { work = nil } }
+            do {
+                let loaded = try await Self.read(sourceURL, bookStore: bookStore, fetch: fetch)
+                try Task.checkCancellation()
+                guard revision == generation else { return }
+                switch loaded {
+                case .books(let sources):
+                    coordinator.present(sources: sources)
+                    phase = .reviewing
+                case .rss(let sources):
+                    phase = .reviewingRSS(.init(input: .prepared(sources)))
+                }
+            } catch is CancellationError {
+                if revision == generation { phase = .idle }
+            } catch {
+                guard revision == generation, !Task.isCancelled else { return }
+                phase = .failed(message: (error as? RSSImportService.Issue)?.message
+                    ?? DiagnosticRedactor.redact(error.localizedDescription))
+            }
+        }
     }
+
+    func waitForWork() async { await work?.value }
 
     func cancel() {
-        switch phase {
-        case .confirming:
-            phase = .idle
-        case .reviewing:
-            coordinator.cancel()
-            phase = .idle
-        default:
-            return
-        }
-    }
-
-    /// Writes the rows ticked in the confirmation list.
-    func commitReview() {
-        guard case .reviewing = phase else { return }
-        do {
-            phase = .succeeded(count: try coordinator.confirmImport())
-        } catch {
-            phase = .failed(message: error.localizedDescription)
-        }
-    }
-
-    /// Dismiss the result state and close the sheet.
-    func finish() {
+        generation &+= 1
+        work?.cancel()
+        coordinator.cancel()
         phase = .idle
     }
 
-    private func performImport(from sourceURL: URL) async {
-        do {
-            let (data, _) = try await URLSession.shared.data(from: sourceURL)
-            guard !data.isEmpty else {
-                phase = .failed(message: localized("無法讀取來源配置資料"))
-                return
-            }
-            let ext = sourceURL.pathExtension.isEmpty ? "json" : sourceURL.pathExtension
-            // Parse only. The user picks what to keep in the confirmation list, so a link
-            // can no longer overwrite sources without showing what it contains.
-            let sources = try BookSourceStore.shared.parseForImport(data: data, fileExtension: ext)
-            coordinator.present(sources: sources)
-            phase = .reviewing
-        } catch {
-            phase = .failed(message: error.localizedDescription)
+    func commitReview() {
+        guard case .reviewing = phase else { return }
+        do { phase = .succeeded(count: try coordinator.confirmImport()) }
+        catch { phase = .failed(message: DiagnosticRedactor.redact(error.localizedDescription)) }
+    }
+
+    func finish() { cancel() }
+
+    private enum Loaded: Sendable { case books([BookSource]), rss(RSSImportService.Loaded) }
+
+    @concurrent private static func read(_ url: URL, bookStore: BookSourceStore,
+                                        fetch: RSSImportService.Fetch?) async throws -> Loaded {
+        try Task.checkCancellation()
+        let maximumBytes = RSSImportService.Limits().bytesPerDocument
+        let data: Data
+        if let fetch { data = try await fetch(url, maximumBytes) }
+        else { data = try await RSSImportService.download(url, maximumBytes: maximumBytes) }
+        try Task.checkCancellation()
+        guard data.count <= maximumBytes else { throw RSSImportService.Issue.responseTooLarge }
+        guard !data.isEmpty else { throw BookSourceStore.ImportError.invalidData }
+        let ext = url.pathExtension.isEmpty ? "json" : url.pathExtension
+        switch try await SharedImportPayloadClassifier.classifyOffMain(data: data, fileExtension: ext, suggestedFilename: url.lastPathComponent) {
+        case .rssLegadoJSON:
+            return .rss(try await RSSImportService.load(.data(data), fetch: fetch))
+        case .bookSource(let format):
+            return .books(try bookStore.parseForImport(data: data, fileExtension: format))
+        default:
+            throw BookSourceStore.ImportError.invalidData
         }
     }
 }

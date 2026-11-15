@@ -1232,7 +1232,7 @@ struct RSSOPMLImportSheet: View {
         defer { isLoading = false }
 
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.trusting.data(from: url)
             if let httpResponse = response as? HTTPURLResponse,
                !(200...299).contains(httpResponse.statusCode) {
                 throw URLError(.badServerResponse)
@@ -1430,8 +1430,6 @@ struct RSSJSONDocument: FileDocument {
         FileWrapper(regularFileWithContents: try exportedData())
     }
 }
-
-// MARK: - Import Legado JSON URL Sheet
 
 // MARK: - Add Source Sheet
 

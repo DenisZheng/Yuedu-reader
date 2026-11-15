@@ -132,7 +132,7 @@ struct WebDAVSyncView: View {
                     .foregroundColor(DSColor.accent)
             }
         } footer: {
-            Text(localized("RSS 備份包含配置與閱讀狀態，不含正文或媒體；還原後需刷新，登入狀態不會恢復。")).dsSectionFooter()
+            Text(localized("RSS 備份包含配置與閱讀狀態，不含正文或媒體；原始規則、網址和腳本可能含憑據。請僅備份至可信伺服器，還原後需刷新並視需要重新登入。")).dsSectionFooter()
         }
         .interfaceSectionSurface()
     }

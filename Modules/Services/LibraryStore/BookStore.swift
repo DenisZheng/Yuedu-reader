@@ -488,10 +488,10 @@ class BookStore: @MainActor ObservableObject, BookProvider {
         url: URL,
         title: String? = nil,
         author: String = "未知作者"
-    ) throws -> ReadingBook {
+    ) async throws -> ReadingBook {
         let bookTitle = title ?? url.deletingPathExtension().lastPathComponent
         let ext = normalizedMarkdownExtension(url.pathExtension.lowercased())
-        return try importLocalTextFile(
+        return try await importLocalTextFile(
             url: url,
             title: bookTitle,
             author: author,
@@ -525,7 +525,7 @@ class BookStore: @MainActor ObservableObject, BookProvider {
             if FileManager.default.fileExists(atPath: destURL.path) {
                 try FileManager.default.removeItem(at: destURL)
             }
-            try FileManager.default.copyItem(at: url, to: destURL)
+            try BookFileProtection.copy(from: url, to: destURL)
 
             let resolvedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                 ? title!.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -596,7 +596,7 @@ class BookStore: @MainActor ObservableObject, BookProvider {
             if FileManager.default.fileExists(atPath: destURL.path) {
                 try FileManager.default.removeItem(at: destURL)
             }
-            try FileManager.default.copyItem(at: url, to: destURL)
+            try BookFileProtection.copy(from: url, to: destURL)
 
             let resolvedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                 ? title!.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -685,7 +685,7 @@ class BookStore: @MainActor ObservableObject, BookProvider {
                 if FileManager.default.fileExists(atPath: contentURL.path) {
                     try FileManager.default.removeItem(at: contentURL)
                 }
-                try FileManager.default.copyItem(at: url, to: contentURL)
+                try BookFileProtection.copy(from: url, to: contentURL)
                 chapters = info.chapterSeeds.enumerated().map { index, seed in
                     OnlineChapterRef(
                         index: index,
@@ -732,16 +732,24 @@ class BookStore: @MainActor ObservableObject, BookProvider {
         title: String,
         author: String,
         fileExtension: String
-    ) throws -> ReadingBook {
+    ) async throws -> ReadingBook {
         let filename = "\(UUID().uuidString).\(fileExtension)"
         let destURL = documentsURL(for: filename)
-        try TXTFilePersistence.persistOriginal(source: url, destination: destURL)
+        try await Self.persistOriginalOffMain(source: url, destination: destURL)
 
         var book = ReadingBook(title: title, author: author, source: "local", contentFilename: filename)
         book.contentPipelineKind = .txt
         records.insert(book, at: 0)
         saveMeta()
         return book
+    }
+
+    /// The copy of a text book into the library, off the main actor: a file a provider has
+    /// not downloaded blocks its reader until the download ends, which on the main thread
+    /// is the scene-update watchdog (Crashlytics e592cad9).
+    @concurrent
+    private nonisolated static func persistOriginalOffMain(source: URL, destination: URL) async throws {
+        try TXTFilePersistence.persistOriginal(source: source, destination: destination)
     }
 
     private func normalizedMarkdownExtension(_ ext: String) -> String {
@@ -804,7 +812,7 @@ class BookStore: @MainActor ObservableObject, BookProvider {
             if FileManager.default.fileExists(atPath: destURL.path) {
                 try FileManager.default.removeItem(at: destURL)
             }
-            try FileManager.default.copyItem(at: url, to: destURL)
+            try BookFileProtection.copy(from: url, to: destURL)
             importTrace(
                 "stage=copy done elapsedMs=\(String(format: "%.1f", (ProcessInfo.processInfo.systemUptime - copyStart) * 1000))"
             )
@@ -1037,6 +1045,15 @@ class BookStore: @MainActor ObservableObject, BookProvider {
                 book.currentPosition = min(1.0, Double(chapter) / Double(totalChapters))
             }
         }
+    }
+
+    /// 置頂 / 取消置頂 on the shelf (feedback #17). A pinned book comes first in every shelf
+    /// order, the latest pinned on top (`BookSortOrder.pinnedFirst`).
+    func setPinned(_ pinned: Bool, bookId: UUID) {
+        guard let idx = records.firstIndex(where: { $0.id == bookId }),
+              records[idx].isPinned != pinned else { return }
+        records[idx].pinnedAt = pinned ? Date() : nil
+        saveMeta()
     }
 
     /// The audiobook player's play mode for this book (legado-E / MD3 `Book.setPlayMode`).
@@ -1627,6 +1644,8 @@ class BookStore: @MainActor ObservableObject, BookProvider {
             if remainingRoleVoices.count != globalSettings.ttsRoleVoices.count {
                 globalSettings.ttsRoleVoices = remainingRoleVoices
             }
+            // So is the AI's analysis of its chapters and the voices it picked.
+            Task { @MainActor in await AIDialogueCastService.shared.clear(book: bookId) }
             // Nothing draws this book's covers any more: release their bitmaps. The
             // files themselves stay where deletion has always left them.
             let coverSources = [book.coverImagePath, book.originalCoverImagePath]
@@ -2402,7 +2421,14 @@ class BookStore: @MainActor ObservableObject, BookProvider {
             // Always hit the network here: this is the "check for new chapters"
             // path, so the stale cached TOC must be bypassed or serial novels
             // never pick up newly-published chapters.
-            forceRefresh: true
+            forceRefresh: true,
+            // A detail page read just now (a stored package carries none) is the TOC's when the
+            // TOC is the book's own page: Legado's refresh reads `tocHtml` too.
+            detailPage: infoPackage?.onlineBook.detailPage,
+            // The list lands in `chapterStore` below; a second copy in the TOC cache doubled
+            // every changed list's bytes (≈690 KB per 2000-chapter list, 3.0.1 (146) 1 GB/day
+            // disk-write report). Nothing opens a shelved book from the TOC cache.
+            writesCache: false
         )
         if let fetchedRuntime = tocPackage.runtimeVariables, !fetchedRuntime.isEmpty {
             runtimeVariables = fetchedRuntime
@@ -3295,6 +3321,7 @@ class BookStore: @MainActor ObservableObject, BookProvider {
                         // what this store last wrote.
                         if Self.file(metadataFileURL, holds: files.shelfData) {
                             try shelfData.write(to: metadataFileURL, options: .atomic)
+                            DiskWriteTally.record("shelf", reason: "shelf books=\(input.records.count)", bytes: shelfData.count)
                             files.shelfData = shelfData
                             written.shelfData = shelfData
                         } else {
@@ -3307,6 +3334,7 @@ class BookStore: @MainActor ObservableObject, BookProvider {
                     AppLogger.cache("Reading records are unreadable and were not kept aside; leaving them as they are")
                 } else if let readingData, readingData != files.readingData {
                     try readingData.write(to: readingMetadataFileURL, options: .atomic)
+                    DiskWriteTally.record("shelf", reason: "reading", bytes: readingData.count)
                     files.readingData = readingData
                     written.readingData = readingData
                 }
@@ -3939,6 +3967,24 @@ extension BookStore: SavedCoverOwner {
 
     func downloadedCoversRemoved() {
         Task { await restoreMissingCovers() }
+    }
+}
+
+extension BookStore: CacheRetentionOwner {
+    /// Kept: every book on the shelf with an offline download (done, running, paused, failed
+    /// partway: the user asked for it), and every book open in a reader, shelf or not.
+    func cacheRetention() -> CacheRetention? {
+        guard recordsLoadedCompletely else { return nil }
+        var kept = Set<UUID>()
+        var lastOpened: [UUID: Date] = [:]
+        for book in records {
+            if let opened = book.lastOpenedDate { lastOpened[book.id] = opened }
+            if book.isInBookshelf, book.offlineDownloadState != .none || book.offlineDownloadTask != nil {
+                kept.insert(book.id)
+            }
+        }
+        kept.formUnion(ReadingResourceUsage.shared.booksInUse)
+        return CacheRetention(keptBooks: kept, lastOpened: lastOpened)
     }
 }
 

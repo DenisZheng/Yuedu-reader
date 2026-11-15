@@ -15,7 +15,8 @@ struct RSSWebRequestTests {
         let big5 = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5.rawValue)))
         let body = try #require("<p id='value'>原文</p>".data(using: big5))
         let server = try VideoStillFixtureServer(directory: directory, routes: [
-            "/page": .init(body: body, type: "text/html; charset=utf-8", allowedMethods: ["POST"])
+            // charset URL option控制请求编码；响应解码按服务器声明的Big5，随后bodyJs只执行一次。
+            "/page": .init(body: body, type: "text/html; charset=big5", allowedMethods: ["POST"])
         ])
         let base = try await server.start()
         defer {

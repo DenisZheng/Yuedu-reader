@@ -412,6 +412,16 @@ enum DSFont {
     static var onboardingTitle: Font {
         GlobalAppTypography.font(.title, weight: .bold, systemDesign: .serif)
     }
+    /// A book's title in the shelf's list: Subheadline in medium, so it follows the reader's
+    /// text size (feedback #110 — it was a fixed 15pt).
+    static var bookshelfRowTitle: Font {
+        GlobalAppTypography.font(.subheadline, weight: .medium)
+    }
+    /// A book's title under its cover in the shelf's grid: Footnote in semibold, Caption in
+    /// the five-column grid. Both follow the reader's text size.
+    static func bookshelfGridTitle(compact: Bool) -> Font {
+        GlobalAppTypography.font(compact ? .caption : .footnote, weight: .semibold)
+    }
 
     /// Existing fixed-size UI typography. Monospaced content intentionally
     /// remains system monospaced even when a global interface font is active.
@@ -463,6 +473,9 @@ enum DSSpacing {
 // MARK: - Design System: Layout Tokens
 
 enum DSLayout {
+    /// RSS列表的方形缩略图与大图比例；网格方形、瀑布流按实际图片尺寸显示。
+    static let rssThumbnailSide: CGFloat = 60
+    static let rssLargeImageAspectRatio: CGFloat = 16.0 / 9.0
     /// Smallest comfortable hit target for any control (HIG default). Reach for
     /// it when a control's own content is shorter than a finger — a bare menu
     /// label, an icon button — rather than relying on the row's padding.
@@ -1168,8 +1181,12 @@ enum DSLayout {
     /// The share of the picture's width, at each side, where an up-down drag sets the
     /// brightness (left) or the volume (right) — plezy's edge tracker.
     static let videoEdgeGestureFraction: CGFloat = 1.0 / 3
-    /// Seconds a drag across the picture's whole width scrubs.
+    /// Seconds a drag across the picture's whole width scrubs, for a video of up to 20 minutes;
+    /// a shorter one spans its whole length instead.
     static let videoScrubSecondsPerWidth: Double = 120
+    /// The share of a longer video a drag across the whole width scrubs (a 45-minute episode:
+    /// 4½ minutes), so crossing a film is a few swipes, not dozens.
+    static let videoScrubDurationShareOfWidth: Double = 0.1
     /// How far a pinch has to go before it fills the screen (out) or fits the picture (in).
     static let videoPinchThreshold: CGFloat = 0.15
     /// The brightness / volume level shown while an edge drag sets it.

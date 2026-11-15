@@ -1,4 +1,6 @@
 import Foundation
+import Darwin
+import Network
 
 /// 仅配置导入：不执行源脚本、不抓取文章、不打开登录页面。
 /// 文件、URL、Share/Open-In共用同一展开、比较与报告路径。
@@ -42,6 +44,7 @@ enum RSSImportService {
         var source: RSSSource?
         var issue: Issue?
         var location: String
+        var correctedFields: Int = 0
     }
 
     struct Loaded: Sendable {
@@ -72,6 +75,7 @@ enum RSSImportService {
         var location: String
         var changedFields: Int = 0
         var unknownFields: Int = 0
+        var correctedFields: Int = 0
     }
 
     struct Snapshot: Sendable {
@@ -103,7 +107,7 @@ enum RSSImportService {
 
     typealias Fetch = @Sendable (URL, Int) async throws -> Data
 
-    nonisolated static func load(_ input: Input, limits: Limits = .init(), fetch: @escaping Fetch = download) async throws -> Loaded {
+    nonisolated static func load(_ input: Input, limits: Limits = .init(), fetch: Fetch? = nil) async throws -> Loaded {
         let onMain = { Thread.isMainThread }()
         let started = SourcePerfTrace.now
         var loader = Loader(limits: limits, fetch: fetch)
@@ -138,7 +142,7 @@ enum RSSImportService {
             var seen = Set<String>()
             let rows = try loaded.candidates.map { candidate -> Row in
                 var row = Row(id: candidate.id, source: candidate.source, disposition: .invalid,
-                              issue: candidate.issue, location: candidate.location)
+                              issue: candidate.issue, location: candidate.location, correctedFields: candidate.correctedFields)
                 guard var source = candidate.source else { return row }
                 row.unknownFields = try LegadoSourceJSONParser.unknownFieldCount(in: source)
                 guard seen.insert(source.sourceKey).inserted else { row.disposition = .duplicate; return row }
@@ -213,9 +217,15 @@ enum RSSImportService {
         }
     }
 
-    /// 不继承源的Cookie、Authorization或登录信息，导入包下载并非源运行时请求。
+    /// 导入包不继承Cookie或认证；复用分块响应收集与现有重定向合同。
     nonisolated static func download(_ url: URL, maximumBytes: Int) async throws -> Data {
-        guard validURL(url) else { throw Issue.invalidURL }
+        try await download(url, maximumBytes: maximumBytes, nested: false)
+    }
+
+    nonisolated private static func download(_ url: URL, maximumBytes: Int, nested: Bool) async throws -> Data {
+        guard validURL(url, nested: nested) else { throw Issue.invalidURL }
+        if nested { try await requirePublicAddress(url) }
+        guard maximumBytes > 0 else { throw Issue.responseTooLarge }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
@@ -223,31 +233,76 @@ enum RSSImportService {
         configuration.urlCache = nil
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 40
-        let session = URLSession(configuration: configuration, delegate: ImportRedirectPolicy(), delegateQueue: nil)
+        let session = URLSession.trusting(configuration)
         defer { session.invalidateAndCancel() }
+        let policy = ImportRedirectPolicy(nested: nested)
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let (stream, response) = try await session.bytes(for: request)
-        defer { stream.task.cancel() }
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw Issue.network }
-        guard response.expectedContentLength <= maximumBytes else { throw Issue.responseTooLarge }
-        var data = Data()
-        for try await byte in stream {
-            if data.count % 16384 == 0 { try Task.checkCancellation() }
-            guard data.count < maximumBytes else { throw Issue.responseTooLarge }
-            data.append(byte)
-        }
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await BoundedResponseLoader.load(request, session: session, limit: maximumBytes,
+                transport: "sourceImport", taskDelegate: policy)
+        } catch FetchError.responseTooLarge { throw Issue.responseTooLarge }
+        if let failure = policy.failure { throw failure }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw Issue.network }
         return data
     }
 
-    fileprivate static func validURL(_ url: URL) -> Bool {
-        ["http", "https"].contains(url.scheme?.lowercased() ?? "") && url.host?.isEmpty == false
-            && url.user == nil && url.password == nil
+    static func validURL(_ url: URL, nested: Bool = false) -> Bool {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let host = url.host?.lowercased(),
+              !host.isEmpty, url.user == nil, url.password == nil else { return false }
+        guard nested else { return true }
+        guard host != "localhost", !host.hasSuffix(".localhost"), !host.hasSuffix(".local"),
+              !host.hasSuffix(".lan"), !host.hasSuffix(".internal") else { return false }
+        return publicLiteral(host)
+    }
+
+    private static func publicLiteral(_ host: String) -> Bool {
+        let plain = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).split(separator: "%", maxSplits: 1).first.map(String.init) ?? host
+        if let address = IPv4Address(plain) {
+            let bytes = Array(address.rawValue)
+            return bytes[0] != 0 && bytes[0] != 10 && bytes[0] != 127 && bytes[0] < 224
+                && !(bytes[0] == 169 && bytes[1] == 254)
+                && !(bytes[0] == 172 && (16...31).contains(bytes[1]))
+                && !(bytes[0] == 192 && bytes[1] == 168)
+                && !(bytes[0] == 100 && (64...127).contains(bytes[1]))
+        }
+        if let address = IPv6Address(plain) {
+            let bytes = Array(address.rawValue)
+            if bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 255, bytes[11] == 255,
+               let mapped = IPv4Address(Data(bytes.suffix(4))) { return publicLiteral(mapped.debugDescription) }
+            return !bytes.allSatisfy({ $0 == 0 }) && !(bytes.dropLast().allSatisfy({ $0 == 0 }) && bytes.last == 1)
+                && bytes[0] & 0xfe != 0xfc && !(bytes[0] == 0xfe && bytes[1] & 0xc0 == 0x80) && bytes[0] != 0xff
+        }
+        return true
+    }
+
+    /// 包内地址和其重定向在发请求前解析DNS；拒绝任何私网解析结果。DNS等待不放主线程。
+    @concurrent fileprivate static func requirePublicAddress(_ url: URL) async throws {
+        try Task.checkCancellation()
+        guard validURL(url, nested: true), let host = url.host else { throw Issue.invalidURL }
+        try SourcePerfTrace.span("rss.import.dns", "main=\\(Thread.isMainThread)") {
+            var addresses: UnsafeMutablePointer<addrinfo>?
+            let hostname = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            guard getaddrinfo(hostname, nil, nil, &addresses) == 0, let first = addresses else { throw Issue.network }
+            defer { freeaddrinfo(first) }
+            var cursor: UnsafeMutablePointer<addrinfo>? = first
+            var count = 0
+            while let entry = cursor {
+                count += 1
+                guard count <= 64, let address = entry.pointee.ai_addr else { throw Issue.invalidURL }
+                var numeric = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                guard getnameinfo(address, entry.pointee.ai_addrlen, &numeric, socklen_t(numeric.count), nil, 0, NI_NUMERICHOST) == 0,
+                      publicLiteral(String(cString: numeric)) else { throw Issue.invalidURL }
+                cursor = entry.pointee.ai_next
+            }
+        }
+        try Task.checkCancellation()
     }
 
     private struct Loader {
         let limits: Limits
-        let fetch: Fetch
+        let fetch: Fetch?
         var candidates: [Candidate] = []
         var visited: Set<String> = []
         var bytes = 0
@@ -260,7 +315,7 @@ enum RSSImportService {
         mutating func remote(_ raw: String, depth: Int, location: String) async throws {
             guard !limited else { return }
             guard depth <= limits.depth else { issue(.depthLimit, location); return }
-            guard let url = URL(string: raw), RSSImportService.validURL(url) else { issue(.invalidURL, location); return }
+            guard let url = URL(string: raw), RSSImportService.validURL(url, nested: depth > 0) else { issue(.invalidURL, location); return }
             var key = URLComponents(url: url, resolvingAgainstBaseURL: false)!
             key.fragment = nil // 包下载去环；绝不用于源sourceKey。
             let identity = key.url!.absoluteString
@@ -269,7 +324,10 @@ enum RSSImportService {
             visited.insert(identity)
             do {
                 try Task.checkCancellation()
-                let data = try await fetch(url, min(limits.bytesPerDocument, max(0, limits.totalBytes - bytes)))
+                let maximumBytes = min(limits.bytesPerDocument, max(0, limits.totalBytes - bytes))
+                let data: Data
+                if let fetch { data = try await fetch(url, maximumBytes) }
+                else { data = try await RSSImportService.download(url, maximumBytes: maximumBytes, nested: depth > 0) }
                 try Task.checkCancellation()
                 try await expand(data, depth: depth, location: location)
             } catch is CancellationError { throw CancellationError() }
@@ -311,7 +369,10 @@ enum RSSImportService {
                 guard candidates.count < limits.entries else { issue(.entryLimit, location); limited = true; break }
                 let path = "\(location).\(index + 1)"
                 guard let object = entry as? [String: Any] else { issue(.invalidFormat, path); continue }
-                do { candidates.append(Candidate(source: try LegadoSourceJSONParser.parseSource(from: object), location: path)) }
+                do {
+                    let parsed = try LegadoSourceJSONParser.parseSourceWithReport(from: object)
+                    candidates.append(Candidate(source: parsed.source, location: path, correctedFields: parsed.correctedFields))
+                }
                 catch { issue(.invalidFormat, path) }
             }
         }
@@ -321,15 +382,27 @@ enum RSSImportService {
 private final class ImportRedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var redirects = 0
+    private var storedFailure: RSSImportService.Issue?
+    private let nested: Bool
+    var failure: RSSImportService.Issue? { lock.withLock { storedFailure } }
+    init(nested: Bool) { self.nested = nested }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         let allowed = lock.withLock { redirects += 1; return redirects <= 4 }
-        guard allowed, let url = request.url, RSSImportService.validURL(url),
+        guard allowed, let url = request.url, RSSImportService.validURL(url, nested: nested),
               !(response.url?.scheme == "https" && url.scheme == "http") else {
+            lock.withLock { storedFailure = .invalidURL }
             completionHandler(nil)
             return
         }
-        completionHandler(request)
+        guard nested else { completionHandler(request); return }
+        Task {
+            do { try await RSSImportService.requirePublicAddress(url); completionHandler(request) }
+            catch {
+                lock.withLock { storedFailure = (error as? RSSImportService.Issue) ?? .network }
+                completionHandler(nil)
+            }
+        }
     }
 }

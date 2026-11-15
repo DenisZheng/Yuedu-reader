@@ -18,7 +18,7 @@ struct RSSSharedBridgeTests {
     @Test("RSS元数据与共同方法并存，书源同key不串源；jsLib只加载一次")
     func metadataAndSession() async throws {
         var source = BookSource(bookSourceUrl: "opaque#shared", bookSourceName: "RSS fixture")
-        source.jsLib = "var count = 0;"
+        source.jsLib = "var count = 0; function fixtureCount(){return ++count;}"
         let state = RSSMemoryRuntimeState()
         let overrides = SourceRuntimeOverrides(identity: UUID().uuidString, authenticationKey: "rss-fixture",
             propertiesJSON: Data(#"{"sourceUrl":"opaque#shared","sourceName":"RSS fixture","type":2,"ruleContent":"video@src"}"#.utf8), state: state)
@@ -28,12 +28,12 @@ struct RSSSharedBridgeTests {
         #expect(session !== BookSourceSession.session(for: source))
         let first = try await session.parse { bridge in
             try bridge.withRuleContext(content: "", baseURL: source.bookSourceUrl, scope: RuleData()) { engine in
-                engine.getString(ruleStr: "@js: source.getKey() + '|' + source.getTag() + '|' + source.type + '|' + source.ruleContent + '|' + (++count)")
+                engine.getString(ruleStr: "@js: source.getKey() + '|' + source.getTag() + '|' + source.type + '|' + source.ruleContent + '|' + fixtureCount()")
             }
         }
         let second = try await session.parse { bridge in
             try bridge.withRuleContext(content: "", baseURL: source.bookSourceUrl, scope: RuleData()) { engine in
-                engine.getString(ruleStr: "@js: String(++count)")
+                engine.getString(ruleStr: "@js: String(fixtureCount())")
             }
         }
         #expect(first == "opaque#shared|RSS fixture|2|video@src|1")

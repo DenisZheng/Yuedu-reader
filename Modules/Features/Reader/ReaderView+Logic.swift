@@ -645,7 +645,8 @@ extension ReaderView {
             currentSourceId: ShelfWork.isSourceCopy(b) ? b.bookSourceId : nil,
             enabledSources: BookSourceStore.shared.enabledSources,
             store: store,
-            forceRefresh: forceRefresh
+            forceRefresh: forceRefresh,
+            readingChapter: changeSourceReadingChapter
         )
     }
 

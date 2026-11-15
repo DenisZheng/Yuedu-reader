@@ -18,12 +18,17 @@ struct ImportLegadoJSONURLSheet: View {
                             Button(localized("從檔案匯入")) { onFile() }
                                 .accessibilityIdentifier("rss-import-file")
                         }.interfaceSectionSurface()
-                        Section(localized("Legado JSON 網址")) {
+                        Section {
                             TextField("https://…", text: $urlString)
                                 .keyboardType(.URL)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                                 .accessibilityIdentifier("rss-import-url")
+                        } header: {
+                            Text(localized("Legado JSON 網址"))
+                        } footer: {
+                            Text(localized("可貼上 HTTP(S) 網址或 legado/yuedu 訂閱匯入連結；不需要註冊舊 App 的網址 scheme。"))
+                                .dsSectionFooter()
                         }.interfaceSectionSurface()
                     }
                     .navigationTitle(localized("匯入 Legado JSON"))
@@ -37,13 +42,13 @@ struct ImportLegadoJSONURLSheet: View {
                         }
                         ToolbarItem(placement: .topBarTrailing) {
                             Button {
-                                if let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                                if let url = BookSourceImportDeepLink.payloadURL(from: urlString) {
                                     request = .init(input: .remote(url))
                                 }
                             } label: {
                                 Label(localized("繼續"), systemImage: "checkmark").labelStyle(.iconOnly)
                             }
-                            .disabled(URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)) == nil || urlString.isEmpty)
+                            .disabled(BookSourceImportDeepLink.payloadURL(from: urlString) == nil)
                         }
                     }
                 }

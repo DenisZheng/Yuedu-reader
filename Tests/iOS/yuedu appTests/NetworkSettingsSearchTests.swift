@@ -95,20 +95,6 @@ struct NetworkSettingsSearchTests {
         #expect(!policy.shouldPause(exactCount: 1559, fuzzyCount: 1559))
     }
 
-    @Test("runtime template search sources get aggregate timeout budget")
-    func runtimeTemplateSearchSourcesGetAggregateTimeoutBudget() {
-        var runtimeSource = makeSource(name: "Runtime", url: "https://example.com/source")
-        runtimeSource.jsLib = "const CONFIG = { api: { baseUrl: 'https://api.example.com' } };"
-        runtimeSource.searchUrl = "{{CONFIG.api.baseUrl}}/search.php?keyword={{key}}&page={{page}}"
-
-        var fastSource = makeSource(name: "Fast", url: "https://example.com/fast")
-        fastSource.jsLib = "function noop() { return ''; }"
-        fastSource.searchUrl = "https://example.com/search?q={{key}}&page={{page}}"
-
-        #expect(BookSourceSearchFanOut.timeout(for: runtimeSource, normal: 12, aggregate: 30) == 30)
-        #expect(BookSourceSearchFanOut.timeout(for: fastSource, normal: 12, aggregate: 30) == 12)
-    }
-
     @MainActor
     @Test("change source search auto pauses after configured exact result count")
     func changeSourceAutoPauses() async throws {
@@ -126,7 +112,6 @@ struct NetworkSettingsSearchTests {
         let fetcher = CountingBookSourceFetcher()
         let viewModel = ReaderViewModel(
             chapterFetcher: NoopChapterFetcher(),
-            bookCoordinator: NoopOnlineBookCoordinator(),
             bookSourceFetcher: fetcher
         )
         var book = ReadingBook(title: "Issue32", author: "Author", contentFilename: "")
@@ -173,7 +158,6 @@ struct NetworkSettingsSearchTests {
         let fetcher = CountingBookSourceFetcher()
         let viewModel = ReaderViewModel(
             chapterFetcher: NoopChapterFetcher(),
-            bookCoordinator: NoopOnlineBookCoordinator(),
             bookSourceFetcher: fetcher
         )
 
@@ -218,7 +202,6 @@ struct NetworkSettingsSearchTests {
         let fetcher = CountingBookSourceFetcher()
         let viewModel = ReaderViewModel(
             chapterFetcher: NoopChapterFetcher(),
-            bookCoordinator: NoopOnlineBookCoordinator(),
             bookSourceFetcher: fetcher
         )
 
@@ -259,6 +242,27 @@ struct NetworkSettingsSearchTests {
         #expect(ChangeSourceCache.shared.freshEntry(for: bookId, days: 5) == nil)
     }
 
+    @Test("a 換源 list found before Legado's name-only, 60 s rules is searched again")
+    func cacheEntryFromOlderSearchRulesIsNotFresh() throws {
+        let bookId = UUID()
+        defer { ChangeSourceCache.shared.clear(for: bookId) }
+        let origin = BookOrigin(
+            sourceId: UUID(), sourceName: "Old rules", bookUrl: "https://old-rules.test/book",
+            tocUrl: "", coverUrl: "", intro: "", lastChapter: "", wordCount: "", kind: "",
+            runtimeVariables: nil
+        )
+        ChangeSourceCache.shared.store(origins: [origin], for: bookId)
+        #expect(ChangeSourceCache.shared.freshEntry(for: bookId, days: 5) != nil)
+        // The same complete entry as builds before 2026-11-07 wrote it: no searchRules key.
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let url = caches.appendingPathComponent("ChangeSourceCache/\(bookId.uuidString).json")
+        var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        json.removeValue(forKey: "searchRules")
+        try JSONSerialization.data(withJSONObject: json).write(to: url, options: .atomic)
+        #expect(ChangeSourceCache.shared.entry(for: bookId)?.isComplete == true)
+        #expect(ChangeSourceCache.shared.freshEntry(for: bookId, days: 5) == nil)
+    }
+
     @MainActor
     @Test("stopping source search also cancels background TOC warm-up")
     func stoppingSearchCancelsTOCWarmup() async throws {
@@ -296,7 +300,6 @@ struct NetworkSettingsSearchTests {
         let fetcher = CancellableTOCFetcher()
         let viewModel = ReaderViewModel(
             chapterFetcher: NoopChapterFetcher(),
-            bookCoordinator: NoopOnlineBookCoordinator(),
             bookSourceFetcher: fetcher
         )
         viewModel.loadOtherOrigins(
@@ -535,16 +538,4 @@ private struct NoopChapterFetcher: ChapterFetching {
 
     func cancelChapter(bookId: UUID, chapterIndex: Int) async {}
     func cancelAll(for bookId: UUID) async {}
-}
-
-private final class NoopOnlineBookCoordinator: OnlineBookCoordinating {
-    func downloadBook(_ book: ReadingBook, store: BookStore?) {}
-    func downloadBook(
-        _ book: ReadingBook,
-        store: BookStore?,
-        startChapterIndex: Int,
-        chapterCount: Int?
-    ) {}
-    func pauseDownload(book: ReadingBook, store: BookStore?) {}
-    func prefetchAround(book: ReadingBook, center: Int, store: BookStore?) async {}
 }

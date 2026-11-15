@@ -151,6 +151,8 @@ grep -nE "^/Users.*error:" "$LOG" | sed "s|$ROOT/||" | head -25
 echo "--- verdict ---"
 grep -E "Test run with [0-9]+ tests?|Test Suite 'All tests' (passed|failed)|✘ Suite|\*\* TEST (SUCCEEDED|FAILED) \*\*|\*\* BUILD FAILED \*\*" "$LOG" | head -20
 
+# Fork测试保留模拟器与用户数据；清理须由操作员单独授权。
+
 # Framework/background logs can contain "failed" on a successful run. Only the test
 # runner's final verdict is authoritative; absence of a verdict is never success.
 # A natural nonzero exit is failure even when a success line was printed earlier.

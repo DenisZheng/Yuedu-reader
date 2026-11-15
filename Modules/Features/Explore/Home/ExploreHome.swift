@@ -159,7 +159,7 @@ private struct ExploreHomeRoot: View {
         // 中繼資料語言偏好推薦: a module's 地區 that follows it reads it.
         [tabModel.isLoaded, pageStore.page, connections.catalogs.map(\.id), exploreSources.map(\.bookSourceUrl), availability.isAvailable,
          aozora.catalog != nil, aggregation.settings.hiddenFromLatest, aggregation.readingLanguages.language,
-         modules.modules.map { "\($0.module.id)@\($0.module.version)" }]
+         modules.disabled, modules.modules.map { "\($0.module.id)@\($0.module.version)" }]
     }
 
     /// Every section is settled with nothing in it, so the home would be blank: a China
@@ -240,8 +240,8 @@ private struct ExploreHomeRoot: View {
                              hiddenFromLatest: Set(aggregation.settings.hiddenFromLatest ?? []))
         }
         // After the library is read, as when the home was built only then.
-        .task(id: tabModel.isLoaded) {
-            guard tabModel.isLoaded else { return }
+        .task(id: [AnyHashable(tabModel.isLoaded), AnyHashable(modules.disabled)]) {
+            guard tabModel.isLoaded, availability.isAvailable, modules.isPublicLibraryEnabled(.aozora) else { return }
             await aozora.load()
         }
         .onReceive(sourceStore.sourcesPublisher) { library in
@@ -434,7 +434,7 @@ private struct ExploreHomeRoot: View {
         // 青空文庫's rows are read from its catalog. Refreshing checks for it again, as 青空文庫's
         // own page does, instead of waiting out the daily check: a device that found none (the
         // catalog went unpublished until 2026-10-11) would wait a day.
-        if availability.isAvailable { await aozora.load(forceRefresh: true) }
+        if availability.isAvailable, modules.isPublicLibraryEnabled(.aozora) { await aozora.load(forceRefresh: true) }
         await feeds
     }
 
@@ -734,9 +734,14 @@ struct LibraryListing: Identifiable, Hashable {
     var id: SourceInstanceKey { key }
 
     /// The libraries there are now (saved connections; Gutenberg and 青空文庫 where offered).
-    static func available(connections: [RemoteLibraryConnection], librariesAvailable: Bool) -> [LibraryListing] {
+    @MainActor static func available(connections: [RemoteLibraryConnection], librariesAvailable: Bool,
+                                     modules: RuleModuleLibrary? = nil) -> [LibraryListing] {
+        let modules = modules ?? .shared
         let names = Dictionary(connections.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-        return LibraryKeys.available(connections: connections, librariesAvailable: librariesAvailable).map { key in
+        return LibraryKeys.available(connections: connections, librariesAvailable: librariesAvailable).filter { key in
+            guard let id = PublicLibraryID(rawValue: key.id) else { return true }
+            return modules.isPublicLibraryEnabled(id)
+        }.map { key in
             let name = switch key.type {
             case .gutenberg: localized("Project Gutenberg")
             case .aozora: localized("青空文庫")

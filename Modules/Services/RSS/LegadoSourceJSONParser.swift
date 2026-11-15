@@ -30,9 +30,17 @@ enum LegadoSourceJSONParser {
     // MARK: - Private
 
     static func parseSource(from json: [String: Any]) throws -> RSSSource {
+        try parseSourceWithReport(from: json).source
+    }
+
+    static func parseSourceWithReport(from json: [String: Any]) throws -> (source: RSSSource, correctedFields: Int) {
+        let normalized = try normalizedFields(json)
+        return (try parseNormalizedSource(from: normalized.fields), normalized.count)
+    }
+
+    private static func parseNormalizedSource(from json: [String: Any]) throws -> RSSSource {
         guard let url = json["sourceUrl"] as? String,
               !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ParseError.invalidFormat }
-        try validateFields(json)
         let suppliedName = json["sourceName"] as? String
         let name = suppliedName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? suppliedName! : safeName(for: url)
@@ -186,27 +194,41 @@ enum LegadoSourceJSONParser {
     private static let integerFields: Set<String> = ["type", "articleStyle", "customOrder"]
     static let knownFields = stringFields.union(boolFields).union(integerFields).union(["lastUpdateTime"])
 
-    private static func validateFields(_ json: [String: Any]) throws {
+    /// 与基准Gson的String/Int适配器一致：对象转JSON字符串，JSON数字截断，非数字整数回默认值。
+    /// 修正仅发生在导入边界；未知字段和已合法的字段不改写。
+    private static func normalizedFields(_ json: [String: Any]) throws -> (fields: [String: Any], count: Int) {
+        var fields = json
+        var count = 0
         for (key, value) in json {
-            if value is NSNull {
-                if ["sourceUrl", "enabled", "enableJs", "singleUrl", "loadWithBaseUrl",
-                    "articleStyle", "customOrder", "lastUpdateTime"].contains(key) { throw ParseError.invalidFormat }
-                continue
-            }
-            if stringFields.contains(key), !(value is String) { throw ParseError.invalidFormat }
-            if boolFields.contains(key) {
-                guard let n = value as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else {
-                    throw ParseError.invalidFormat
+            if stringFields.contains(key), !(value is String), !(value is NSNull) {
+                if let number = value as? NSNumber {
+                    fields[key] = CFGetTypeID(number) == CFBooleanGetTypeID()
+                        ? (number.boolValue ? "true" : "false") : number.stringValue
+                } else {
+                    fields[key] = String(decoding: try JSONSerialization.data(withJSONObject: value,
+                        options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
                 }
-            }
-            if integerFields.contains(key) || key == "lastUpdateTime" {
-                guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
-                      n.doubleValue.isFinite else { throw ParseError.invalidFormat }
-                if integerFields.contains(key), (n.doubleValue.rounded() != n.doubleValue || value as? Int == nil) {
-                    throw ParseError.invalidFormat
-                }
+                count += 1
+            } else if integerFields.contains(key), !(value is NSNull) {
+                if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite {
+                    let integer = Int(Int32(truncatingIfNeeded: number.int64Value))
+                    if value as? Int != integer { count += 1 }
+                    fields[key] = integer
+                } else { fields[key] = NSNull(); count += 1 }
+            } else if boolFields.contains(key), !(value is NSNull) {
+                if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { continue }
+                fields[key] = (value as? String).map { $0.lowercased() == "true" } ?? false
+                count += 1
+            } else if key == "lastUpdateTime", !(value is NSNull) {
+                if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite { continue }
+                fields[key] = (value as? String).flatMap(Double.init).flatMap { $0.isFinite ? $0 : nil } ?? 0
+                count += 1
             }
         }
+        guard let key = fields["sourceUrl"] as? String, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ParseError.invalidFormat
+        }
+        return (fields, count)
     }
 
     private static func safeName(for key: String) -> String {

@@ -83,6 +83,10 @@ struct yuedu_appApp: App {
         // `AppLogger` call from here on is captured for 設定 → 診斷與回報, and the
         // session record is what tells the next launch whether this one survived.
         DiagnosticLog.shared.beginSession()
+        // Books imported before `BookFileProtection.copy` kept the class of the app they came
+        // from; one that locks with the device crashes 朗讀 behind the lock screen. Off main:
+        // it lists Documents, and nothing waits on it.
+        Task.detached(priority: .utility) { BookFileProtection.relaxExistingFiles() }
         // Before any source script can ask for it: `java.deviceID()` runs on the JS queue,
         // and `UIDevice` can only be read here, on main.
         DeviceIdentity.captureAtLaunch()
@@ -254,11 +258,14 @@ struct yuedu_appApp: App {
                         Task { await importer.openFile(incomingURL) }
                         return
                     }
-                    if case .module(let address) = BookSourceImportDeepLink.target(from: incomingURL) {
-                        RuleModuleLinkPresenter.present(address)
-                        return
-                    }
-                    bookSourceDeepLinkHandler.handle(url: incomingURL)
+                    handleImportLink(incomingURL)
+                }
+                // A source script's `java.openUrl(legado://…)` (legado-E opens its importer
+                // directly). Routed here rather than through the system: another installed
+                // app can claim the `legado` scheme.
+                .onReceive(NotificationCenter.default.publisher(for: .sourceRequestedImportLink)) { note in
+                    guard let url = note.userInfo?["url"] as? URL else { return }
+                    handleImportLink(url)
                 }
                 .sheet(isPresented: bookSourceImportSheetBinding) {
                     BookSourceImportConfirmSheet(handler: bookSourceDeepLinkHandler)
@@ -280,6 +287,12 @@ struct yuedu_appApp: App {
                     // What an earlier 清除封面快取 deleted, or a cover download that failed then
                     // (feedback #116).
                     Task(priority: .utility) { await bookStore.restoreMissingCovers() }
+                    // Caches over the cap in 快取管理 lose their least recently used first
+                    // (feedback #47, #129): checked now, then as cache writes add up.
+                    CacheAutoCleaner.shared.bind(
+                        CacheManagementService(coverOwner: bookStore, retentionOwner: bookStore)
+                    )
+                    CacheAutoCleaner.shared.requestCheck(reason: "launch")
                     Task {
                         await AppDependencies.live.offlineDownloadManager
                             .reconcileInterruptedDownloads(store: bookStore)
@@ -359,6 +372,7 @@ struct yuedu_appApp: App {
                 if newPhase != .active { bookStore.flushPendingMetadataSave() }
                 // Pick up sources shared while the app was backgrounded.
                 if newPhase == .active {
+                    Task { await PublicLibraryAvailability.shared.refresh() }
                     Task { await SharedImportQueueDrainer.shared.drain() }
                     // A button tap while the app was suspended is waiting in the queue.
                     Task { await DownloadActivityCommandApplier.drainObserved() }
@@ -388,6 +402,16 @@ struct yuedu_appApp: App {
                 }
             }
         }
+    }
+
+    /// A module link or a source-import link, from the system (`onOpenURL`) or from a source's
+    /// `java.openUrl`; anything else is ignored.
+    private func handleImportLink(_ url: URL) {
+        if case .module(let address) = BookSourceImportDeepLink.target(from: url) {
+            RuleModuleLinkPresenter.present(address)
+            return
+        }
+        bookSourceDeepLinkHandler.handle(url: url)
     }
 
     /// The iCloud sync named by `syncReason` (none when nil), and the automatic chapter check

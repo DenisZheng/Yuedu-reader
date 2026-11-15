@@ -220,9 +220,9 @@ struct ContentView: View {
             }
             #endif
         }
-        .onChange(of: gs.rootTabVisibleIDs) { _, ids in
-            // On iOS 17 a new tab set rebuilds every tab (`tabView`).
-            CrashContext.breadcrumb("root tabs \(ids.joined(separator: ","))")
+        .onChange(of: gs.visibleRootTabs) { _, tabs in
+            // On iOS 17 a new tab set — or a new order (#92) — rebuilds every tab (`tabView`).
+            CrashContext.breadcrumb("root tabs \(tabs.map(\.rawValue).joined(separator: ","))")
             selectedRootTab = gs.fallbackRootTab(for: selectedRootTab)
         }
         .modifier(AudiobookPlayerPresentation(store: store))
@@ -322,7 +322,13 @@ struct ContentView: View {
     }
 
     private var visibleTabsTabView: some View {
-        TabView(selection: $selectedRootTab) {
+        TabView(selection: Binding {
+            selectedRootTab
+        } set: { tab in
+            // Stamped as the tap lands: iOS 27 appears the tab's root before `onChange` runs.
+            if tab == .library, selectedRootTab != .library { LibraryTabTiming.noteSelected() }
+            selectedRootTab = tab
+        }) {
             ForEach(gs.visibleRootTabs) { tab in
                 rootTabContent(for: tab)
                     .modifier(ThemedSurfaceBackground(

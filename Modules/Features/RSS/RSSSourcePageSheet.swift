@@ -263,6 +263,14 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         private var error: Binding<String?>
         private var loading: Binding<Bool>
         init(error: Binding<String?>, loading: Binding<Bool>) { self.error = error; self.loading = loading }
+        /// 与App请求共用已确认的证书兼容策略；页面失效/退出后不能继续认证握手。
+        func webView(_ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge) async
+            -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+            guard isPageActive, !isRevoked, accessState?.isCurrent != false else {
+                return (.cancelAuthenticationChallenge, nil)
+            }
+            return ServerTrustPolicy.answer(challenge)
+        }
         func attachCookies(_ cookieStore: WKHTTPCookieStore) {
             let adapter = RSSWebCookies(cookieStore)
             adapter.onFailure = { [weak self] failure in self?.fail(failure, phase: .cookies) }

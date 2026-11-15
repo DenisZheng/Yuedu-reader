@@ -23,6 +23,7 @@ struct AIRecommendationModuleView: View {
             lastRunSection
             actionsSection
 
+            AppOfficialModuleVisibilitySection(module: .aiRecommendations)
         }
         .navigationTitle(localized("AI 推薦"))
         .toolbarTitleDisplayMode(.inline)

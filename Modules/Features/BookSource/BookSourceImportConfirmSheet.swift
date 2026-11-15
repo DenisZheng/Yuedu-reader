@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 
 // MARK: - BookSourceImportConfirmSheet
 
@@ -17,6 +18,9 @@ struct BookSourceImportConfirmSheet: View {
             // The confirmation list brings its own navigation chrome and needs the full
             // height, so it replaces the compact sheet rather than nesting inside it.
             reviewList
+        } else if case .reviewingRSS(let request) = handler.phase {
+            RSSImportReviewSheet(input: request.input, store: handler.rssStore)
+                .presentationDetents([.large])
         } else {
             NavigationStack {
                 content
@@ -25,7 +29,6 @@ struct BookSourceImportConfirmSheet: View {
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button(localized("取消")) { handler.cancel() }
-                                .disabled(isBusy)
                         }
                     }
             }
@@ -61,8 +64,8 @@ struct BookSourceImportConfirmSheet: View {
             confirmingView(sourceURL: sourceURL)
         case .importing:
             importingView
-        case .reviewing:
-            // Handled above by `reviewList`.
+        case .reviewing, .reviewingRSS:
+            // 对应的业务确认页由上层分支直接呈现，不嵌套第二个sheet。
             EmptyView()
         case .succeeded(let count):
             resultView(
@@ -163,4 +166,40 @@ struct BookSourceImportConfirmSheet: View {
         .padding(.vertical, DSSpacing.md)
         .frame(maxHeight: .infinity)
     }
+}
+
+/// 浏览器的UIKit呈现只提供宿主；下载、分类与预览复用系统深链状态机。
+struct BookSourceBrowserImportHost: View {
+    @StateObject private var handler: BookSourceDeepLinkHandler
+    let onDismiss: () -> Void
+
+    init(handler: BookSourceDeepLinkHandler, onDismiss: @escaping () -> Void) {
+        _handler = StateObject(wrappedValue: handler)
+        self.onDismiss = onDismiss
+    }
+    @MainActor static func present(_ url: URL, in webView: WKWebView) {
+        guard let root = webView.window?.rootViewController else { return }
+        var top = root
+        while let presented = top.presentedViewController { top = presented }
+        let handler = BookSourceDeepLinkHandler()
+        handler.handle(url: url)
+        guard handler.phase != .idle else { return }
+        final class ControllerBox { weak var value: UIViewController? }
+        let box = ControllerBox()
+        let host = UIHostingController(rootView: Self(handler: handler) { box.value?.dismiss(animated: true) })
+        box.value = host
+        top.present(host, animated: true)
+    }
+
+    var body: some View {
+        BookSourceImportConfirmSheet(handler: handler)
+            .onChange(of: handler.phase) { _, phase in if phase == .idle { onDismiss() } }
+            .onDisappear { handler.cancel() }
+    }
+}
+
+#Preview("源包深链确认") {
+    let handler = BookSourceDeepLinkHandler()
+    handler.handle(url: URL(string: "readerfork-dev://import/rssSource?src=https://example.invalid/rss.json")!)
+    return BookSourceImportConfirmSheet(handler: handler)
 }

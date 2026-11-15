@@ -108,7 +108,7 @@ final class RSSWebActionRouter {
                 guard let current = BookSourceStore.shared.source(id: input.source.id) else { throw RSSWebFailure.actionUnavailable }
                 let safe = try await Self.bookRequest(input.url, sources: [current], base: nil)
                 let package = try await SourceDiagnosticContext.$restrictedTask.withValue(true) {
-                    try await BookSourceFetcher().fetchBookInfoPackage(url: safe.url, source: safe.source, writesCache: false)
+                    try await BookSourceFetcher().fetchBookInfoPackage(url: safe.url, source: safe.source, usesCache: false)
                 }
                 return .book(package.onlineBook)
             }

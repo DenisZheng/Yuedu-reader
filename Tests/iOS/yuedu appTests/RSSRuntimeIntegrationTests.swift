@@ -13,8 +13,9 @@ struct RSSRuntimeIntegrationTests {
             RSSPageFixtureProtocol.serve(host: host, contentType: "text/html", body: html)
             defer { session.invalidateAndCancel(); RSSPageFixtureProtocol.remove(host: host) }
             var source = rules(host: host)
-            source.jsLib = "var count = 0; java.put('persistent', 'value');"
-            source.ruleTitle = "@js: source.setVariable('opaque'); java.get('persistent') + '|' + source.getVariable() + '|' + (++count)"
+            // 规则自身的赋值属于本次scope；用共享库函数验证真实源级状态连续，而非跨规则污染。
+            source.jsLib = "var count = 0; function fixtureCount(){return ++count;} java.put('persistent', 'value');"
+            source.ruleTitle = "@js: source.setVariable('opaque'); java.get('persistent') + '|' + source.getVariable() + '|' + fixtureCount()"
             store.addSource(source)
             let one = try await LegadoRSSScraper.scrape(source: source, owner: store, requestSession: session)
             let two = try await LegadoRSSScraper.scrape(source: source, owner: store, requestSession: session)
@@ -325,7 +326,8 @@ struct RSSRuntimeIntegrationTests {
         let xml = #"<?xml version="1.0" encoding="GBK"?><rss version="2.0"><channel><title>新闻</title><item><guid>one</guid><title>第一篇</title><link>https://fixture.invalid/one</link></item></channel></rss>"#
         RSSPageFixtureProtocol.serve(host: host, sequences: [
             "/feed": [.init(body: Data("login".utf8), status: 403), .init(body: Data(), status: 304)],
-            "/authorized": [.init(body: Data("ignored".utf8), headers: ["ETag": "fixture-tag"])]
+            // 登录检查返回的新响应是权威正文，不再重复应用原请求的bodyJs。
+            "/authorized": [.init(body: Data(xml.replacingOccurrences(of: "GBK", with: "UTF-8").utf8), headers: ["ETag": "fixture-tag"])]
         ])
         defer { session.invalidateAndCancel(); RSSPageFixtureProtocol.remove(host: host) }
         var source = RSSSource(name: "XML fixture", url: "https://\(host)/feed")
@@ -334,8 +336,8 @@ struct RSSRuntimeIntegrationTests {
         source.header = "@js: JSON.stringify({'X-Fixture': fixtureToken()})"
         // 正文变换返回解码后的XML；声明中的GBK不能让UTF-8重新编码的数据乱码。
         let literal = String(decoding: try JSONEncoder().encode(xml), as: UTF8.self)
-        source.loginCheckJs = "if(result.code()===403) java.connect('https://\(host)/authorized');"
-        let options = try JSONSerialization.data(withJSONObject: ["bodyJs": literal], options: [.sortedKeys])
+        source.loginCheckJs = "if(result.code()===403) { if(!result.body().includes('第一篇')) throw new Error('bodyJs must precede loginCheckJs'); java.connect('https://\(host)/authorized'); }"
+        let options = try JSONSerialization.data(withJSONObject: ["bodyJs": "if(result.length===0) throw new Error('304 must not run bodyJs');" + literal], options: [.sortedKeys])
         source.url += "," + String(decoding: options, as: UTF8.self)
         let fetcher = RSSFetcher(session: session)
         await fetcher.fetchItems(from: source)

@@ -8,7 +8,9 @@ import SwiftUI
 /// timeline at the bottom. A tap shows and hides them; the episodes open in a sheet.
 ///
 /// On an iPhone it opens in landscape and turns to portrait for a portrait picture, as the
-/// picture reports its size (maintainer, 2026-11-01: 「依影片比例」).
+/// picture reports its size (maintainer, 2026-11-01: 「依影片比例」). A button turns it the other way
+/// by hand — a short drama framed in a landscape picture is still watched upright, filling the
+/// screen (FB-163) — and the choice holds over the episodes after it.
 struct VideoPlayerView: View {
     enum Content {
         /// A shelf book: its position is saved to the shelf.
@@ -35,7 +37,13 @@ struct VideoPlayerView: View {
     @State private var showsEpisodes = false
     /// The time under the finger while the timeline is dragged.
     @State private var scrubTime: Double?
+    /// A drag on the picture in progress.
+    @State private var pan: VideoPan?
     @State private var fillsScreen = false
+    /// What the window was last turned to; nil until it is in one that turns (an iPhone's).
+    @State private var orientation: FixedLayoutOrientation?
+    /// Set once the person turns the window themselves: the picture's size no longer turns it.
+    @State private var turnedByHand = false
     @State private var window = ReaderWindowReference()
 
     var body: some View {
@@ -54,6 +62,9 @@ struct VideoPlayerView: View {
                 if controller.isLongPressing {
                     longPressBadge
                 }
+                if let pan, pan.kind == .seek, let range = controller.seekableRange {
+                    VideoSeekBadge(time: pan.value, end: range.upperBound, delta: pan.value - pan.origin)
+                }
             } else {
                 ProgressView()
                     .tint(DSColor.textOnFixedFill)
@@ -71,7 +82,7 @@ struct VideoPlayerView: View {
             controller.start()
         }
         .onChange(of: controller?.pictureSize) { _, size in
-            guard let size else { return }
+            guard let size, !turnedByHand else { return }
             turn(to: size.height > size.width ? .portrait : .landscape)
         }
         // An inactivity timeout, not a wait for state: the controls get out of the picture's
@@ -136,6 +147,7 @@ struct VideoPlayerView: View {
         window.withWindow { uiWindow in
             guard let scene = uiWindow.windowScene, scene.traitCollection.userInterfaceIdiom == .phone else { return }
             ReaderOrientationController.shared.request(orientation, in: scene)
+            self.orientation = orientation
         }
     }
 
@@ -146,31 +158,57 @@ struct VideoPlayerView: View {
     // MARK: Gestures
 
     /// Under the controls: a tap shows or hides them, a long press plays faster while held
-    /// (legado-E), and a swipe up opens the episodes (plezy). Each has a button too.
+    /// (legado-E), a swipe across seeks (FB-144), and a swipe up opens the episodes (plezy). Each
+    /// has a control too: VoiceOver, which cannot reach the surface, keeps the labeled timeline.
     private func gestureSurface(_ controller: VideoPlaybackController) -> some View {
-        Color.clear
-            .contentShape(Rectangle())
-            .ignoresSafeArea()
-            .onTapGesture {
+        VideoGestureSurface(
+            isLocked: false,
+            onTap: {
                 showsControls.toggle()
                 touched()
-            }
-            // `perform` runs once the press has lasted, with the finger still down; the finger
-            // lifting ends it. A tap never reaches `perform`, so it stays a tap.
-            .onLongPressGesture(minimumDuration: DSAnimation.videoLongPressSeconds) {
-                controller.setLongPressing(true)
-            } onPressingChanged: { pressing in
-                if !pressing { controller.setLongPressing(false) }
-            }
-            .gesture(
-                DragGesture(minimumDistance: DSLayout.videoSwipeThreshold).onEnded { value in
-                    if hasEpisodes(controller), value.translation.height < -DSLayout.videoSwipeThreshold,
-                       abs(value.translation.width) < abs(value.translation.height) {
-                        showsEpisodes = true
-                    }
+            },
+            onLongPress: { controller.setLongPressing($0) },
+            onPan: { panned($0, controller) },
+            // Pinching is not wired in yet (0ac5df7a's pieces); a pinch does nothing.
+            onPinch: { _ in }
+        )
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+
+    private func panned(_ event: VideoGestureSurface.PanEvent, _ controller: VideoPlaybackController) {
+        switch event {
+        case .began(let start, let translation, let size):
+            let kind = VideoPanKind(start: start, translation: translation, in: size)
+            // A stream with nothing to seek in (live, or still loading) ignores a swipe across.
+            guard kind != .seek || controller.seekableRange != nil else { return }
+            pan = VideoPan(kind: kind, origin: controller.currentTime, value: controller.currentTime)
+            touched()
+        case .changed(let translation, let size):
+            guard var current = pan, current.kind == .seek, let range = controller.seekableRange else { return }
+            current.value = VideoPan.seekTime(origin: current.origin, translation: translation.width,
+                                              width: size.width, in: range)
+            pan = current
+            scrubTime = current.value
+        case .ended(let translation, _):
+            guard let finished = pan else { return }
+            pan = nil
+            switch finished.kind {
+            case .seek:
+                controller.seek(to: finished.value)
+                scrubTime = nil
+            // The edges' brightness and volume are not wired in yet: an up-down drag anywhere
+            // keeps opening the episodes, as it did before the seek.
+            case .episodes, .brightness, .volume:
+                if hasEpisodes(controller), translation.height < -DSLayout.videoSwipeThreshold {
+                    showsEpisodes = true
                 }
-            )
-            .accessibilityHidden(true)
+            }
+            touched()
+        case .cancelled:
+            pan = nil
+            scrubTime = nil
+        }
     }
 
     private var longPressBadge: some View {
@@ -209,7 +247,10 @@ struct VideoPlayerView: View {
             }
             .padding(.horizontal, DSSpacing.lg)
             .padding(.vertical, DSSpacing.sm)
-            centerControls(controller)
+            // A swipe across puts its time badge where the transport row sits.
+            if pan?.kind != .seek {
+                centerControls(controller)
+            }
         }
         .foregroundStyle(DSColor.textOnFixedFill)
     }
@@ -247,6 +288,9 @@ struct VideoPlayerView: View {
                     .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
             }
             .accessibilityLabel(fillsScreen ? localized("完整畫面") : localized("填滿螢幕"))
+            if let orientation {
+                rotateButton(from: orientation)
+            }
             if hasEpisodes(controller) {
                 Button {
                     showsEpisodes = true
@@ -258,6 +302,21 @@ struct VideoPlayerView: View {
                 .accessibilityLabel(localized("選集"))
             }
         }
+    }
+
+    /// Turns an iPhone's window the other way and keeps it there (FB-163).
+    private func rotateButton(from orientation: FixedLayoutOrientation) -> some View {
+        let toPortrait = orientation != .portrait
+        return Button {
+            turnedByHand = true
+            turn(to: toPortrait ? .portrait : .landscape)
+            touched()
+        } label: {
+            Image(systemName: toPortrait ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
+                .font(DSFont.toolbarIcon)
+                .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+        }
+        .accessibilityLabel(toPortrait ? localized("轉為直向") : localized("轉為橫向"))
     }
 
     /// A script's single link has no episodes to choose from.
@@ -347,27 +406,67 @@ struct VideoPlayerView: View {
     }
 
     private func bottomBar(_ controller: VideoPlaybackController) -> some View {
-        let shown = scrubTime ?? controller.currentTime
-        let upper = max(controller.duration, shown, 1)
-        return VStack(spacing: DSSpacing.xxs) {
-            Slider(
-                value: Binding(get: { shown }, set: { scrubTime = $0 }),
-                in: 0...upper,
-                onEditingChanged: { editing in
-                    if !editing, let scrubTime {
-                        controller.seek(to: scrubTime)
-                        self.scrubTime = nil
-                    }
-                    touched()
-                }
+        VideoTimelineBar(
+            shown: scrubTime ?? controller.currentTime,
+            end: controller.seekableRange?.upperBound ?? controller.duration,
+            range: controller.seekableRange,
+            onScrub: { time in
+                if scrubTime == nil || time == nil { touched() }
+                scrubTime = time
+            },
+            onSeek: { time in
+                controller.seek(to: time)
+                scrubTime = nil
+                touched()
+            },
+            onSkip: { seconds in
+                controller.skip(by: seconds)
+                touched()
+            }
+        )
+    }
+}
+
+// MARK: - Timeline
+
+/// 播放進度 under the picture: the timeline and its two times.
+///
+/// A `ScrubSlider`, not SwiftUI's `Slider` (FB-175): on iOS 27.2 the `Slider` opened one editing
+/// session on the first drag and never closed it, so `onEditingChanged(false)` never came and no
+/// drag ever sought — the times showed the finger's while the picture played on.
+struct VideoTimelineBar: View {
+    /// The thumb's time: the finger's while it drags, the player's otherwise.
+    let shown: Double
+    let end: Double
+    /// Where the timeline can seek; nil while nothing is seekable.
+    let range: ClosedRange<Double>?
+    /// The time under the finger; nil once the drag is cancelled.
+    let onScrub: (Double?) -> Void
+    /// The time the finger was lifted at.
+    let onSeek: (Double) -> Void
+    /// VoiceOver's swipe up / down: seconds to move by.
+    let onSkip: (Double) -> Void
+
+    var body: some View {
+        VStack(spacing: DSSpacing.xxs) {
+            ScrubSlider(
+                value: shown,
+                bounds: range ?? 0...max(shown, 1),
+                tint: DSColor.accent,
+                onScrub: onScrub,
+                onCommit: onSeek,
+                onIncrement: { onSkip(VideoPan.jumpSeconds) },
+                onDecrement: { onSkip(-VideoPan.jumpSeconds) }
             )
-            .disabled(controller.duration <= 0)
+            // Disabled only while nothing is seekable — a live stream with no window, or one
+            // still loading. A playlist with no duration still seeks in its seekable ranges.
+            .disabled(range == nil)
             .accessibilityLabel(localized("播放進度"))
-            .accessibilityValue(VideoPlayerFormat.position(shown, of: controller.duration))
+            .accessibilityValue(VideoPlayerFormat.position(shown, of: end))
             HStack {
                 Text(VideoPlayerFormat.time(shown))
                 Spacer()
-                Text(VideoPlayerFormat.time(controller.duration))
+                Text(VideoPlayerFormat.time(end))
             }
             .font(DSFont.caption.monospacedDigit())
             .opacity(DSLayout.cardSecondaryTextOpacity)
@@ -388,12 +487,67 @@ struct VideoPlayerView: View {
         .environmentObject(BookStore())
 }
 
+#Preview("Timeline") {
+    @Previewable @State var time = 93.0
+    @Previewable @State var scrub: Double?
+    ZStack {
+        DSColor.videoPlayerBackground.ignoresSafeArea()
+        VideoTimelineBar(
+            shown: scrub ?? time, end: 531, range: 0...531,
+            onScrub: { scrub = $0 },
+            onSeek: { time = $0; scrub = nil },
+            onSkip: { time = min(531, max(0, time + $0)) }
+        )
+        .foregroundStyle(DSColor.textOnFixedFill)
+        .padding(DSSpacing.lg)
+    }
+}
+
+#Preview("Seek badge") {
+    ZStack {
+        DSColor.videoPlayerBackground.ignoresSafeArea()
+        VideoSeekBadge(time: 754, end: 2700, delta: 65)
+    }
+}
+
+// MARK: - Seek badge
+
+/// Where a swipe across the picture will land: 「12:34 / 45:00」 over how far it moves.
+struct VideoSeekBadge: View {
+    let time: Double
+    let end: Double
+    let delta: Double
+
+    var body: some View {
+        VStack(spacing: DSSpacing.xxs) {
+            Text("\(VideoPlayerFormat.time(time)) / \(VideoPlayerFormat.time(end))")
+                .font(DSFont.title3.weight(.semibold))
+            Text(VideoPlayerFormat.delta(delta))
+                .font(DSFont.subheadline)
+                .opacity(DSLayout.cardSecondaryTextOpacity)
+        }
+        .monospacedDigit()
+        .foregroundStyle(DSColor.textOnFixedFill)
+        .padding(.horizontal, DSSpacing.lg)
+        .padding(.vertical, DSSpacing.sm)
+        .background(DSColor.videoControlScrim, in: RoundedRectangle(cornerRadius: DSRadius.md))
+        .allowsHitTesting(false)
+        // The surface that drives it is hidden from VoiceOver, whose timeline announces itself.
+        .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Formatting
 
 @MainActor
 enum VideoPlayerFormat {
     static func time(_ seconds: Double) -> String {
         AudiobookReaderView.formatTime(seconds)
+    }
+
+    /// How far a swipe moves: 「+1:05」, 「−0:30」.
+    static func delta(_ seconds: Double) -> String {
+        (seconds < 0 ? "−" : "+") + time(abs(seconds))
     }
 
     static func rate(_ rate: Float) -> String {

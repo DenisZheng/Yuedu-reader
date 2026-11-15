@@ -437,12 +437,28 @@ class BrowserState: NSObject, ObservableObject, WKNavigationDelegate {
         webView.load(URLRequest(url: url))
     }
 
+    /// Accepts the server's certificate, as Legado's WebViews do (`ServerTrustPolicy`).
+    func webView(
+        _ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        ServerTrustPolicy.answer(challenge)
+    }
+
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
         preferences: WKWebpagePreferences,
         decisionHandler: @escaping @MainActor (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
     ) {
+        // 站内旧scheme由App统一分类，不交给WebKit或外部App，也不建立第二条无上限导入路径。
+        if let url = navigationAction.request.url, let target = BookSourceImportDeepLink.target(from: url) {
+            switch target {
+            case .module(let address): RuleModuleLinkPresenter.present(address)
+            case .sources: BookSourceBrowserImportHost.present(url, in: webView)
+            }
+            decisionHandler(.cancel, preferences)
+            return
+        }
         // Per navigation, so a redirect or a followed link stays in the mode the user chose.
         preferences.preferredContentMode = SourceWebIdentity.contentMode(desktop: usesDesktopSite)
         preferences.allowsContentJavaScript = true
@@ -656,6 +672,13 @@ private class BackgroundWebViewHandler: NSObject, WKNavigationDelegate {
         self.targetWebView = targetWebView
         self.js = js
         self.onComplete = onComplete
+    }
+
+    /// Accepts the server's certificate, as Legado's WebViews do (`ServerTrustPolicy`).
+    func webView(
+        _ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        ServerTrustPolicy.answer(challenge)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

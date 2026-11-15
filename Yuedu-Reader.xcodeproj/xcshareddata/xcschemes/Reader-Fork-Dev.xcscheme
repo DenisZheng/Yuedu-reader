@@ -31,6 +31,9 @@
       <CommandLineArguments>
          <CommandLineArgument argument = "-no-official-modules" isEnabled = "YES"/>
       </CommandLineArguments>
+      <EnvironmentVariables>
+         <EnvironmentVariable key = "YUEDU_RUN_YCK205_IMPORT" value = "1" isEnabled = "NO"/>
+      </EnvironmentVariables>
       <Testables>
          <TestableReference
             skipped = "NO"
@@ -77,12 +80,6 @@
             ReferencedContainer = "container:Yuedu-Reader.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <CommandLineArguments>
-         <CommandLineArgument
-            argument = "-no-official-modules"
-            isEnabled = "YES">
-         </CommandLineArgument>
-      </CommandLineArguments>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

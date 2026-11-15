@@ -57,6 +57,14 @@ enum BookSourceImportDeepLink {
         return address
     }
 
+    /// RSS导入页的显式粘贴入口与系统链接共用解析；不争用旧scheme的系统注册。
+    static func payloadURL(from text: String) -> URL? {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        if RSSImportService.validURL(url) { return url }
+        guard let target = sourceURL(from: url), RSSImportService.validURL(target) else { return nil }
+        return target
+    }
+
     /// The `src` / `url` query item.
     private static func linkedURL(in url: URL) -> URL? {
         guard

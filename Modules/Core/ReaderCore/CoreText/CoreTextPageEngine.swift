@@ -306,6 +306,8 @@ final class CoreTextPageEngine: PageRenderingProvider, LinkNavigationProviding, 
     private(set) var renderSize: CGSize = .zero
     private var preloadTasks: [Int: Task<ChapterLayoutOutcome, Never>] = [:]
     private var preloadTaskIDs: [Int: UUID] = [:]
+    /// spine → the background restyle of its installed layout after a theme change.
+    private var appearanceTasks: [Int: Task<Void, Never>] = [:]
     private var layoutGeneration: Int = 0
     private var nextLayoutInvalidationOperationID: UInt64 = 0
     private var activeLayoutInvalidationOperationID: UInt64?
@@ -1103,6 +1105,39 @@ final class CoreTextPageEngine: PageRenderingProvider, LinkNavigationProviding, 
         onChapterReady?(spineIndex)
     }
 
+    private func currentLayoutAppearance() -> CoreTextPaginator.ChapterLayout.Appearance {
+        CoreTextPaginator.ChapterLayout.Appearance(
+            textColor: themeTextColor,
+            backgroundColor: themeBackgroundColor,
+            readerBackgroundImage: currentReaderBackgroundImage(),
+            regexHighlightConfiguration: renderSettings.regexHighlightConfiguration,
+            readerStyleAppearance: renderSettings.readerStyleAppearance,
+            readerStyleAssetRevision: renderSettings.readerStyleAssetRevision
+        )
+    }
+
+    /// A paginated layout in the reader's current appearance, built off the main actor
+    /// (Crashlytics 27c07ad8: this step ran here and blocked the reader ≥12.4 s on a book
+    /// that is one chapter). nil when `isStillWanted` says no on return: a preload that was
+    /// superseded or cancelled, an installed layout that was replaced or dropped.
+    ///
+    /// The theme can change while the layout is away; nothing else would recolour it, since
+    /// `applyThemeChange` only reaches layouts already installed. So the appearance is read
+    /// again on return and the layout redone until the one it carries is the current one.
+    private func layoutWithCurrentAppearance(
+        _ layout: CoreTextPaginator.ChapterLayout,
+        isStillWanted: () -> Bool
+    ) async -> CoreTextPaginator.ChapterLayout? {
+        var appearance = currentLayoutAppearance()
+        while true {
+            let styled = await layout.withUpdatedAppearanceInBackground(appearance)
+            guard isStillWanted() else { return nil }
+            let current = currentLayoutAppearance()
+            if current == appearance { return styled }
+            appearance = current
+        }
+    }
+
     private func preloadChapterInternal(
         at spineIndex: Int,
         generation: Int
@@ -1220,14 +1255,12 @@ final class CoreTextPageEngine: PageRenderingProvider, LinkNavigationProviding, 
                 }
                 var paginatedFirstPage = firstPageResult.layout
                 paginatedFirstPage.translation = buildResult.translation
-                let firstPageLayout = paginatedFirstPage.withUpdatedAppearance(
-                    textColor: themeTextColor,
-                    backgroundColor: themeBackgroundColor,
-                    readerBackgroundImage: currentReaderBackgroundImage(),
-                    regexHighlightConfiguration: renderSettings.regexHighlightConfiguration,
-                    readerStyleAppearance: renderSettings.readerStyleAppearance,
-                    readerStyleAssetRevision: renderSettings.readerStyleAssetRevision
-                )
+                guard let firstPageLayout = await layoutWithCurrentAppearance(
+                    paginatedFirstPage, isStillWanted: { abortReason(generation: generation) == nil }
+                ) else {
+                    ReaderPerfTrace.end(firstPageTrace)
+                    return abortReason(generation: generation) ?? .cancelled
+                }
                 installLayout(firstPageLayout, for: spineIndex)
                 if firstPageLayout.isPartial {
                     SourcePerfTrace.record(
@@ -1277,17 +1310,18 @@ final class CoreTextPageEngine: PageRenderingProvider, LinkNavigationProviding, 
             since: fullLayoutStart
         )
 
-        installLayout(
-            layout.withUpdatedAppearance(
-                textColor: themeTextColor,
-                backgroundColor: themeBackgroundColor,
-                readerBackgroundImage: currentReaderBackgroundImage(),
-                regexHighlightConfiguration: renderSettings.regexHighlightConfiguration,
-                readerStyleAppearance: renderSettings.readerStyleAppearance,
-                readerStyleAssetRevision: renderSettings.readerStyleAssetRevision
-            ),
-            for: spineIndex
+        let appearanceStart = SourcePerfTrace.now
+        guard let styledLayout = await layoutWithCurrentAppearance(
+            layout, isStillWanted: { abortReason(generation: generation) == nil }
+        ) else {
+            return abortReason(generation: generation) ?? .cancelled
+        }
+        SourcePerfTrace.record(
+            "coreText.fullLayout.appearance",
+            "spine=\(spineIndex) pages=\(layout.pageRanges.count)",
+            since: appearanceStart
         )
+        installLayout(styledLayout, for: spineIndex)
         AppLogger.render("[FlipTrace] preload done spine=\(spineIndex) pages=\(layout.pageRanges.count) generation=\(generation) layouts=\(_layouts.keys.sorted())")
         return documentIsEmpty ? .contentUnavailable : .laidOut
     }
@@ -1405,23 +1439,59 @@ _layouts.removeAll()
     func applyThemeChange(textColor: UIColor, backgroundColor: UIColor) {
         themeTextColor = textColor
         themeBackgroundColor = backgroundColor
-        let readerBackgroundImage = currentReaderBackgroundImage()
-        // Color changes don't affect line breaking; directly update attributedString + framesetter synchronously, preserving all blockAttachments etc.
-        for spineIndex in _layouts.keys {
-            _layouts[spineIndex] = _layouts[spineIndex]?.withUpdatedAppearance(
-                textColor: textColor,
-                backgroundColor: backgroundColor,
-                readerBackgroundImage: readerBackgroundImage,
-                regexHighlightConfiguration: renderSettings.regexHighlightConfiguration,
-                readerStyleAppearance: renderSettings.readerStyleAppearance,
-                readerStyleAssetRevision: renderSettings.readerStyleAssetRevision
-            )
+        let appearance = currentLayoutAppearance()
+        // Colours do not move line breaks, so no layout is repaginated — but each is typeset
+        // again, and what that costs follows the chapter's length. An ordinary chapter is
+        // restyled here, before the caller rebuilds the visible page, so it never shows a
+        // frame of the old theme. A long one (the same line the two-phase open draws) keeps
+        // its old colours and is swapped when its restyled layout arrives: measured on a
+        // 1.2 M-character chapter, this call ran 13872 ms on the main thread.
+        var longChapters: [Int] = []
+        for spineIndex in _layouts.keys.sorted() {
+            guard let layout = _layouts[spineIndex] else { continue }
+            if layout.attributedString.length >= Self.partialFirstPageThreshold {
+                longChapters.append(spineIndex)
+            } else {
+                _layouts[spineIndex] = layout.withUpdatedAppearance(
+                    textColor: appearance.textColor,
+                    backgroundColor: appearance.backgroundColor,
+                    readerBackgroundImage: appearance.readerBackgroundImage,
+                    regexHighlightConfiguration: appearance.regexHighlightConfiguration,
+                    readerStyleAppearance: appearance.readerStyleAppearance,
+                    readerStyleAssetRevision: appearance.readerStyleAssetRevision
+                )
+            }
         }
         invalidateSnapshots()
         onChapterReady?(nil)
         // Rebuild chapter boundary snapshots in the background (for cross-chapter animation)
         for spineIndex in _layouts.keys {
             generateSnapshot(for: spineIndex)
+        }
+        for spineIndex in longChapters {
+            restyleInstalledLayoutInBackground(at: spineIndex)
+        }
+    }
+
+    /// Replaces a long chapter's installed layout with one in the current appearance, built
+    /// off the main actor. The layout it started from must still be the one installed when
+    /// the result arrives: a preload that landed meanwhile already carries the current
+    /// appearance (`layoutWithCurrentAppearance`), and a chapter that was dropped stays dropped.
+    ///
+    /// Not tied to `layoutGeneration`: `cancelPendingWork` bumps it while leaving layouts
+    /// installed (a refresh transaction, the app leaving the foreground), and a restyle
+    /// abandoned there would leave the chapter in the old theme with nothing to redo it.
+    private func restyleInstalledLayoutInBackground(at spineIndex: Int) {
+        // A newer theme change starts from the installed layout again.
+        appearanceTasks[spineIndex]?.cancel()
+        guard let source = _layouts[spineIndex] else { return }
+        appearanceTasks[spineIndex] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let styled = await self.layoutWithCurrentAppearance(source, isStillWanted: {
+                !Task.isCancelled && self._layouts[spineIndex]?.attributedString === source.attributedString
+            })
+            guard let styled else { return }
+            self.installLayout(styled, for: spineIndex)
         }
     }
 

@@ -54,7 +54,10 @@ final class LibrarySearch: SearchAnswering {
     init(providers: (@MainActor () -> [any OPDSFeedProviding])? = nil, timeout: Duration = LibrarySearch.timeout) {
         self.providers = providers ?? {
             Self.libraries(catalogs: OPDSCatalogStore.shared.catalogs, gutenberg: SourceProviderRegistry.shared.gutenberg,
-                           shown: AggregationSettingsStore.shared.isShownInSearch) {
+                           shown: { key in
+                               let enabled = PublicLibraryID(rawValue: key.id).map { RuleModuleLibrary.shared.isPublicLibraryEnabled($0) } ?? true
+                               return enabled && AggregationSettingsStore.shared.isShownInSearch(key)
+                           }) {
                 SourceProviderRegistry.shared.opdsProvider(catalogID: $0.id)
             }
         }

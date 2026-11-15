@@ -356,8 +356,14 @@ struct SourceProviderRegistryTests {
         let opds = connections.add(name: "OPDS", url: "https://opds.example/", username: nil, password: nil, kind: .opds)
         let calibre = connections.add(name: "Calibre", url: "https://calibre.example/opds", username: nil, password: nil, kind: .calibre)
         let dav = connections.add(name: "DAV", url: "https://dav.example/", username: nil, password: nil, kind: .webDAV)
-        let availability = PublicLibraryAvailability(defaults: UserDefaults(suiteName: "registry-\(UUID().uuidString)")!)
-        let registry = SourceProviderRegistry(connections: connections, availability: availability)
+        let suite = "registry-\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let availability = PublicLibraryAvailability(defaults: preferences)
+        let modules = RuleModuleLibrary(availability: nil, preferences: preferences)
+        modules.setEnabled(true, id: "app:builtin.gutenberg")
+        modules.setEnabled(true, id: "app:builtin.aozora")
+        let registry = SourceProviderRegistry(connections: connections, availability: availability, modules: modules)
 
         #expect(registry.opdsProvider(catalogID: opds.id)?.instance == SourceInstanceKey(type: .opds, id: opds.id))
         #expect(registry.opdsProvider(catalogID: calibre.id)?.instance == SourceInstanceKey(type: .calibre, id: calibre.id))

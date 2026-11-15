@@ -12,6 +12,19 @@ enum RSSImageService {
     }
     static let maximumBytes = 16 * 1_024 * 1_024
 
+    /// 列表封面同样需要源头、文章变量及coverDecodeJs；不使用裸AsyncImage或另一套缓存。
+    nonisolated static func thumbnail(_ article: RSSArticleRecord, source: RSSSource, owner: RSSStore?,
+                                     session: URLSession = LegadoJSBridge.requestSession) async throws -> UIImage {
+        guard let raw = article.imageURL, !raw.isEmpty,
+              let base = URL(string: article.link) ?? source.articleLinkBaseURL else { throw RSSWebFailure.resourceUnavailable }
+        let runtime = try await RSSRuntime.make(source: source, owner: owner, requestSession: session)
+        let prepared = SourcePreparedWebRequest(request: URLRequest(url: base), responseOptions: .init(), variables: article.variables ?? [:])
+        let context = RSSOpenTarget.RequestContext(prepared, runtime: runtime,
+            article: .init(title: article.title, link: article.link, category: article.categoryName ?? "", id: article.id))
+        let image = try await load(raw, source: source, baseURL: base, context: context, owner: owner, session: session)
+        return try await displayImage(image.data)
+    }
+
     nonisolated static func load(_ raw: String, source: RSSSource, baseURL: URL?,
         context: RSSOpenTarget.RequestContext?, owner: RSSStore?, ruleURL: Bool = false,
         rules: RSSResourceRules? = nil, session: URLSession = LegadoJSBridge.requestSession, authentication: Bool = false) async throws -> Image {

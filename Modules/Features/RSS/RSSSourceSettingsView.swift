@@ -30,6 +30,13 @@ struct RSSSourceSettingsView: View {
 
     private func form(_ source: RSSSource) -> some View {
         Form {
+            if let comment = source.sourceComment, !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Section {
+                    Text(comment).font(DSFont.body).textSelection(.enabled)
+                        .accessibilityIdentifier("rss.settings.comment")
+                } header: { Text(localized("訂閱源說明")).foregroundStyle(DSColor.textSecondary) }
+                .interfaceSectionSurface()
+            }
             Section {
                 toggle(localized("啟用"), \.enabled, source, id: "rss.settings.enabled")
                 toggle(localized("執行 JavaScript"), \.enableJs, source, id: "rss.settings.enableJs")
@@ -279,6 +286,7 @@ struct RSSSourceEditFailure: Error { let message: String }
     let store = RSSStore(storageDirectory: URL.temporaryDirectory.appendingPathComponent("rss-settings-preview"))
     var source = RSSSource(name: "Preview", url: "https://example.invalid/rss")
     source.ruleArticles = "class.item"; source.loginUrl = "https://example.invalid/login"
+    source.sourceComment = "这是源作者的说明；按纯文本显示，不执行其中的 HTML 或脚本。"
     return NavigationStack { RSSSourceSettingsView(sourceID: source.id, store: store) }
         .onAppear { _ = store.addSourcesReturningAdded([source]) }
 }

@@ -683,6 +683,13 @@ struct JsBridgeBrowserRepresentable: UIViewRepresentable {
             }
         }
 
+        /// Accepts the server's certificate, as Legado's WebViews do (`ServerTrustPolicy`).
+        func webView(
+            _ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge
+        ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+            ServerTrustPolicy.answer(challenge)
+        }
+
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
@@ -887,10 +894,13 @@ struct JsBridgeBrowserRepresentable: UIViewRepresentable {
                             ? String(cookie.domain.dropFirst()) : cookie.domain
                         byDomain["https://\(domain)", default: []].append(cookie)
                     }
-                    for (domainKey, domainCookies) in byDomain {
-                        let joined = domainCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-                        CookieStore.shared.set(url: domainKey, cookie: joined)
-                    }
+                    // One merge and at most one file write for the whole jar: this runs on
+                    // every page load, and per-domain writes cost 1 GB (crashlytics_fa6a505e…).
+                    CookieStore.shared.set(byDomain.map { domainKey, domainCookies in
+                        (url: domainKey,
+                         cookie: domainCookies.map { "\($0.name)=\($0.value)" }
+                            .joined(separator: "; "))
+                    })
 
                     completion?(pageBody)
                 }
@@ -908,65 +918,16 @@ struct JsBridgeBrowserRepresentable: UIViewRepresentable {
                 return
             }
 
-            URLSession.shared.dataTask(with: sourceURL) { data, _, error in
-                DispatchQueue.main.async {
-                    if let error {
-                        self.presentImportResult(error.localizedDescription, in: webView)
-                        return
-                    }
-                    guard let data else {
-                        self.presentImportResult(localized("無法讀取來源配置資料"), in: webView)
-                        return
-                    }
-                    do {
-                        let ext = sourceURL.pathExtension.isEmpty ? "json" : sourceURL.pathExtension
-                        // Parse only; the confirmation list decides what gets written.
-                        let sources = try BookSourceStore.shared.parseForImport(
-                            data: data,
-                            fileExtension: ext
-                        )
-                        self.presentImportReview(sources, in: webView)
-                    } catch {
-                        self.presentImportResult(error.localizedDescription, in: webView)
-                    }
-                }
-            }.resume()
+            guard RSSImportService.validURL(sourceURL) else { return }
+            BookSourceBrowserImportHost.present(url, in: webView)
         }
 
         private func presentImportResult(_ message: String, in webView: WKWebView) {
             guard let top = Self.topPresenter(in: webView) else { return }
-            let alert = UIAlertController(title: localized("來源配置導入"), message: message, preferredStyle: .alert)
+            let alert = UIAlertController(title: localized("來源配置導入"),
+                                          message: DiagnosticRedactor.redact(message), preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: localized("完成"), style: .default))
             top.present(alert, animated: true)
-        }
-
-        /// Shows the import confirmation list over the in-page browser. This importer lives in
-        /// a `WKWebView` coordinator with no SwiftUI sheet host, so the list is hosted in a
-        /// UIKit controller presented from the same presenter the result alert uses.
-        private func presentImportReview(_ sources: [BookSource], in webView: WKWebView) {
-            guard let top = Self.topPresenter(in: webView) else { return }
-            // The dismiss callbacks need the controller that does not exist yet when its own
-            // `rootView` is built. The box holds it weakly, so nothing retains a cycle.
-            final class PresentedControllerBox {
-                weak var controller: UIViewController?
-            }
-            let box = PresentedControllerBox()
-            let host = UIHostingController(
-                rootView: BookSourceImportReviewHost(
-                    sources: sources,
-                    onFinish: { [weak self] count in
-                        box.controller?.dismiss(animated: true) {
-                            self?.presentImportResult(
-                                String(format: localized("成功匯入 %d 個來源配置"), count),
-                                in: webView
-                            )
-                        }
-                    },
-                    onCancel: { box.controller?.dismiss(animated: true) }
-                )
-            )
-            box.controller = host
-            top.present(host, animated: true)
         }
 
         private static func topPresenter(in webView: WKWebView) -> UIViewController? {

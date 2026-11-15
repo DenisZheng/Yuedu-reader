@@ -39,6 +39,8 @@ final class CoreTextCollectionScrollViewController: UIViewController, @MainActor
     private let collectionView: UICollectionView
     let fragmentHost = ReaderViewportFragmentHost(frame: .zero)
     private var frameDiagnostics: ReaderScrollFrameDiagnostics?
+    /// FB-173 diagnostic: logs where a touch went that the page never answered.
+    private var pageTouchProbe: ReaderPageTouchProbe?
     private var lastBridgeViewportSize: CGSize = .zero
     private var cancellables: Set<AnyCancellable> = []
     /// The latest explicit navigation target or settled reading checkpoint.
@@ -131,6 +133,9 @@ final class CoreTextCollectionScrollViewController: UIViewController, @MainActor
     private var awaitingForegroundVerification = false
     /// Last observed content offset on the scrolling axis, for attributing movement.
     private var lastObservedAxisOffset: CGFloat?
+    /// 自動閱讀 movement asked for but not yet shown: less than a pixel, which the scroll
+    /// view rounds away until enough frames add up (`autoScroll(by:)`).
+    private var autoScrollRemainder: CGFloat = 0
     /// The previous committed position, so each commit can record how far it moved.
     private var lastCommittedPosition: CoreTextReadingPosition?
     private var hasKickedOffEngine = false
@@ -297,6 +302,11 @@ final class CoreTextCollectionScrollViewController: UIViewController, @MainActor
         collectionView.showsVerticalScrollIndicator = false
         collectionView.showsHorizontalScrollIndicator = false
         collectionView.contentInsetAdjustmentBehavior = .never
+        // A tap on the status bar must not move the reading position. UIKit's scroll-to-top
+        // takes any tap that lands on it while the reading menu has it showing, and sends the
+        // page to the top of the loaded window — chapters back, the book's first chapter
+        // when the window starts there (FB-178, reported on 條漫, the same in 滾動).
+        collectionView.scrollsToTop = false
         // 上下滑動 is the only reading mode whose canvas is a real scroll view, so iOS
         // 26 paints its scroll-edge effect over the top of the page — an opaque band
         // under the toolbar that 翻頁 never gets, because a paged canvas is not a
@@ -341,8 +351,35 @@ final class CoreTextCollectionScrollViewController: UIViewController, @MainActor
         collectionView.addGestureRecognizer(longPress)
 
         configureTapPriority()
+        pageTouchProbe = ReaderPageTouchProbe(
+            page: collectionView,
+            answering: [collectionView.panGestureRecognizer, tapGesture, longPress],
+            owner: self
+        ) { [weak self] in
+            self?.pageTouchProbeState ?? "gone"
+        }
         bindEngine()
         if scrollAxis == .vertical { frameDiagnostics = ReaderScrollFrameDiagnostics(scrollView: collectionView) }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        pageTouchProbe?.install(on: view.window)
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        pageTouchProbe?.uninstall()
+    }
+
+    /// What `ReaderPageTouchProbe` logs about the page beside the touch: whether it was moving,
+    /// and every flag that holds its position or its gestures back.
+    private var pageTouchProbeState: String {
+        "tracking=\(collectionView.isTracking) dragging=\(collectionView.isDragging)"
+            + " decelerating=\(collectionView.isDecelerating) resolving=\(isResolvingViewport)"
+            + " applying=\(isApplyingReadingPosition) applied=\(hasAppliedReadingPosition)"
+            + " awaitsAxisReset=\(awaitsAxisReset) segmentCross=\(segmentCrossStart != nil)"
+            + " selection=\(interactor.hasSelection) \(geometrySnapshot)"
     }
 
     // MARK: - Gesture priority
@@ -1004,18 +1041,31 @@ final class CoreTextCollectionScrollViewController: UIViewController, @MainActor
     /// wrote `contentOffset` with their own clamping and two of them disagreed,
     /// which is how a restore could land 16pt off.
     ///
-    /// - Returns: false once the content cannot move any further, which ends the
-    ///   mode the way legado's `fillPage` returning false does.
+    /// Frames are accumulated, not applied one by one. At 80–120 s/頁 a frame asks for
+    /// 0.07–0.17pt, less than half a pixel, and the scroll view places its offset on whole
+    /// pixels, so a single frame moves nothing. Reading "this frame did not move" as "the
+    /// content ended" quit the mode on its first frame at every slow speed (FB-159).
+    ///
+    /// - Returns: false once the offset has reached the end of the scrollable range — the
+    ///   book's or the segment's — which ends the mode the way legado's `fillPage` returning
+    ///   false does. How far a frame moved never decides it.
     @discardableResult
     func autoScroll(by points: CGFloat) -> Bool {
         guard scrollAxis == .vertical, points > 0, points.isFinite else { return true }
         let before = collectionView.contentOffset
+        autoScrollRemainder += points
         setScrollOffset(
-            CGPoint(x: before.x, y: before.y + points),
+            CGPoint(x: before.x, y: before.y + max(0, autoScrollRemainder)),
             source: .autoRead,
             animated: false
         )
-        return collectionView.contentOffset.y > before.y
+        let after = collectionView.contentOffset.y
+        // What was actually applied. The scroll view rounds to the nearest pixel, so this can
+        // overshoot the request; the remainder then goes negative and the next frames repay it
+        // — dropping that debt ran 600 slow frames 68% fast.
+        autoScrollRemainder -= after - before.y
+        // Same tolerance as `crossSegmentIfAtEdge`'s notion of "at the edge".
+        return after < scrollableAxisRange.upperBound - 0.5
     }
 
     /// Assigned before the view loads; `viewDidLoad` builds the constraints from it.
@@ -1716,6 +1766,9 @@ final class CoreTextCollectionScrollViewController: UIViewController, @MainActor
     ) {
         let clamped = clampedScrollOffset(proposed)
         let before = collectionView.contentOffset
+        // 自動閱讀's sub-pixel remainder belongs to the offset it was accumulated on; anything
+        // else moving the reader (restore, TTS follow, layout) starts it over.
+        if source != .autoRead { autoScrollRemainder = 0 }
         if animated {
             UIView.animate(
                 withDuration: 0.35,

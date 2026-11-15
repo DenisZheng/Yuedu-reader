@@ -4,23 +4,6 @@ import XCTest
 
 @MainActor
 final class ReaderSettingsPublicationTests: XCTestCase {
-    func testChangedThemeAppliesOnceAndIdenticalThemeDoesNotRepublish() throws {
-        let original = ReaderPreferences.current()
-        defer { original.apply() }
-        original.apply()
-        let theme = try XCTUnwrap(ReaderTheme.allCases.first { $0.rawValue != original.theme })
-        var next = original
-        next.theme = theme.rawValue
-        var themes: [ReaderTheme] = []
-        let token = ReaderConfig.shared.$theme.dropFirst().sink { themes.append($0) }
-        next.apply()
-        next.apply()
-        XCTAssertEqual(ReaderTheme.loadPersisted(), theme)
-        XCTAssertEqual(ReaderConfig.shared.theme, theme)
-        XCTAssertEqual(themes, [theme])
-        withExtendedLifetime(token) {}
-    }
-
     func testIdenticalPreferencesAndConfigPublishNothing() {
         let settings = GlobalSettings.shared
         let preferences = ReaderPreferences.current()

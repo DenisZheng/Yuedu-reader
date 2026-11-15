@@ -69,7 +69,8 @@ struct RSSSmartFeedView: View {
                                 RSSArticleRow(
                                     source: source,
                                     article: article,
-                                    timeFormatter: timeFormatter
+                                    timeFormatter: timeFormatter,
+                                    owner: store
                                 )
                             }
                             .buttonStyle(.plain)
@@ -218,7 +219,7 @@ struct RSSFeedView: View {
         var search: String?
     }
     private var loadKey: LoadKey {
-        .init(revision: store.configurationRevision, category: selectedSortEntry?.id, search: submittedSearch)
+        .init(revision: store.runtimeRevision(for: source.id), category: selectedSortEntry?.id, search: submittedSearch)
     }
     private var currentSource: RSSSource { store.source(id: source.id) ?? source }
     private var supportsRemoteSearch: Bool {
@@ -230,102 +231,13 @@ struct RSSFeedView: View {
     }
     private var unreadCount: Int { store.unreadCount(for: source.id) }
 
+    private var articlePresentation: RSSArticlePresentation {
+        RSSArticlePresentation(rawValue: currentSource.articleStyle) ?? .list
+    }
+
     var body: some View {
-        List {
-            if session.entries.count > 1 {
-                Picker(localized("分類"), selection: Binding(
-                    get: { selectedSortEntry ?? session.entries.first },
-                    set: { selectedSortEntry = $0; submittedSearch = nil; searchText = "" }
-                )) {
-                    ForEach(session.entries) { entry in
-                        Text(entry.name.isEmpty ? localized("全部") : entry.name).tag(Optional(entry))
-                    }
-                }
-                .pickerStyle(.menu)
-                .listRowBackground(Color.clear)
-            }
-
-            if let target = session.openTarget {
-                webPageSourceContent(target: target)
-            } else if articles.isEmpty {
-                if session.isLoading {
-                    ProgressView().frame(maxWidth: .infinity)
-                        .listRowBackground(Color.clear)
-                } else {
-                    ContentUnavailableView {
-                        UnavailableLabel(session.error == nil ? localized("目前沒有文章") : localized("重新載入"),
-                                         systemImage: session.error == nil ? "newspaper" : "exclamationmark.triangle")
-                    } description: {
-                        if let error = session.error { Text(error) }
-                    } actions: {
-                        if session.canRetry {
-                            Button(localized("重試")) { Task { await session.retry() } }
-                        }
-                        if let url = session.webPageFallbackURL {
-                            Button(localized("以網頁開啟")) { show(.request(URLRequest(url: url.url))) }
-                        }
-                    }
-                    .listRowBackground(Color.clear)
-                }
-            } else {
-                ForEach(articles) { article in
-                    Button {
-                        store.markRead(articleId: article.id, isRead: true)
-                        selectedArticleID = article.id
-                    } label: {
-                        RSSArticleRow(source: currentSource, article: article, timeFormatter: timeFormatter)
-                    }
-                    .accessibilityIdentifier("rss.article.\(article.id)")
-                    .buttonStyle(.plain)
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                    .swipeActions(edge: .leading) {
-                        Button { store.toggleFavorite(articleId: article.id) } label: {
-                            Label(article.isFavorite ? localized("取消收藏") : localized("收藏"),
-                                  systemImage: article.isFavorite ? "star.slash" : "star")
-                        }.tint(DSColor.accent)
-                    }
-                    .swipeActions(edge: .trailing) {
-                        Button { store.markRead(articleId: article.id, isRead: !article.isRead) } label: {
-                            Label(article.isRead ? localized("標為未讀") : localized("標為已讀"),
-                                  systemImage: article.isRead ? "envelope.badge" : "envelope.open")
-                        }.tint(DSColor.swipeAction)
-                    }
-                }
-            }
-
-            if session.isLoading {
-                Button(localized("取消")) { session.cancel() }
-                    .accessibilityIdentifier("rss.page.cancel")
-                    .listRowBackground(Color.clear)
-            } else if !articles.isEmpty, let error = session.error {
-                Section {
-                    Button(localized("重試")) { Task { await session.retry() } }
-                        .accessibilityIdentifier("rss.page.retry")
-                } footer: { Text(error).dsSectionFooter() }
-                .listRowBackground(Color.clear)
-            } else if session.canLoadMore {
-                Button(localized("載入更多")) { Task { await session.nextPage() } }
-                    .accessibilityIdentifier("rss.page.next")
-                    .listRowBackground(Color.clear)
-            }
-            if session.wasCancelled {
-                Text(localized("已取消")).foregroundStyle(DSColor.textSecondary)
-                    .listRowBackground(Color.clear)
-                if session.canRetry {
-                    Button(localized("重試")) { Task { await session.retry() } }
-                        .listRowBackground(Color.clear)
-                }
-            }
-            if session.end == .budget || session.end == .loop {
-                Text(session.end == .budget ? localized("已達分頁上限，已保留部分文章") : localized("分頁連結形成循環，已停止載入"))
-                    .font(DSFont.footnote)
-                    .foregroundStyle(DSColor.textSecondary)
-                    .listRowBackground(Color.clear)
-            }
-        }
-        .listStyle(.plain)
+        RSSArticleCollection(articles: session.openTarget == nil ? articles : [], presentation: articlePresentation,
+            header: { collectionHeader }, footer: { collectionFooter }, row: { articleButton($0) })
         .softScrollEdges()
         .toolbarTitleDisplayMode(.inline)
         .themedAppSurface(for: .rss)
@@ -374,6 +286,112 @@ struct RSSFeedView: View {
             if let target, !autoOpenedWebPage { autoOpenedWebPage = true; show(target) }
         }
         .onDisappear { session.cancel() }
+    }
+
+    @ViewBuilder private var collectionHeader: some View {
+            if session.entries.count > 1 {
+                Picker(localized("分類"), selection: Binding(
+                    get: { selectedSortEntry ?? session.entries.first },
+                    set: { selectedSortEntry = $0; submittedSearch = nil; searchText = "" }
+                )) {
+                    ForEach(session.entries) { entry in
+                        Text(entry.name.isEmpty ? localized("全部") : entry.name).tag(Optional(entry))
+                    }
+                }
+                .pickerStyle(.menu)
+                .listRowBackground(Color.clear)
+            }
+
+            if let target = session.openTarget {
+                webPageSourceContent(target: target)
+            } else if articles.isEmpty {
+                if session.isLoading {
+                    ProgressView().frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                } else {
+                    ContentUnavailableView {
+                        UnavailableLabel(session.error == nil ? localized("目前沒有文章") : localized("重新載入"),
+                                         systemImage: session.error == nil ? "newspaper" : "exclamationmark.triangle")
+                    } description: {
+                        if let error = session.error { Text(error) }
+                    } actions: {
+                        if session.canRetry {
+                            Button(localized("重試")) { Task { await session.retry() } }
+                        }
+                        if let url = session.webPageFallbackURL {
+                            Button(localized("以網頁開啟")) { show(.request(URLRequest(url: url.url))) }
+                        }
+                    }
+                    .listRowBackground(Color.clear)
+                }
+            }
+    }
+
+    @ViewBuilder private var collectionFooter: some View {
+            if session.isLoading {
+                Button(localized("取消")) { session.cancel() }
+                    .accessibilityIdentifier("rss.page.cancel")
+                    .listRowBackground(Color.clear)
+            } else if !articles.isEmpty, let error = session.error {
+                Section {
+                    Button(localized("重試")) { Task { await session.retry() } }
+                        .accessibilityIdentifier("rss.page.retry")
+                } footer: { Text(error).dsSectionFooter() }
+                .listRowBackground(Color.clear)
+            } else if session.canLoadMore {
+                Button(localized("載入更多")) { Task { await session.nextPage() } }
+                    .accessibilityIdentifier("rss.page.next")
+                    .listRowBackground(Color.clear)
+            }
+            if session.wasCancelled {
+                Text(localized("已取消")).foregroundStyle(DSColor.textSecondary)
+                    .listRowBackground(Color.clear)
+                if session.canRetry {
+                    Button(localized("重試")) { Task { await session.retry() } }
+                        .listRowBackground(Color.clear)
+                }
+            }
+            if session.end == .budget || session.end == .loop {
+                Text(session.end == .budget ? localized("已達分頁上限，已保留部分文章") : localized("分頁連結形成循環，已停止載入"))
+                    .font(DSFont.footnote)
+                    .foregroundStyle(DSColor.textSecondary)
+                    .listRowBackground(Color.clear)
+            }
+    }
+
+    @ViewBuilder private func articleButton(_ article: RSSArticleRecord) -> some View {
+        let button = Button {
+            store.markRead(articleId: article.id, isRead: true)
+            selectedArticleID = article.id
+        } label: {
+            RSSArticleRow(source: currentSource, article: article, timeFormatter: timeFormatter,
+                          owner: store, presentation: articlePresentation)
+        }
+        .accessibilityIdentifier("rss.article.\(article.id)")
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        if articlePresentation.isGrid {
+            button.contextMenu {
+                Button { store.toggleFavorite(articleId: article.id) } label: {
+                    Label(article.isFavorite ? localized("取消收藏") : localized("收藏"), systemImage: "star")
+                }
+                Button { store.markRead(articleId: article.id, isRead: !article.isRead) } label: {
+                    Label(article.isRead ? localized("標為未讀") : localized("標為已讀"), systemImage: "envelope")
+                }
+            }
+        } else {
+            button.swipeActions(edge: .leading) {
+                Button { store.toggleFavorite(articleId: article.id) } label: {
+                    Label(article.isFavorite ? localized("取消收藏") : localized("收藏"), systemImage: "star")
+                }.tint(DSColor.accent)
+            }.swipeActions(edge: .trailing) {
+                Button { store.markRead(articleId: article.id, isRead: !article.isRead) } label: {
+                    Label(article.isRead ? localized("標為未讀") : localized("標為已讀"), systemImage: "envelope")
+                }.tint(DSColor.swipeAction)
+            }
+        }
     }
 
     private func refresh() async {
@@ -455,81 +473,92 @@ enum RSSArticleTimelineFilter: String, CaseIterable, Identifiable {
     }
 }
 
-private struct RSSArticleRow: View {
+struct RSSArticleRow: View {
     let source: RSSSource
     let article: RSSArticleRecord
     let timeFormatter: DateFormatter
+    var owner: RSSStore? = nil
+    var presentation: RSSArticlePresentation = .list
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
-                statusIndicator
-                    .frame(width: 12, height: 12)
-                    .padding(.top, 4)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(article.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? localized("暫無資料") : article.title.trimmingCharacters(in: .whitespacesAndNewlines))
-                        .font(DSFont.headline)
-                        .fontWeight(.bold)
-                        .foregroundColor(DSColor.textPrimary)
-                        .lineLimit(2)
+            if presentation != .list, article.imageURL?.isEmpty == false {
+                RSSArticleThumbnail(source: source, article: article, owner: owner, presentation: presentation)
+            }
+            if presentation.isGrid {
+                VStack(alignment: .leading, spacing: DSSpacing.xs) {
+                    Text(article.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? localized("暫無資料") : article.title)
+                        .font(DSFont.subheadline).fontWeight(.semibold)
+                        .foregroundStyle(DSColor.textPrimary).lineLimit(2)
                         .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: DSSpacing.xs) {
+                        statusIndicator.frame(width: DSSpacing.sm, height: DSSpacing.sm)
+                        Text(metadataText).font(DSFont.caption).foregroundStyle(DSColor.textSecondary).lineLimit(1)
+                    }
+                }
+                .padding(DSSpacing.sm)
+            } else {
+                HStack(alignment: .top, spacing: DSSpacing.md) {
+                    statusIndicator
+                        .frame(width: 12, height: 12)
+                        .padding(.top, 4)
 
-                    if !article.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(article.summary.trimmingCharacters(in: .whitespacesAndNewlines))
-                            .font(DSFont.subheadline)
-                            .foregroundColor(DSColor.textSecondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(article.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? localized("暫無資料") : article.title.trimmingCharacters(in: .whitespacesAndNewlines))
+                            .font(DSFont.headline)
+                            .fontWeight(.bold)
+                            .foregroundColor(DSColor.textPrimary)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
-                    }
 
-                    HStack(alignment: .center, spacing: 6) {
-                        RSSFaviconView(source: source, size: 16)
-                        
-                        Text(metadataText)
-                            .font(DSFont.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(DSColor.textSecondary)
-                            .lineLimit(1)
-                        
-                        if let pubDate = article.pubDate {
-                            Text("•")
-                                .font(DSFont.caption)
+                        if !article.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text(article.summary.trimmingCharacters(in: .whitespacesAndNewlines))
+                                .font(DSFont.subheadline)
                                 .foregroundColor(DSColor.textSecondary)
-                            Text(timeFormatter.string(from: pubDate))
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
+
+                        HStack(alignment: .center, spacing: 6) {
+                            RSSFaviconView(source: source, size: 16)
+
+                            Text(metadataText)
                                 .font(DSFont.caption)
+                                .fontWeight(.semibold)
                                 .foregroundColor(DSColor.textSecondary)
                                 .lineLimit(1)
+
+                            if let pubDate = article.pubDate {
+                                Text("•")
+                                    .font(DSFont.caption)
+                                    .foregroundColor(DSColor.textSecondary)
+                                Text(timeFormatter.string(from: pubDate))
+                                    .font(DSFont.caption)
+                                    .foregroundColor(DSColor.textSecondary)
+                                    .lineLimit(1)
+                            }
                         }
+                        .padding(.top, 2)
                     }
-                    .padding(.top, 2)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                
-                if let imageURL = article.imageURL, let url = URL(string: imageURL)?.upgradedToHTTPS() {
-                    AsyncImage(url: url) { phase in
-                        if let image = phase.image {
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        } else if phase.error != nil {
-                            Color.clear
-                        } else {
-                            Color.gray.opacity(0.1)
-                        }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if presentation == .list, article.imageURL?.isEmpty == false {
+                        RSSArticleThumbnail(source: source, article: article, owner: owner)
+                            .frame(width: DSLayout.rssThumbnailSide, height: DSLayout.rssThumbnailSide)
+                            .padding(.leading, DSSpacing.xs)
                     }
-                    .frame(width: 60, height: 60)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .padding(.leading, 4)
                 }
+                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+
+                Divider()
+                    .padding(.leading, 38)
+                    .opacity(0.5)
             }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 16)
-            
-            Divider()
-                .padding(.leading, 38)
-                .opacity(0.5)
         }
+        .background(presentation.isGrid ? DSColor.surface : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: presentation.isGrid ? DSRadius.md : 0))
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }

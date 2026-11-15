@@ -8,13 +8,34 @@ final class RSSStore: ObservableObject {
 
     @Published var sources: [RSSSource] = [] { didSet {
         configurationRevision &+= 1
-        invalidateRuntimes()
+        if let sourceMutationIDs {
+            for id in sourceMutationIDs {
+                sourceRuntimeRevisions[id] = configurationRevision
+                invalidateRuntimes(for: id)
+            }
+        } else {
+            // 外部整库替换/恢复没有逐源变更合同，继续保守撤销全部请求，不丢失安全闸门。
+            globalRuntimeRevision = configurationRevision
+            invalidateRuntimes()
+        }
     } }
-    @Published var folders: [RSSFolder] = [] { didSet {
-        configurationRevision &+= 1
-        invalidateRuntimes()
-    } }
+    @Published var folders: [RSSFolder] = [] { didSet { configurationRevision &+= 1 } }
     private(set) var configurationRevision: UInt64 = 0
+    private var globalRuntimeRevision: UInt64 = 0
+    private var sourceRuntimeRevisions: [String: UInt64] = [:]
+    private var sourceMutationIDs: Set<String>?
+
+    /// owner已知的配置修改只撤销相关源；空集合表示不影响请求合同的发现地址/本地排序。
+    private func mutateSources(invalidating ids: Set<String>, _ mutation: () -> Void) {
+        let previous = sourceMutationIDs
+        sourceMutationIDs = ids
+        defer { sourceMutationIDs = previous }
+        mutation()
+    }
+
+    func runtimeRevision(for sourceID: String) -> UInt64 {
+        max(globalRuntimeRevision, sourceRuntimeRevisions[sourceID, default: 0])
+    }
     private var authenticationRevisions: [String: UInt64] = [:]
     private var sourceVariables: [String: [String: String]] = [:]
     private var sourceOptionJSON: [String: String] = [:]
@@ -68,7 +89,7 @@ final class RSSStore: ObservableObject {
         if let groupName = normalizedFolderName(source.sourceGroup) {
             ensureFolderExists(named: groupName)
         }
-        sources.append(source)
+        mutateSources(invalidating: [source.id]) { sources.append(source) }
         save([.sources, .folders])
     }
 
@@ -88,7 +109,7 @@ final class RSSStore: ObservableObject {
                 ensureFolderExists(named: groupName)
             }
             source.sortOrder = nextSourceSortOrder(inFolderNamed: groupName)
-            sources.append(source)
+            mutateSources(invalidating: [source.id]) { sources.append(source) }
             existingURLs.insert(source.url)
             addedSources.append(source)
         }
@@ -113,7 +134,7 @@ final class RSSStore: ObservableObject {
         let articleIDs = Set(sourceIDs.flatMap { cachedArticlesBySource[$0]?.map(\.id) ?? [] })
         let legacyIDs = Set(sourceIDs.flatMap { cachedArticlesBySource[$0]?.compactMap(\.legacyID) ?? [] })
 
-        sources.removeAll { sourceIDs.contains($0.id) }
+        mutateSources(invalidating: sourceIDs) { sources.removeAll { sourceIDs.contains($0.id) } }
         for sourceID in sourceIDs {
             indexArticles([], replacing: cachedArticlesBySource[sourceID] ?? [], for: sourceID)
             cachedArticlesBySource[sourceID] = nil
@@ -138,7 +159,7 @@ final class RSSStore: ObservableObject {
             }
             guard sources[index] != normalized else { return }
             clearFeedMetadata(for: source.id)
-            sources[index] = normalized
+            mutateSources(invalidating: [source.id]) { sources[index] = normalized }
             save([.sources, .folders])
         }
     }
@@ -164,7 +185,7 @@ final class RSSStore: ObservableObject {
         }
 
         if didChange {
-            sources[index] = source
+            mutateSources(invalidating: []) { sources[index] = source }
             saveRefreshResult(.sources)
         }
     }
@@ -189,7 +210,8 @@ final class RSSStore: ObservableObject {
         let oldName = folders[index].name
         folders[index].name = newName
         for sourceIndex in sources.indices where sourceGroup(sources[sourceIndex].sourceGroup, matches: oldName) {
-            sources[sourceIndex].sourceGroup = newName
+            let id = sources[sourceIndex].id
+            mutateSources(invalidating: [id]) { sources[sourceIndex].sourceGroup = newName }
         }
         save()
     }
@@ -206,7 +228,8 @@ final class RSSStore: ObservableObject {
             }
         } else {
             for sourceIndex in sources.indices where sourceGroup(sources[sourceIndex].sourceGroup, matches: folder.name) {
-                sources[sourceIndex].sourceGroup = nil
+                let id = sources[sourceIndex].id
+                mutateSources(invalidating: [id]) { sources[sourceIndex].sourceGroup = nil }
             }
             save()
         }
@@ -226,7 +249,7 @@ final class RSSStore: ObservableObject {
 
         for (sortOrder, source) in ordered.enumerated() {
             guard let index = sources.firstIndex(where: { $0.id == source.id }) else { continue }
-            sources[index].sortOrder = sortOrder
+            mutateSources(invalidating: []) { sources[index].sortOrder = sortOrder }
         }
         save()
     }
@@ -589,7 +612,7 @@ final class RSSStore: ObservableObject {
 
     func requestTicket(for sourceID: String) -> RSSRequestTicket? {
         guard restoreTransaction == nil, source(id: sourceID) != nil else { return nil }
-        return .init(sourceID: sourceID, configurationRevision: configurationRevision,
+        return .init(sourceID: sourceID, configurationRevision: runtimeRevision(for: sourceID),
                      authenticationRevision: authenticationRevisions[sourceID, default: 0])
     }
 
@@ -634,7 +657,8 @@ final class RSSStore: ObservableObject {
         sourceOptionJSON[sourceID] = value
         clearFeedMetadata(for: sourceID)
         configurationRevision &+= 1
-        invalidateRuntimes()
+        sourceRuntimeRevisions[sourceID] = configurationRevision
+        invalidateRuntimes(for: sourceID)
         save(.variables)
     }
 
@@ -643,7 +667,8 @@ final class RSSStore: ObservableObject {
         sourceVariables[sourceID] = values
         clearFeedMetadata(for: sourceID)
         configurationRevision &+= 1
-        invalidateRuntimes()
+        sourceRuntimeRevisions[sourceID] = configurationRevision
+        invalidateRuntimes(for: sourceID)
         save(.variables)
     }
 
@@ -749,7 +774,7 @@ final class RSSStore: ObservableObject {
         }
 
         if didChange {
-            sources[index] = source
+            mutateSources(invalidating: [sourceID]) { sources[index] = source }
             saveRefreshResult(.sources)
         }
     }
@@ -1065,7 +1090,7 @@ final class RSSStore: ObservableObject {
         guard unreadableFiles.isEmpty else { throw RSSImportService.Issue.persistence }
         if !changes.changedIDs.isEmpty {
             let foldersChanged = folders.count != changes.folders.count
-            sources = changes.sources
+            mutateSources(invalidating: changes.changedIDs) { sources = changes.sources }
             if foldersChanged { folders = changes.folders }
             var files: StoredFiles = foldersChanged ? [.sources, .folders] : .sources
             for id in changes.changedIDs where feedMetadataBySource[id] != nil {

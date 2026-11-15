@@ -18,8 +18,10 @@ struct RSSImportServiceTests {
         good["jsLib"] = "throw new Error('must never execute')"
         let loaded = try await RSSImportService.load(.data(data([good, ["sourceName": "bad"], 7, ["sourceUrl": "unnamed"], ["sourceUrl": "badtype", "type": true]])))
         #expect(loaded.candidates.count == 5)
-        #expect(loaded.candidates.filter { $0.source != nil }.count == 2)
-        #expect(loaded.candidates.filter { $0.issue == .invalidFormat }.count == 3)
+        #expect(loaded.candidates.filter { $0.source != nil }.count == 3)
+        #expect(loaded.candidates.filter { $0.issue == .invalidFormat }.count == 2)
+        #expect(loaded.candidates.last?.source?.contentType == nil)
+        #expect(loaded.candidates.last?.correctedFields == 1, "非JSON数字type回缺省值并在预览披露，不再拒绝整个条目")
         #expect(loaded.requests == 0)
     }
 

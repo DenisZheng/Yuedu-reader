@@ -143,8 +143,9 @@ struct RSSBrowsingContractTests {
             do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) }
         }
         let store = RSSStore(storageDirectory: directory)
-        var source = RSSSource(name: "Dynamic", url: "@js:'https://\(host)/'+(++sequence===1?'one':'two')")
-        source.importedFromLegado = true; source.jsLib = "var sequence=0;"
+        // 动态URL状态由jsLib函数持有；规则scope的直接赋值不应污染下一次请求。
+        var source = RSSSource(name: "Dynamic", url: "@js:'https://\(host)/'+(nextSequence()===1?'one':'two')")
+        source.importedFromLegado = true; source.jsLib = "var sequence=0;function nextSequence(){return ++sequence;}"
         store.addSource(source)
         let browser = RSSFeedSession(source: source, store: store, session: session)
         await browser.refresh(); await browser.refresh(); await browser.refresh()

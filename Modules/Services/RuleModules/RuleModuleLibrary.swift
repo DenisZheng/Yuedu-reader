@@ -46,6 +46,8 @@ final class RuleModuleLibrary: ObservableObject {
     private let preferences: UserDefaults
     private static let disabledKey = "ruleModules.disabled"
     private static let hiddenInLibraryKey = "ruleModules.hiddenInLibrary"
+    private static let builtinDefaultsKey = "ruleModules.forkBuiltinDefaults.v1"
+    private var needsBuiltinDefaultsWrite: Bool
 
     init(store: RuleModuleStore = RuleModuleStore(), appVersion: String = RuleModuleVersion.app,
          officialFiles: @escaping @Sendable () -> [URL] = { OfficialRuleModules.bundledFiles },
@@ -53,7 +55,11 @@ final class RuleModuleLibrary: ObservableObject {
          language: String = Bundle.main.preferredLocalizations.first ?? "en", preferences: UserDefaults = .standard) {
         self.store = store
         self.preferences = preferences
-        disabled = Set(preferences.stringArray(forKey: Self.disabledKey) ?? [])
+        let savedDisabled = Set(preferences.stringArray(forKey: Self.disabledKey) ?? [])
+        needsBuiltinDefaultsWrite = !preferences.bool(forKey: Self.builtinDefaultsKey)
+        // 首次应用新默认仅关闭内置项，保留自建模块与其他已有配置；之后手动启用不再被覆盖。
+        disabled = needsBuiltinDefaultsWrite ? savedDisabled.union(OfficialRuleModules.reservedIDs)
+            .union(["app:" + PublicLibraryID.gutenberg.rawValue, "app:" + PublicLibraryID.aozora.rawValue]) : savedDisabled
         hiddenInLibrary = Set(preferences.stringArray(forKey: Self.hiddenInLibraryKey) ?? [])
         self.appVersion = appVersion
         self.language = language
@@ -88,10 +94,20 @@ final class RuleModuleLibrary: ObservableObject {
 
     func isEnabled(_ id: String) -> Bool { !disabled.contains(id) }
 
+    func isPublicLibraryEnabled(_ id: PublicLibraryID) -> Bool { isEnabled("app:" + id.rawValue) }
+
+    private func persistBuiltinDefaultsIfNeeded() {
+        guard needsBuiltinDefaultsWrite else { return }
+        preferences.set(disabled.sorted(), forKey: Self.disabledKey)
+        preferences.set(true, forKey: Self.builtinDefaultsKey)
+        needsBuiltinDefaultsWrite = false
+    }
+
     /// 停用 and its undoing: every screen that reads `modules` follows at once.
     func setEnabled(_ enabled: Bool, id: String) {
         if enabled { disabled.remove(id) } else { disabled.insert(id) }
         preferences.set(disabled.sorted(), forKey: Self.disabledKey)
+        persistBuiltinDefaultsIfNeeded()
         publish()
     }
 
@@ -127,6 +143,7 @@ final class RuleModuleLibrary: ObservableObject {
                                "modules=\(listing.modules.count) official=\(bundled.count) failures=\(listing.failures.count)",
                                since: started, thresholdMs: 0)
         guard current == generation else { return }
+        persistBuiltinDefaultsIfNeeded()
         self.bundled = bundled
         imported = listing.modules
         failures = listing.failures

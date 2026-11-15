@@ -219,6 +219,7 @@ struct BookSearchView: View {
     @StateObject private var scopeStore = SearchSourceScopeStore.shared
     @ObservedObject private var sourceStore = BookSourceStore.shared
     @ObservedObject private var availability = PublicLibraryAvailability.shared
+    @ObservedObject private var modules = RuleModuleLibrary.shared
     /// 聚合設定's 搜尋來源 (search 9d), for 青空文庫, matched as you type here.
     @ObservedObject private var aggregation = AggregationSettingsStore.shared
     // No `@Environment(\.dismiss)` here: iOS 17 replaces DismissAction over and over
@@ -336,6 +337,7 @@ struct BookSearchView: View {
                 UnifiedSearchFeed(query: showsCombinedResults ? trimmedQuery : "", shelf: shelfSearch,
                                   libraries: librarySearch, aggregator: aggregator,
                                   offersPublicLibraries: offersPublicLibraries
+                                      && modules.isPublicLibraryEnabled(.aozora)
                                       && aggregation.isShownInSearch(SourceInstanceKey(type: .aozora, id: PublicLibraryID.aozora.rawValue)),
                                   model: unifiedSearch)
             }
@@ -379,11 +381,11 @@ struct BookSearchView: View {
         .task {
             // The modules a submit asks are known only once their library has been read, and
             // 搜索 may be the first page opened.
-            await RuleModuleLibrary.shared.loadIfNeeded()
+            await modules.loadIfNeeded()
         }
-        .task(id: offersPublicLibraries) {
+        .task(id: [AnyHashable(offersPublicLibraries), AnyHashable(modules.disabled)]) {
             // 青空文庫's catalog may not have been read yet when 探索 was never opened.
-            if offersPublicLibraries, AozoraCatalogStore.shared.catalog == nil {
+            if offersPublicLibraries, modules.isPublicLibraryEnabled(.aozora), AozoraCatalogStore.shared.catalog == nil {
                 await AozoraCatalogStore.shared.load()
             }
         }

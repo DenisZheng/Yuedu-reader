@@ -383,6 +383,30 @@ struct ReadingSettingsScopeTests {
         #expect(decoded.barLayout == nil)
     }
 
+    /// The lead FB-166 was first triaged on: going to the background flips the appearance on
+    /// screen, which wears the setup again. A 全域 edit survives it.
+    @Test func aChangeOfAppearanceKeepsAnEditToGlobal() throws {
+        let settings = GlobalSettings.shared
+        let fixture = Fixture(settings)
+        let appearance = settings.appearanceOnScreen
+        defer {
+            settings.appearanceOnScreen = appearance
+            fixture.restore()
+        }
+        fixture.reset()
+
+        var scope = settings.readingSettingsScope
+        scope.defaultScope = .global
+        settings.readingSettingsScope = scope
+        settings.lineHeightMultiple = 1.75
+        settings.paragraphSpacingMultiplier = 0.9
+
+        settings.appearanceOnScreen = appearance == .dark ? .light : .dark
+        settings.appearanceOnScreen = appearance
+        #expect(settings.lineHeightMultiple == 1.75)
+        #expect(settings.paragraphSpacingMultiplier == 0.9)
+    }
+
     // MARK: - Helpers
 
     private static func ownReading(of themeID: String) -> AppearanceThemeReadingSettings? {

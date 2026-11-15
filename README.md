@@ -72,7 +72,7 @@ Storage (local-first) · Sync (iCloud / WebDAV)
 | `Tests/` | Unit tests (`Tests/iOS`), UI tests (`Tests/iOS-UI`), and their fixtures |
 | `docs/` | User guides, CoreText docs, release notes, and the layout corpora the tests read |
 | `Technotes/` | Design notes and post-mortems |
-| `functions/`, `gateway/` | Firebase Cloud Functions and the account gateway; Firestore and Storage rules sit at the root |
+| `gateway/` | Legacy upstream gateway reference, not connected to the Fork; Firebase functions/configuration and the catalog-publishing workflow have been removed |
 | `scripts/` | Simulator, test, localization, and catalog tooling |
 | `xcconfig/`, `Configuration/`, `ci_scripts/` | Build settings, the StoreKit test configuration, and the Xcode Cloud script |
 
