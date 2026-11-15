@@ -1772,6 +1772,10 @@ struct ReaderView: View {
             autoReader.onProgressChanged = nil
             pageBars.releaseContent()
             renderer.pageBarsProvider = nil
+            // 全屏播放器只是暂时覆盖阅读器；仅真正移除阅读器时释放内嵌媒体。
+            // 在 onDisappear 销毁源网页会让返回重新加载 autoplay，再次弹出播放器。
+            EPUBVideoPlaybackManager.shared.stopAll()
+            ReaderWebEmbedManager.shared.stopAll()
             NowPlayingHub.shared.holdNarrationPastReader(tts)
         }
     }
@@ -2439,8 +2443,6 @@ struct ReaderView: View {
             readerIsOnScreen = false
             applyReadingScreenAwake()
             mediaOverlayCoordinator.stop()
-            EPUBVideoPlaybackManager.shared.stopAll()
-            ReaderWebEmbedManager.shared.stopAll()
             backgroundAudioCoordinator.stop()
             setTTSFloatingOverlayVisible(false)
         }

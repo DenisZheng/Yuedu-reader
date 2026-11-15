@@ -37,7 +37,9 @@ final class FixedPageSpreadViewController: UIViewController {
     var currentZoom: Zoom? {
         // Not applied yet (the page has not shown an image): still the one to keep.
         if let restoredZoom { return restoredZoom }
-        guard FixedPageZoom.isZoomedIn(zoomView.zoomScale), laidOutSize != .zero else { return nil }
+        guard laidOutSize != .zero,
+              FixedPageZoom.isZoomedIn(zoomView.zoomScale)
+                || (zoomView.scrollsUnzoomedContent && zoomView.contentOffset != .zero) else { return nil }
         return Zoom(scale: zoomView.zoomScale, contentOffset: zoomView.contentOffset, viewportSize: laidOutSize)
     }
 
@@ -88,12 +90,14 @@ final class FixedPageSpreadViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let size = zoomView.bounds.size
-        guard size.width > 0, size.height > 0, size != laidOutSize else { return }
-        laidOutSize = size
-        zoomView.resetZoom()
-        stackView.frame = CGRect(origin: .zero, size: size)
-        zoomView.contentSize = size
-        zoomDidSettle(atScale: 1)
+        guard size.width > 0, size.height > 0 else { return }
+        if size != laidOutSize {
+            laidOutSize = size
+            zoomView.resetZoom()
+            zoomView.contentOffset = .zero
+            zoomDidSettle(atScale: 1)
+        }
+        layoutContent()
         restoreZoomIfReady()
     }
 
@@ -146,9 +150,27 @@ final class FixedPageSpreadViewController: UIViewController {
 
     private func pageDidShowImage() {
         zoomView.zoomEnabled = fixedPageReaderConfiguration.isZoomEnabled
+        layoutContent()
         restoreZoomIfReady()
         // A page that arrives while the spread is zoomed re-renders for that zoom.
         zoomDidSettle(atScale: zoomView.zoomScale)
+    }
+
+    /// 仅长图扩展跨页容器高度。普通页保持真实视口内的整页布局；加载与缓存命中共用此处。
+    private func layoutContent() {
+        guard laidOutSize.width > 0, laidOutSize.height > 0, !pageControllers.isEmpty else { return }
+        let pageViewport = CGSize(width: laidOutSize.width / CGFloat(pageControllers.count), height: laidOutSize.height)
+        let height = pageControllers.reduce(laidOutSize.height) { max($0, $1.contentHeight(in: pageViewport)) }
+        let size = CGSize(width: laidOutSize.width, height: height)
+        zoomView.scrollsUnzoomedContent = height > laidOutSize.height
+        let scale = zoomView.zoomScale
+        let scaledSize = CGSize(width: size.width * scale, height: size.height * scale)
+        if stackView.bounds.size != size {
+            stackView.bounds = CGRect(origin: .zero, size: size)
+            stackView.center = CGPoint(x: scaledSize.width / 2, y: scaledSize.height / 2)
+        }
+        if zoomView.contentSize != scaledSize { zoomView.contentSize = scaledSize }
+        for page in pageControllers where page.viewportSize != pageViewport { page.viewportSize = pageViewport }
     }
 
     /// Puts the remembered zoom back once the spread can take it: showing an image, and
@@ -156,7 +178,8 @@ final class FixedPageSpreadViewController: UIViewController {
     /// back to finds its image in the memory cache, often before its first layout.
     private func restoreZoomIfReady() {
         guard let zoom = restoredZoom,
-              zoomView.zoomEnabled,
+              pageControllers.allSatisfy({ $0.imageView.image != nil }),
+              zoomView.isScrollEnabled,
               zoom.viewportSize == laidOutSize
         else { return }
         restoredZoom = nil

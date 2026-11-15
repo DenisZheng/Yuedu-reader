@@ -3,9 +3,8 @@ import VisionKit
 
 // MARK: - Page
 //
-// One page of a spread: the whole image fitted into the page's slot, with a spinner while
-// it loads, a retry button when it fails, and Live Text. It does not zoom; the spread
-// around it does, and asks it to re-render for the zoom (`refineImage(forZoomScale:)`).
+// 单个漫画页：普通页整页适配，长图按页宽展示；加载与重试控件始终位于真实视口内。
+// 缩放与长图滚动统一由外层跨页容器提供，页面仅在缩放稳定后按需重新栅格化。
 
 final class FixedPagePageViewController: UIViewController {
 
@@ -28,8 +27,14 @@ final class FixedPagePageViewController: UIViewController {
     }
 
     let imageView = UIImageView()
+    /// 跨页容器可能高于屏幕，普通页仍按真实视口适配，而非按整条长图的高度放大。
+    var viewportSize: CGSize? {
+        didSet { if isViewLoaded { layoutImage() } }
+    }
     private let spinner = UIActivityIndicatorView(style: .medium)
     private let retryButton = UIButton(type: .system)
+    private lazy var spinnerCenterY = spinner.centerYAnchor.constraint(equalTo: view.topAnchor)
+    private lazy var retryCenterY = retryButton.centerYAnchor.constraint(equalTo: view.topAnchor)
     private(set) var loadTask: Task<Void, Never>?
     private(set) var refineTask: Task<Void, Never>?
     private var liveTextTask: Task<Void, Never>?
@@ -89,9 +94,9 @@ final class FixedPagePageViewController: UIViewController {
 
         NSLayoutConstraint.activate([
             spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            spinnerCenterY,
             retryButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            retryButton.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            retryCenterY,
         ])
 
         // A page drawn on demand is a bitmap at the display scale it was loaded for; on a
@@ -109,14 +114,29 @@ final class FixedPagePageViewController: UIViewController {
         layoutImage()
     }
 
-    /// The whole page fitted into its slot — the paged modes' `fitPage` — centred, or
-    /// against the spine in a spread. It used to fill the slot's width and cut off what fell
-    /// below: in landscape, most of a portrait page, out of reach even when zoomed.
+    /// 图片高宽比达到 3:1 才按长图处理；普通漫画页、PDF 和固定版面 EPUB 保持整页适配。
+    private var isLongImage: Bool {
+        guard !page.renderSource.isRasterizedOnDemand,
+              let image = imageView.image, image.size.width > 0 else { return false }
+        return image.size.height / image.size.width >= 3
+    }
+
+    /// 长图沿用现有跨页容器滚动，不新建嵌套缩放，也不改用户持久化的阅读模式。
+    func contentHeight(in viewport: CGSize) -> CGFloat {
+        guard isLongImage, let image = imageView.image else { return viewport.height }
+        return max(viewport.height, viewport.width * image.size.height / image.size.width)
+    }
+
     private func layoutImage() {
+        let bounds = CGRect(origin: .zero, size: viewportSize ?? view.bounds.size)
+        // 邻页的长图会撑高整个跨页容器，但加载和重试不能跟着移到屏幕外。
+        spinnerCenterY.constant = bounds.height / 2
+        retryCenterY.constant = bounds.height / 2
         guard let image = imageView.image, image.size.width > 0, image.size.height > 0 else { return }
-        let bounds = view.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
-        let scale = min(bounds.width / image.size.width, bounds.height / image.size.height)
+        let scale = isLongImage
+            ? bounds.width / image.size.width
+            : min(bounds.width / image.size.width, bounds.height / image.size.height)
         let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
         let originX: CGFloat
         switch spineSide {
@@ -124,7 +144,8 @@ final class FixedPagePageViewController: UIViewController {
         case .left: originX = 0
         case .right: originX = bounds.width - size.width
         }
-        imageView.frame = CGRect(origin: CGPoint(x: originX, y: (bounds.height - size.height) / 2), size: size)
+        let originY = isLongImage ? 0 : (bounds.height - size.height) / 2
+        imageView.frame = CGRect(origin: CGPoint(x: originX, y: originY), size: size)
     }
 
     private func load() {

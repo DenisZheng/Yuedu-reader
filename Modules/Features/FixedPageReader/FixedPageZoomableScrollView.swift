@@ -22,6 +22,11 @@ final class FixedPageZoomableScrollView: UIScrollView, UIScrollViewDelegate {
         didSet { applyZoomEnabled() }
     }
 
+    /// 1x 的长图也需要滚动；关闭缩放只禁用 pinch/double tap，不应截断长图。
+    var scrollsUnzoomedContent = false {
+        didSet { updateScrolling() }
+    }
+
     /// A pinch or double-tap zoom came to rest at this scale. Rasterized pages (PDF,
     /// fixed-layout EPUB) re-render at it so text stays sharp.
     var onZoomSettled: ((CGFloat) -> Void)?
@@ -79,8 +84,12 @@ final class FixedPageZoomableScrollView: UIScrollView, UIScrollViewDelegate {
     private func applyZoomEnabled() {
         if !zoomEnabled { resetZoom() }
         maximumZoomScale = zoomEnabled ? FixedPageZoom.maximumScale : minimumZoomScale
-        isScrollEnabled = zoomEnabled
+        updateScrolling()
         doubleTap.isEnabled = zoomEnabled
+    }
+
+    private func updateScrolling() {
+        isScrollEnabled = zoomEnabled || scrollsUnzoomedContent
     }
 
     private func replaceZoomView(_ previous: UIView?) {
