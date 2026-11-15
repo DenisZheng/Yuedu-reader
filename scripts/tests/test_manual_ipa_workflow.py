@@ -124,8 +124,9 @@ else: print(os.environ['FAKE_SDK'])
         source = (ROOT / "Modules/Features/Reader/ReaderViewportReporting.swift").read_text()
         block = re.search(r"#if compiler\(>=6\.4\)(.*?)#endif", source, re.S).group(1)
         self.assertIn("if #available(iOS 27.1", block)
-        self.assertIn("ReservedRegion", block)
+        # 检查真实API调用，不依赖Swift推断后可能消失的类型名。
         self.assertIn(".reservedRegions", block)
+        self.assertEqual(block.count(".reservedRegions("), source.count(".reservedRegions("))
 
 
 if __name__ == "__main__":
