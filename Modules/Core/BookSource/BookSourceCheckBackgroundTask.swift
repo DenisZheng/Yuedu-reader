@@ -122,17 +122,20 @@ final class BookSourceCheckBackgroundTask {
             // Start now or not at all: a request queued behind others would start after the
             // user is long back, and the background task's grace covers the gap either way.
             request.strategy = .fail
+            // 运行时检查不能在SDK26.x中隐藏不存在的回调重载；旧工具链保持原有提交路径。
+            #if compiler(>=6.4)
             if #available(iOS 27.0, *) {
                 BGTaskScheduler.shared.submitTaskRequest(request) { error in
                     guard let error else { return }
                     Task { @MainActor in self.submissionFailed(identifier, error) }
                 }
-            } else {
-                do {
-                    try BGTaskScheduler.shared.submit(request)
-                } catch {
-                    Task { @MainActor in self.submissionFailed(identifier, error) }
-                }
+                return
+            }
+            #endif
+            do {
+                try BGTaskScheduler.shared.submit(request)
+            } catch {
+                Task { @MainActor in self.submissionFailed(identifier, error) }
             }
         }
     }

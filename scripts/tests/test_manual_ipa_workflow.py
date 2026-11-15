@@ -120,6 +120,16 @@ else: print(os.environ['FAKE_SDK'])
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(output, "")
 
+    def test_background_completion_api_is_compile_guarded(self):
+        source = (ROOT / "Modules/Core/BookSource/BookSourceCheckBackgroundTask.swift").read_text()
+        protected = re.search(r"#if compiler\(>=6\.4\)(.*?)#endif", source, re.S)
+        self.assertIsNotNone(protected, "旧SDK不能只靠运行时available检查隐藏新回调重载")
+        block = protected.group(1)
+        self.assertIn("if #available(iOS 27.0", block)
+        self.assertIn(".submitTaskRequest(", block)
+        self.assertEqual(block.count(".submitTaskRequest("), source.count(".submitTaskRequest("))
+        self.assertIn("try BGTaskScheduler.shared.submit(request)", source)
+
     def test_new_viewport_api_is_compile_guarded(self):
         source = (ROOT / "Modules/Features/Reader/ReaderViewportReporting.swift").read_text()
         block = re.search(r"#if compiler\(>=6\.4\)(.*?)#endif", source, re.S).group(1)
