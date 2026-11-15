@@ -28,7 +28,7 @@
 1. 首期 RSS 闭环：导入、运行时、分类/搜索/分页、规则网页、图片/音视频、状态、管理与诊断。
 2. 规则网页按 Android 源配置执行；普通 Feed 保持安全文章路径。不能统一去掉脚本/iframe 后声称兼容。
 3. 独立 Fork、全新安装，不迁移或覆盖原版数据。按后续 Q10–Q11 决策，移除 Google/Firebase 账号和后台，移除 StoreKit/会员/Pro 限制；已有本地能力不再收费，外部AI等仍需自己的服务配置。
-4. 保留 iCloud 和 WebDAV；iCloud 使用 Fork 自己的容器/签名，不可用时不阻止本地阅读。WebDAV 对齐 Android 的分类备份/恢复机制，先保证 Fork 自身恢复；首期不做 Android 备份整包互通。临时开发身份：`Reader Fork Dev`、`dev.denis.readerfork.dev`，共享数据空间隔离；正式品牌/签名/发布另行确认。
+4. 本版按用户2026-11-15决定暂时停用 iCloud：隐藏入口、停止自动调用、不申请 CloudKit 权限，保留实现及已有数据，恢复前另验签名与无权限启动，见 [ADR-0006](docs/adr/0006-pause-icloud-for-current-release.md)。保留 WebDAV，按 Android 分类备份/恢复机制先保证 Fork 自身恢复；首期不做 Android 备份整包互通。App 显示名为 `LegadoPro`，Bundle ID 仍为 `dev.denis.readerfork.dev`，共享数据空间不变；正式签名/发布仍需独立确认。
 5. 默认 Tab：**探索｜书架｜订阅｜资源库｜设置**。搜索保留在书架/探索的明确页面入口；资源库可打开同一个订阅模块。
 6. 当前播放器无法支持的格式/DRM 明确标受限；不自行引入另一套播放器依赖。
 7. 全包导入/字段检查 + 分层代表源验收，不宣称所有源都可用。
@@ -105,7 +105,7 @@ bash scripts/xctest.sh -- -only-testing:'yuedu appTests/LegadoRSSCompatTests'
 
 独立本地 scheme 建立后，用 `YUEDU_SCHEME` 传入。使用 `scripts/xctest.sh` 与串行测试，不用新的 DerivedData 绕过错误。只跑当前阶段最小相关回归，测试构建已提供编译证据时不重复单独 build/clean；全量测试仅在影响范围确实需要时执行。
 
-- S0 先复现构建阻碍，再按 [移除 Google/收费体系 ADR](docs/adr/0004-remove-google-and-billing.md) 清理 SDK、资源和真实调用方，同时保留 iCloud/WebDAV；不伪造凭据、不借用原版后台，不把移除依赖描述成 TLS 已修复。
+- S0 先复现构建阻碍，再按 [移除 Google/收费体系 ADR](docs/adr/0004-remove-google-and-billing.md) 清理 SDK、资源和真实调用方，当时保留 iCloud/WebDAV，当前 iCloud 以 ADR-0006 暂停决定为准；不伪造凭据、不借用原版后台，不把移除依赖描述成 TLS 已修复。
 - 最低 iOS17、当前可用模拟器、iPhone/iPad和真机媒体各有验证范围。环境缺失时记录未验证，不能冒充通过。
 - 日志必须脱敏 URL query、headers、正文、异常和规则结果；不只隐藏Authorization。
 - 文档/配置修改至少检查格式/解析与链接；代码修改覆盖原始失败模式并执行相关测试。

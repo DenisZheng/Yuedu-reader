@@ -284,7 +284,9 @@ struct yuedu_appApp: App {
                             .appendingPathComponent("discover_cache")
                         try? FileManager.default.removeItem(at: dir)
                     }
-                    ICloudSyncManager.shared.bind(bookStore: bookStore)
+                    if ICloudSyncManager.isConfigured {
+                        ICloudSyncManager.shared.bind(bookStore: bookStore)
+                    }
                     SharedImportQueueDrainer.shared.bind(bookStore: bookStore)
                     WebDAVManager.shared.bind(bookStore: bookStore)
                     DiagnosticScale.publish(bookStore: bookStore, reason: "launch")
@@ -329,7 +331,7 @@ struct yuedu_appApp: App {
                     bookStore.metadataFill.setActive(scenePhase == .active)
                     // Seamless iCloud: merge with the cloud on launch, then look for new chapters.
                     launchOwnsChapterRefresh = true
-                    syncThenRefreshChapters(syncReason: GlobalSettings.shared.iCloudAutoSync ? "launch" : nil)
+                    syncThenRefreshChapters(syncReason: ICloudSyncManager.isConfigured && GlobalSettings.shared.iCloudAutoSync ? "launch" : nil)
                 }
         }
         // On the scene, not on the window's content: SwiftUI does not update a view out of the
@@ -391,7 +393,7 @@ struct yuedu_appApp: App {
                     // Returning to the foreground also checks online books for new
                     // chapters (throttled). Cold launch already kicked one off in
                     // onAppear, after its sync; the first `.active` leaves it to that.
-                    let syncReason = resumesFromBackground && GlobalSettings.shared.iCloudAutoSync
+                    let syncReason = ICloudSyncManager.isConfigured && resumesFromBackground && GlobalSettings.shared.iCloudAutoSync
                         ? "foreground" : nil
                     resumesFromBackground = false
                     let launchRefreshes = launchOwnsChapterRefresh
@@ -401,7 +403,7 @@ struct yuedu_appApp: App {
                     }
                 }
                 // Seamless iCloud: push/merge when leaving the app, in background time.
-                if newPhase == .background, GlobalSettings.shared.iCloudAutoSync {
+                if newPhase == .background, ICloudSyncManager.isConfigured, GlobalSettings.shared.iCloudAutoSync {
                     ICloudSyncManager.shared.syncOnTheWayToTheBackground()
                 }
             }
@@ -426,7 +428,7 @@ struct yuedu_appApp: App {
     /// sync. `metadataFill` changes the shelf in the foreground too and is not ordered here.
     private func syncThenRefreshChapters(syncReason: String?) {
         Task {
-            if let syncReason {
+            if ICloudSyncManager.isConfigured, let syncReason {
                 do {
                     try await ICloudSyncManager.shared.sync(reason: syncReason)
                 } catch {

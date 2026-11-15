@@ -1,3 +1,5 @@
+"CFBundleDisplayName" = "LegadoPro";
+
 /* UTTypeDescription for the app's .yuedustyle reader-style package (Info.plist
    UTExportedTypeDeclarations). Shown as the file's kind in the Files app. */
 "Yuedu Reader Style" = "읽기 스타일";

@@ -703,3 +703,13 @@ YCK205完整真实入口已修复：按钮页→3.x一键导入→原生确认�
 最终定向回归：`.git/review-final-focused-green.log`68项11 suites，`.git/review-final-defaults.log`8项3 suites；包含两浏览器统一分流、取消/有界下载、图片/布局、源修订、TLS、WebDAV、iCloud同步逻辑与默认停用/手动恢复。实际命令见两个专项记录。新完成信号测试曾超时，已保留失败证据并修正冻结输入的偏好累积；没有把跳过或0项运行当成通过。
 
 用户授权提交并Push本轮固定合并与修复分支。不会据此清空数据、发布、改正式签名或把S8人工待验改成通过。
+
+## 2026-11-15：LegadoPro名称与本版iCloud暂停
+
+用户对3.0（4）自签后的首屏前退出提供IPS，异常栈为CloudKit与SwiftUI StateObject，主程序UUID匹配公开RC1；缺少具体异常reason与签名后entitlements，不把权限推断写成精确结论。用户最新选择本版暂时取消iCloud并将显示名改为LegadoPro，见[ADR-0006](../adr/0006-pause-icloud-for-current-release.md)与[本轮准备记录](legadopro-3.0-rc2-preparation.md)。
+
+- 已停止iCloud入口、状态请求、启动／前后台自动调用，并移除CloudKit权限申请；保留代码和数据、WebDAV与章节刷新。Bundle ID／App Group／URL scheme不变，版本3.0（5）。
+- 本轮命令：`python3 -B -m unittest scripts.tests.test_fork_configuration -v`为9项OK；`python3 -B -m unittest discover -s scripts/tests -p 'test_*ipa*.py' -v`为19项OK；新暂停回归先1项失败后通过。
+- `ruby scripts/check_localizations.rb`五语InfoPlist.strings各17键、Localizable.strings各4267键、分享扩展各1键一致；actionlint v1.7.12官方归档checksum核验后运行工作流检查退出码0；文档本地链接与`git diff --check`通过。
+- 没有本地编译或新增模拟器运行。新增Swift运行时测试尚未执行；等待新的固定提交Actions归档与用户自签手机启动复验，不能宣称原闪退已经消除。
+- 不覆盖RC1 tag或资产，不清空用户数据，不修改签名账号／主数据身份。回滚本轮相关代码和配置不需数据迁移，恢复iCloud仍需权限与设备回归。S8人工验收仍未闭合。

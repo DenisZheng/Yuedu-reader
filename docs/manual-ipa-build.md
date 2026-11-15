@@ -8,10 +8,10 @@
 
 1. 工作流及配套脚本合入默认分支后，打开仓库 **Actions → Build unsigned iOS IPA → Run workflow**。
 2. 选择要构建的分支或Tag；该版本必须包含工作流及打包脚本。
-3. 成功后下载 `reader-fork-dev-unsigned-ipa-<run_id>-<attempt>` artifact，内含：
-   - `Reader-Fork-Dev-unsigned.ipa`
-   - `Reader-Fork-Dev-unsigned.ipa.sha256`
-4. 在下载目录运行 `shasum -a 256 -c Reader-Fork-Dev-unsigned.ipa.sha256` 检查完整性。
+3. 成功后下载 `legadopro-unsigned-ipa-<run_id>-<attempt>` artifact，内含：
+   - `LegadoPro-unsigned.ipa`
+   - `LegadoPro-unsigned.ipa.sha256`
+4. 在下载目录运行 `shasum -a 256 -c LegadoPro-unsigned.ipa.sha256` 检查完整性。
 
 IPA保留14天；失败时仅上传本次依赖解析/归档日志和xcresult，保留7天。不自动发布GitHub Release、不上传TestFlight，不自动触发第二次构建。
 
@@ -35,8 +35,8 @@ IPA保留14天；失败时仅上传本次依赖解析/归档日志和xcresult，
 
 - 这是**未签名IPA**，不是可直接安装的App Store/Ad Hoc包，安装前需要自行签名。
 - 不需要向本工作流提供Apple证书、provisioning profile或原版Google配置。
-- iCloud/App Group等能力仍需要自己的签名、容器和授权；生成IPA不表示这些能力已经可用。
-- 当前是临时Fork身份，不是正式发布品牌。公开分发前仍须完成签名、品牌、许可证与真机验收。
+- 本版按[ADR-0006](adr/0006-pause-icloud-for-current-release.md)暂停iCloud入口、自动同步与CloudKit权限；本地能力和WebDAV保留，不删除历史数据。App Group及分享扩展仍取决于自签授权。
+- App显示名为`LegadoPro`，技术身份仍是`dev.denis.readerfork.dev`与既有`Reader-Fork-Dev`scheme，以免改变数据空间。公开分发仍须遵守许可；当前新包需要自签后手机复验，不能只凭archive判为启动通过。
 
 ## 本地验证与打包
 

@@ -46,7 +46,19 @@ class ForkConfigurationTests(unittest.TestCase):
         for key in ("GIDClientID", "GatewayBaseURL", "FirebaseAppDelegateProxyEnabled"):
             self.assertNotIn(key, info)
 
-    def test_shared_container_and_icloud_identity_are_isolated(self):
+    def test_paused_icloud_has_no_launch_access(self):
+        manager = (ROOT / "Modules/Services/iCloud/ICloudSyncManager.swift").read_text()
+        self.assertRegex(manager, r"static var isConfigured: Bool\s*\{\s*false\s*\}")
+        app = (ROOT / "Targets/Yuedu/SharedApp/yuedu_appApp.swift").read_text()
+        self.assertIn("if ICloudSyncManager.isConfigured, let syncReason", app)
+        self.assertIn("if ICloudSyncManager.isConfigured {", app)
+        self.assertIn("ChapterUpdater.refreshAll", app)
+        self.assertIn("WebDAVManager.shared.bind", app)
+        backup = (ROOT / "Modules/Features/Settings/BackupSyncView.swift").read_text()
+        self.assertNotIn("ICloudSyncManager", backup)
+        self.assertNotIn("ICloudSyncView()", backup)
+
+    def test_shared_container_is_isolated_without_icloud_permission(self):
         expected_group = ["group.dev.denis.readerfork.dev"]
         for name in ("Resources/Yuedu-Reader.entitlements", "Widget/Yuedu-Reader-Widget.entitlements",
                      "ShareExtension/Yuedu-Reader-ShareExtension.entitlements"):
@@ -55,13 +67,23 @@ class ForkConfigurationTests(unittest.TestCase):
             self.assertEqual(values["com.apple.security.application-groups"], expected_group)
             self.assertNotIn("aps-environment", values)
             self.assertNotIn("com.apple.developer.applesignin", values)
-            if name.startswith("Resources/"):
-                self.assertEqual(values["com.apple.developer.icloud-container-identifiers"], ["iCloud.dev.denis.readerfork.dev"])
-                self.assertEqual(values["com.apple.developer.icloud-services"], ["CloudKit"])
+            self.assertNotIn("com.apple.developer.icloud-container-identifiers", values)
+            self.assertNotIn("com.apple.developer.icloud-services", values)
         for base in ("Modules", "Targets", "Widget", "ShareExtension"):
             for path in (ROOT / base).rglob("*.swift"):
                 self.assertNotIn('"group.com.zhangruilin.yuedureader"', path.read_text(), str(path))
                 self.assertNotIn('"iCloud.com.zhangruilin.yuedureader"', path.read_text(), str(path))
+
+    def test_legadopro_display_name_preserves_data_identity(self):
+        objects = project_objects((ROOT / "Yuedu-Reader.xcodeproj/project.pbxproj").read_bytes())
+        main_settings = [item["buildSettings"] for item in objects.values()
+                         if item.get("buildSettings", {}).get("PRODUCT_BUNDLE_IDENTIFIER") == "dev.denis.readerfork.dev"]
+        self.assertEqual(len(main_settings), 2)
+        self.assertTrue(all(s["INFOPLIST_KEY_CFBundleDisplayName"] == "LegadoPro" for s in main_settings))
+        for lang in ("zh-Hans", "zh-Hant", "en", "ja", "ko"):
+            file = ROOT / "Resources" / (lang + ".lproj") / "InfoPlist.strings"
+            values = json.loads(subprocess.check_output(["plutil", "-convert", "json", "-o", "-", str(file)]))
+            self.assertEqual(values["CFBundleDisplayName"], "LegadoPro")
 
     def test_bundle_ids_and_signature_do_not_reuse_upstream(self):
         objects = project_objects((ROOT / "Yuedu-Reader.xcodeproj/project.pbxproj").read_bytes())

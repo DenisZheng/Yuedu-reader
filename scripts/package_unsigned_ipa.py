@@ -10,7 +10,8 @@ import tempfile
 import zipfile
 
 BUNDLE_ID = "dev.denis.readerfork.dev"
-IPA_NAME = "Reader-Fork-Dev-unsigned.ipa"
+APP_NAME = "LegadoPro"
+IPA_NAME = "LegadoPro-unsigned.ipa"
 EXTENSIONS = {BUNDLE_ID + ".widget", BUNDLE_ID + ".shareextension"}
 
 
@@ -20,6 +21,8 @@ def validate_bundle(bundle, expected_id=None):
     bundle_id = info.get("CFBundleIdentifier")
     if expected_id is not None and bundle_id != expected_id:
         raise ValueError(f"不是预期的Fork Bundle ID：{bundle.name}")
+    if bundle_id == BUNDLE_ID and info.get("CFBundleDisplayName") != APP_NAME:
+        raise ValueError("主App显示名不是LegadoPro")
     if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
         raise ValueError(f"只接受真机iPhoneOS产物，不接受模拟器：{bundle.name}")
     executable = info.get("CFBundleExecutable", "")

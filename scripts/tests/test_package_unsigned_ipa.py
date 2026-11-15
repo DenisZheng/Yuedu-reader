@@ -30,7 +30,7 @@ class UnsignedIPAPackagingTests(unittest.TestCase):
         path.mkdir(parents=True)
         with (path / "Info.plist").open("wb") as file:
             plistlib.dump({"CFBundleIdentifier": bundle_id, "CFBundleSupportedPlatforms": [platform],
-                          "CFBundleExecutable": "Executable"}, file)
+                          "CFBundleExecutable": "Executable", "CFBundleDisplayName": PACKER.APP_NAME}, file)
         executable = path / "Executable"
         executable.write_bytes(b"synthetic packaging fixture, not a Mach-O")
         executable.chmod(0o755)
@@ -66,6 +66,11 @@ class UnsignedIPAPackagingTests(unittest.TestCase):
     def test_simulator_app_is_rejected(self):
         self.change_info(self.app, CFBundleSupportedPlatforms=["iPhoneSimulator"])
         with self.assertRaisesRegex(ValueError, "模拟器"):
+            PACKER.package(self.archive, self.output)
+
+    def test_wrong_app_display_name_is_rejected(self):
+        self.change_info(self.app, CFBundleDisplayName="Reader Fork Dev")
+        with self.assertRaisesRegex(ValueError, "显示名"):
             PACKER.package(self.archive, self.output)
 
     def test_upstream_bundle_id_is_rejected(self):

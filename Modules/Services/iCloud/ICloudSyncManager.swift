@@ -234,14 +234,10 @@ final class ICloudSyncManager: ObservableObject {
         static let updatedAt = "updatedAt"
     }
 
-    /// 无iCloud能力的签名（免费个人团队真机调试）中，构造CKContainer会直接陷阱终止进程；
-    /// 这类构建不创建容器，同步明确报不可用，本地阅读照常（ADR 0002）。
+    /// 本版按用户决定暂停iCloud，不创建云容器；自签缺少CloudKit授权不能阻止本地阅读。
+    /// 保留实现和数据，恢复功能前需重新核对签名、容器与设备验收（ADR 0006）。
     nonisolated static var isConfigured: Bool {
-        #if READER_FORK_NO_ICLOUD
         false
-        #else
-        true
-        #endif
     }
     private let container: CKContainer?
     private let database: CKDatabase?

@@ -4,17 +4,23 @@ import Testing
 
 @Suite("Fork 本地身份与 iCloud 配置")
 struct AuthAndICloudConfigurationTests {
-    @Test("保留独立 CloudKit 容器但不申请账号登录或推送权限")
-    func forkEntitlementsPreserveCloudKit() throws {
+    @Test("保留独立App Group，本版不申请iCloud、账号登录或推送权限")
+    func forkEntitlementsPreserveSharedDataWithoutCloudKit() throws {
         let entitlements = try loadMainAppEntitlements()
 
         #expect(entitlements["com.apple.developer.applesignin"] == nil)
         #expect(entitlements["aps-environment"] == nil)
         #expect(entitlements["com.apple.security.application-groups"] as? [String] == ["group.dev.denis.readerfork.dev"])
-        #expect(entitlements["com.apple.developer.icloud-services"] as? [String] == ["CloudKit"])
-        #expect(entitlements["com.apple.developer.icloud-container-identifiers"] as? [String] == [
-            "iCloud.dev.denis.readerfork.dev"
-        ])
+        #expect(entitlements["com.apple.developer.icloud-services"] == nil)
+        #expect(entitlements["com.apple.developer.icloud-container-identifiers"] == nil)
+    }
+
+    @Test("停用iCloud时可安全创建本地owner，状态明确为不可用")
+    @MainActor
+    func pausedCloudKitKeepsLocalStartupAvailable() async {
+        #expect(!ICloudSyncManager.isConfigured)
+        let status = await ICloudSyncManager.shared.refreshAccountStatus()
+        #expect(status == .restricted)
     }
 
     @Test("iCloud payload covers existing sync data files")

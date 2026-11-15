@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct BackupSyncView: View {
-    @StateObject private var iCloudManager = ICloudSyncManager.shared
     @StateObject private var webDAVManager = WebDAVManager.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -9,16 +8,6 @@ struct BackupSyncView: View {
         NavigationStack {
             Form {
                 Section {
-                    NavigationLink {
-                        ICloudSyncView()
-                    } label: {
-                        syncRow(
-                            icon: "icloud.fill",
-                            title: localized("iCloud 同步"),
-                            detail: iCloudManager.statusTitle(isAppSignedIn: true)
-                        )
-                    }
-
                     NavigationLink {
                         WebDAVSyncView()
                     } label: {
@@ -47,9 +36,6 @@ struct BackupSyncView: View {
                     }
                     .accessibilityLabel(localized("關閉"))
                 }
-            }
-            .task {
-                _ = await iCloudManager.refreshAccountStatus()
             }
         }
     }
