@@ -28,6 +28,15 @@ enum LegadoRuntimeCapabilityRegistry {
         .init(path: "Packages.java.net.URLDecoder.decode", kind: .method),
         .init(path: "Packages.android.text.TextUtils.isEmpty", kind: .method),
         .init(path: "Packages.android.text.TextUtils.equals", kind: .method),
+        // 漫画imageDecode仅准入受控的位图解码、Rect裁剪与重新编码，不开放文件或系统绘图。
+        .init(path: "Packages.android.graphics.BitmapFactory.decodeByteArray", kind: .method),
+        .init(path: "Packages.android.graphics.Bitmap.createBitmap", kind: .method),
+        .init(path: "Packages.android.graphics.Bitmap.Config.ARGB_8888", kind: .constant),
+        .init(path: "Packages.android.graphics.Bitmap.CompressFormat.PNG", kind: .constant),
+        .init(path: "Packages.android.graphics.Bitmap.CompressFormat.JPEG", kind: .constant),
+        .init(path: "Packages.android.graphics.Canvas", kind: .constructor),
+        .init(path: "Packages.android.graphics.Rect", kind: .constructor),
+        .init(path: "Packages.android.graphics.Paint", kind: .constructor),
         .init(path: "Packages.io.legado.app.help.http.StrResponse", kind: .constructor),
         .init(path: "Packages.io.legado.app.model.analyzeRule.AnalyzeRule", kind: .constructor),
         // Same objects as the global `org.jsoup` polyfill (JSCoreEngine): Rhino scripts reach

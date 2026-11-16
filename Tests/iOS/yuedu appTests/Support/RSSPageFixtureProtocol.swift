@@ -20,7 +20,9 @@ final class RSSPageFixtureProtocol: URLProtocol, @unchecked Sendable {
         var held = false
     }
 
-    private struct Fixture {
+    // 可变集合只在state锁内访问；pending中的URLProtocol实例另由lifecycle锁保护响应生命周期。
+    // 新SDK将URLProtocol的Sendable一致性标为unavailable，因此需显式声明此受锁保护快照。
+    private struct Fixture: @unchecked Sendable {
         var fallback: Response?
         var sequences: [String: [Response]] = [:]
         var offsets: [String: Int] = [:]
@@ -46,7 +48,8 @@ final class RSSPageFixtureProtocol: URLProtocol, @unchecked Sendable {
 
     static func requestTimes(host: String) -> [Date] { state.withLock { $0[host]?.requestTimes ?? [] } }
     static func release(host: String) {
-        let pending = state.withLock { fixtures in
+        // 仅从受锁保护队列取出响应；URLProtocol没有SDK认可的Sendable一致性。
+        let pending = state.withLockUnchecked { fixtures in
             let pending = fixtures[host]?.pending ?? []
             fixtures[host]?.pending = []
             return pending
@@ -69,7 +72,8 @@ final class RSSPageFixtureProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: URLError(.badURL))
             return
         }
-        let result = Self.state.withLock { fixtures -> Response? in
+        // self只登记到受锁保护队列，响应仍受lifecycle锁保护，不跨执行器调用它。
+        let result = Self.state.withLockUnchecked { fixtures -> Response? in
             guard var fixture = fixtures[host], fixture.requests.count < 128 else { return nil }
             fixture.requests.append(request)
             fixture.requestTimes.append(Date())

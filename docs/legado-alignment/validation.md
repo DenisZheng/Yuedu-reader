@@ -2,6 +2,14 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 禁漫天堂API漫画图片还原（2026-11-16）
+
+用户在上一轮单张长图回归后明确该源仍可复现。B013原始imageDecode的离线像素回放确认缺少Android BitmapFactory/Canvas，源内catch返回乱序原图；不是把整章多图合并成一页。现有共享JS运行时已补有限位图解码/Rect裁剪/编码，不改源包、默认阅读模式或网络权限。
+
+游客实源一章13图，前三张960×1342分别按14/12/4条还原，独立Pillow逐像素最大差异均0；8个请求、零拒绝，不登录、不传签名到CDN。原源固定像素从`returnedOriginal=true restoredPixels=false graphicsMissing=true`变为`false/true/false`；iPhone/iPad iOS27.2 Simulator各48项通过（47项Swift Testing+1项原源XCTest），两个最终日志均为`** TEST SUCCEEDED **`。合成回归覆盖生产Nuke/翻页的三张独立页、40图连续解码及跨Context总预算。测试SDK锁编译阻碍最小修正后，移出临时网络探测并重编译，held响应释放回归1项通过。
+
+实源同次误选后台刷新启动注册测试导致整套失败，该单源XCTest通过与整套失败分开记录；未改注册断言。临时源脚本/原图/签名诊断不进提交或默认测试。B104需登录、B135边界拒绝均未完成图片验证；用户具体章节、iOS17、真机和Release仍未验证，不宣布S8完成。完整命令、证据、范围及回滚见[漫画图片还原记录](manga-image-decode.md)。
+
 ## 书源视频退出循环与漫画长图（2026-11-16）
 
 按用户本次授权独立修复书源媒体问题，不改变 S8 的实源／发布门槛。视频修复将内嵌媒体释放从暂时覆盖的 `onDisappear` 移到真实阅读器拆除；长图高宽比 ≥ 3:1 时按宽度布局并可滚动，普通页保持整页适配，阅读模式／存储格式不变。

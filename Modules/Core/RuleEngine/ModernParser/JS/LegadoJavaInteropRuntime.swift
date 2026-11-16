@@ -14,6 +14,7 @@ enum LegadoJavaInteropRuntime {
         }
         let paths = registry.capabilities.map(\.path).sorted()
         context.setObject(paths, forKeyedSubscript: "__yueduLegadoCapabilities" as NSString)
+        context.setObject(LegadoGraphicsBridge(), forKeyedSubscript: "__yueduGraphics" as NSString)
         context.evaluateScript(script)
     }
 
@@ -653,6 +654,7 @@ enum LegadoJavaInteropRuntime {
         });
 
         \#(ioScript)
+        \#(graphicsScript)
 
         var members = {
             'java.lang': {
@@ -684,6 +686,7 @@ enum LegadoJavaInteropRuntime {
             'android.util': { Base64: AndroidBase64 },
             'android.text': { TextUtils: TextUtils },
             'android.webkit': { CookieManager: CookieManager },
+            'android.graphics': { BitmapFactory: BitmapFactory, Bitmap: Bitmap, Canvas: Canvas, Rect: Rect, Paint: Paint },
             'io.legado.app.help.http': { StrResponse: StrResponse, CookieStore: LegadoCookieStore },
             'io.legado.app.model.analyzeRule': { AnalyzeRule: AnalyzeRule },
             'javax.crypto': { Cipher: Cipher, Mac: Mac, SecretKeyFactory: SecretKeyFactory },
