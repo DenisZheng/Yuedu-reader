@@ -2,6 +2,14 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 书源网页竖屏视频返回（2026-11-16）
+
+用户确认从书源网页播放、右划或导航返回后反复弹出。上一轮只用横向MP4验证ReaderView暂时覆盖，未覆盖竖向素材和JsBridgeBrowserView真正退出；本次修复该遗漏路径，不按画面方向猜测原因。
+
+固定竖向媒体修复前实际出现旧网页`state=1 fullscreen=true`，关闭媒体/禁止恢复两断言失败；源浏览器拆除新增suspend、解绑/停止、隔离world清空旧DOM及事件，再关闭系统媒体展示和空文档。横竖均明确进入真实WebKit全屏、等待生产关闭完成后尝试晚到媒体恢复；最终旧视频节点已移除，状态none/suspended、fullscreen=false。iPhone/iPad iOS27.2 Simulator各10项通过（XCTest4+Swift Testing6），两份最终日志均`** TEST SUCCEEDED **`；同步JS和合成认证合同保留，Ruby五语4267键检查通过。iPad默认内联与异步关闭的失败记录没有当通过，完整命令/修正及范围见[源网页视频返回记录](source-browser-video-return.md)。
+
+未运行具体源、实际右划XCUITest、type4全部路径、真机/iOS17/PiP/Release；不推送或触发Actions，不改源包/登录/方向策略，不宣布S8完成。
+
 ## 禁漫天堂API漫画图片还原（2026-11-16）
 
 用户在上一轮单张长图回归后明确该源仍可复现。B013原始imageDecode的离线像素回放确认缺少Android BitmapFactory/Canvas，源内catch返回乱序原图；不是把整章多图合并成一页。现有共享JS运行时已补有限位图解码/Rect裁剪/编码，不改源包、默认阅读模式或网络权限。

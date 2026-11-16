@@ -172,6 +172,7 @@
 | 请求 | `ModernParser/URL/AnalyzeUrl.swift`、`Modules/Services/Network/LegadoRequestParser.swift` | method/body/header/encoding/redirect/Cookie |
 | 提取与桥接 | `ModernRuleEngine.swift`、`ModernParserBridge.swift`、`JS/LegadoJSBridge.swift` | 回调、返回类型、mContent、变量优先级 |
 | 图片字节还原 | `JS/LegadoGraphicsBridge.swift`、`JS/LegadoJavaInteropRuntime+Graphics.swift`、`SourceImageDecoder.swift` / `FixedPageImageDecoder.swift` | 有限Bitmap/Canvas/Rect、横条完整像素、跨Context预算；[实源与回归证据](manga-image-decode.md)，不是Android Graphics全量兼容 |
+| 源网页退出 | `Modules/Features/BookSource/JsBridgeBrowserView.swift`、`SourceBrowserPresenter.swift` | 暂时全屏覆盖与真正关闭分开；横竖媒体禁止旧页恢复/再次全屏，[实测范围](source-browser-video-return.md) |
 | 运行状态 | `ModernParser/BookSourceRuntimeStateStore.swift`、`CookieStore.swift` | 持久变量/登录状态，不能每次重建为空 |
 | 阅读/缓存 | `Modules/Services/Online/OnlineReadingPipeline.swift`、`Modules/Services/Offline/` | 有效目录与内容分离、晚到结果拒绝、媒体请求上下文 |
 

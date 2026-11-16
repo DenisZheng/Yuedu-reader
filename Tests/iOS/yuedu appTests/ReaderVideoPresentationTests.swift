@@ -8,9 +8,20 @@ import XCTest
 @MainActor
 final class ReaderVideoPresentationTests: XCTestCase {
     func testFullscreenDismissalDoesNotRecreateAutoplayPage() async throws {
+        try await verifyTemporaryCover(mediaFile: "video-still-landscape.mp4", portrait: false)
+    }
+
+    func testPortraitFullscreenDismissalDoesNotRecreateAutoplayPage() async throws {
+        try await verifyTemporaryCover(mediaFile: "video-still-portrait.mp4", portrait: true)
+    }
+
+    private func verifyTemporaryCover(mediaFile: String, portrait: Bool) async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent("ReaderVideoPresentationTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        defer {
+            do { try FileManager.default.removeItem(at: directory) }
+            catch { XCTFail("清理合成阅读器测试目录失败：\(error.localizedDescription)") }
+        }
         let store = BookStore(metadataFileURL: directory.appendingPathComponent("books_meta.json"))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previousWindow = scene.windows.first { $0.isKeyWindow }
@@ -41,7 +52,7 @@ final class ReaderVideoPresentationTests: XCTestCase {
         defer { server.stop() }
         let played = expectation(description: "源视频播放时钟推进")
         let html = """
-        <html><body><video autoplay muted playsinline controls src="\(base.appendingPathComponent("video-still-landscape.mp4").absoluteString)"
+        <html><body><video autoplay muted playsinline controls src="\(base.appendingPathComponent(mediaFile).absoluteString)"
         ontimeupdate="if(this.currentTime>0.05)window.webkit.messageHandlers.playback.postMessage(this.currentTime)"></video>
         <script>window.pageInstance='original';</script></body></html>
         """
@@ -56,7 +67,16 @@ final class ReaderVideoPresentationTests: XCTestCase {
         original.configuration.userContentController.add(navigation, name: "playback")
         defer { original.configuration.userContentController.removeScriptMessageHandler(forName: "playback") }
         await fulfillment(of: [loaded, played], timeout: 10)
-        XCTAssertTrue(server.requests.contains { $0.path == "/video-still-landscape.mp4" })
+        XCTAssertTrue(server.requests.contains { $0.path == "/" + mediaFile })
+        let dimensionsValue = try await original.evaluateJavaScript("[document.querySelector('video').videoWidth,document.querySelector('video').videoHeight]") as? [Int]
+        let dimensions = try XCTUnwrap(dimensionsValue)
+        XCTAssertEqual(dimensions.count, 2)
+        XCTAssertGreaterThan(dimensions[0], 0)
+        if portrait {
+            XCTAssertGreaterThan(dimensions[1], dimensions[0], "竖屏回归必须使用竖向素材")
+        } else {
+            XCTAssertGreaterThan(dimensions[0], dimensions[1], "横屏对照必须使用横向素材")
+        }
         let instance = try await original.evaluateJavaScript("window.pageInstance") as? String
         XCTAssertEqual(instance, "original")
 

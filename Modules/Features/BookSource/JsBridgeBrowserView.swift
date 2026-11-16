@@ -606,6 +606,20 @@ struct JsBridgeBrowserRepresentable: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        // 真正关闭源浏览器才拆除；系统视频全屏暂时覆盖不走这里。
+        // pause只暂停当前播放，晚到的源脚本仍能play/再次全屏；suspend禁止旧页面恢复媒体。
+        uiView.setAllMediaPlaybackSuspended(true, completionHandler: nil)
+        uiView.stopLoading()
+        uiView.navigationDelegate = nil
+        uiView.uiDelegate = nil
+        coordinator.progressObservation?.invalidate()
+        coordinator.progressObservation = nil
+        coordinator.urlObservation?.invalidate()
+        coordinator.urlObservation = nil
+        coordinator.bridge?.reload = nil
+        coordinator.bridge?.syncCookiesAndDismiss = nil
+        coordinator.bridge = nil
+        coordinator.webView = nil
         uiView.configuration.userContentController.removeScriptMessageHandler(
             forName: Coordinator.sourceRunMessageName,
             contentWorld: .page
@@ -615,6 +629,21 @@ struct JsBridgeBrowserRepresentable: UIViewRepresentable {
             contentWorld: .defaultClient
         )
         coordinator.clipboardBridge.remove(from: uiView.configuration.userContentController)
+        // 先在隔离world清空旧DOM及事件监听，再关闭媒体展示；否则endfullscreen回调可能重开暂停的视频。
+        // 只处理已关闭的文档，不改变仍打开页面的HTML/JS，也不清除登录Cookie或网站存储。
+        uiView.callAsyncJavaScript(
+            "document.open(); document.close(); return true;",
+            arguments: [:], in: nil, in: .defaultClient
+        ) { [uiView] result in
+            if case .failure(let error) = result {
+                let diagnostic = error as NSError
+                AppLogger.error("Closed source browser document cleanup failed", context: [
+                    "domain": diagnostic.domain, "code": String(diagnostic.code)
+                ])
+            }
+            uiView.closeAllMediaPresentations(completionHandler: nil)
+            uiView.loadHTMLString("", baseURL: nil)
+        }
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandlerWithReply {
