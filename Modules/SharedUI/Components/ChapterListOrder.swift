@@ -105,8 +105,9 @@ struct ChapterListOrderMenu: View {
             }
             .pickerStyle(.inline)
         } label: {
-            Label(localized("排序"), systemImage: "arrow.up.arrow.down")
-                .labelStyle(.iconOnly)
+            // iOS27会丢弃原生Label工具栏按钮的value；保留系统Menu，只换图标标签。
+            Image(systemName: "arrow.up.arrow.down")
+                .accessibilityHidden(true)
         }
         .accessibilityLabel(localized("排序"))
         .accessibilityValue(order.title)

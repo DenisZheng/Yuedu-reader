@@ -3,20 +3,16 @@ import UIKit
 
 // MARK: - Idle content
 
-/// What the 搜索 page shows when it has no search to show: while its field is active
-/// and empty, 最近搜索 and 最近閱讀 — Apple Books shows Recently Searched and Recently
-/// Viewed when its field is tapped — and otherwise, or with neither to list, the page's
-/// own hint.
-///
-/// A view of its own because `isSearching` is set only for the views inside
-/// `.searchable`, never for the view that applies it.
+/// 搜索框为空时显示最近搜索／最近阅读；没有记录才显示提示，不依赖焦点。
+/// iPadOS26起，空搜索框激活时会把列表触摸先当作结束搜索，旧条件让条目随之消失。
+/// 静置列表可一次点开；已激活时首触仍由系统结束搜索，保留列表供下一次点击。
+/// Fork搜索是推入页，不引入上游搜索Tab专用的根标题滚动锚点。
 struct SearchIdleContent<Hint: View>: View {
     let isQueryEmpty: Bool
     let onSearch: (String) -> Void
     let onOpenBook: (ReadingBook) -> Void
     let hint: Hint
 
-    @Environment(\.isSearching) private var isSearching
     @EnvironmentObject private var bookStore: BookStore
     @AppStorage(RecentSearchQueries.storageKey) private var recentQueries = RecentSearchQueries()
     @AppStorage(RecentReadingSelection.clearedAtStorageKey) private var readingClearedAt: Double = 0
@@ -35,7 +31,7 @@ struct SearchIdleContent<Hint: View>: View {
     }
 
     var body: some View {
-        if isSearching, isQueryEmpty {
+        if isQueryEmpty {
             let books = RecentReadingSelection.entries(
                 shelf: bookStore.books,
                 records: offShelfReads.records,

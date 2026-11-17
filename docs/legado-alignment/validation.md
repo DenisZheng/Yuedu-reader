@@ -2,6 +2,28 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 用户授权的上游首批六项修复（2026-11-17）
+
+以40065b99为起点，在`merge/upstream-small-fixes-20261117`适配66124f63、97b4f5b7、e8bc688b、68e2c544、a4df38b6、5905b06d；不整包merge，不升级依赖／版本、不恢复Pro、不引入新首页／模块JS。本次按后续授权提交已验收补丁与正式记录，不Push，main引用不变；来源、逐文件适配、命令及回滚见[首批记录](upstream-small-batch-2026-11-17.md)。保留已有媒体真正拆除／临时覆盖区分，搜索仍为Fork推入页，不加上游搜索Tab根标题锚点。
+
+原始RED：7项单元行为失败、iPad静置最近记录2项UI失败。修复后xcresult为green-unit7通过、iPad搜索3通过、iPhone回归56通过／3跳过、iPad回归58通过／3跳过、iOS26.2无障碍3通过；所有run最终`** TEST SUCCEEDED **`。跳过均为私人EPUB缺失，不计通过；另用自建图片／Unicode／装饰块及既有合成图片用例补测，5通过／0跳过。集合含重复，不相加宣称独立总数。
+
+同机固定HTML的857790字符分页由16372ms变1576ms，页数1362保持；4倍正文耗时比9.24→3.56，是本次单次模拟器证据，不外推真机。首次fixture编译错误与补图测试缺import均保留为失败记录，修正后才实际通过。最低iOS17、真机、实际VoiceOver／连续朗读、真实源及云产物／自签仍未验收；不宣布S8或发布完成。
+
+`ruby scripts/check_localizations.rb`退出0，5语言4285键、Modules／Targets2972 literal key均齐全。交付检查`python3 .artifacts/upstream-small-batch-2026-11-17/check-delivery.py`输出`SMALL_BATCH_CHECK_OK docs=7 localLinks=108 swiftFiles=12 greenRuns=6 dependencyChanges=0 stagedFiles=0`，`git diff --check`退出0；仅本地留存脚本／日志，不提交源包或其他用户资料。
+
+## 后续复审核对与发布表述修正（2026-11-17，先前只读快照）
+
+核对固定`main@40065b99`：`git ls-remote origin refs/tags/reader-fork-v3.0-rc.1 refs/heads/main`实查main为`40065b99`、rc.1为`23b7d7de`；本地`upstream/main`快照`5671a240`相对`dbd25567`为36提交，没有fetch或实际merge。历史build 5的`cb28a56e…`产物对应`5ac9b1b9`，不是当前main；新RC必须以同一目标commit／同一产物建立云归档与自签启动验收，旧开发签名成功不替代年度自签或新代码。
+
+更正历史修复记录中a0ff4497已提交／推送状态；复审表述明确活性检查不写文章／已读／进度但源脚本仍可能更新变量／Cookie／认证，不能写成“完全不写状态”。发布说明及S8清单标明rc.1的已知CloudKit启动风险、不推荐安装，保留历史tag而不强制移动／删除或自动创建Release。用户复审原稿先备份到本地`.artifacts/review-2026-11-17/`，仅按本次明确要求精准修正文义。
+
+[固定上游评估](upstream-5671a240-assessment.md)实查36提交、289文件、两侧45重叠路径；`git merge-tree --write-tree --name-only 40065b99 5671a240`退出1，20冲突路径，仅生成Git对象，无MERGE_HEAD或实际合并。建议小批稳定性修复，不把新增Pro、模块JS、新首页与YueduCoreText0.19.0作为RSS发布必需项。`bash scripts/sim.sh doctor`退出0，仅26.2／27.2 runtime、无17.x。
+
+文档检查命令`python3 .artifacts/review-2026-11-17/check-review-docs.py`实际输出`REVIEW_DOCS_CHECK_OK files=6 localLinks=100 upstreamCommits=36 conflicts=20 head=40065b99 UTF8_LF=true`；检查UTF-8／LF／代码围栏、本地链接、36提交覆盖、发布口径与未实际合并状态。本地脚本不纳入提交。
+
+本轮只有文档修正、只读Git与环境核查，不重跑／宣称Swift、IPA或设备验收；原文档中的历史执行证据保持其对应提交。验收范围、原始失败及回滚记录不改为阶段通过。
+
 ## 订阅入口、方格与源维护／活性检查（2026-11-17）
 
 按用户确认移除资源库RSS副入口，保留独立订阅Tab；新增记忆的树型／原生方格切换与平铺分类筛选、源级多选／全选当前列表／确认删除，复用唯一RSSStore。主动活性验证走动态启动页／首分类首列表／标准Feed，不要求搜索接口；合法空、网页可达、仅HTML生成、直接媒体需人工、交互、失败和取消分开，跳过cacheFirst且不写文章。停用源诊断票据与正常读取分离，正常读取仍拒绝停用源。
