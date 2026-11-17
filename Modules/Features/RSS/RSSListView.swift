@@ -14,6 +14,8 @@ enum RSSHomeActionRoute: Hashable, CaseIterable {
     case markAllRead
     case toggleHideRead
     case organize
+    case manage
+    case toggleGrid
     case exportOPML
     case exportJSON
     case settings
@@ -24,7 +26,7 @@ private enum RSSOPMLDeferredImport {
     case data(Data)
 }
 
-/// 訂閱Tab的根：自己的NavigationStack，與資源庫推入的是同一個`RSSListView`與同一個`RSSStore`。
+/// 訂閱Tab的根，复用唯一的RSSStore。
 struct RSSTabRoot: View {
     var body: some View {
         NavigationStack {
@@ -34,9 +36,20 @@ struct RSSTabRoot: View {
 }
 
 struct RSSListView: View {
-    /// 訂閱Tab根頁用大標題；從資源庫／探索推入時保持inline（design.md H1）。
+    /// 訂閱Tab根頁用大標題；其他推入入口保持inline。
     var isTabRoot = false
-    @StateObject private var store = RSSStore.shared
+    @StateObject private var store: RSSStore
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @AppStorage(RSSSourceBrowse.layoutKey) private var showsSourceGrid = false
+    @State private var selectedGroup = RSSSourceBrowse.allGroups
+    @State private var gridSources: [RSSSource] = []
+    @State private var isLoadingGrid = true
+    @State private var showManagement = false
+
+    init(isTabRoot: Bool = false, store: RSSStore = .shared) {
+        self.isTabRoot = isTabRoot
+        _store = StateObject(wrappedValue: store)
+    }
     @Bindable private var gs = GlobalSettings.shared
 
     @AppStorage("rss_main_feed_hide_read_feeds") private var hideReadFeeds = false
@@ -89,7 +102,7 @@ struct RSSListView: View {
         visibleSources(store.rootSources())
     }
 
-    /// RSS 訂閱：訂閱Tab的根（`RSSTabRoot`），或推入資源庫／探索的堆疊。
+    /// RSS訂閱Tab根頁；其他推入入口仍使用inline標題。
     var body: some View {
         Group {
             ZStack {
@@ -99,7 +112,11 @@ struct RSSListView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         smartFeedsSection
-                        localFeedsSection
+                        if showsSourceGrid {
+                            sourceGridSection
+                        } else {
+                            localFeedsSection
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 16)
@@ -201,6 +218,16 @@ struct RSSListView: View {
                                     : "line.3.horizontal.decrease.circle"
                             ),
                             DismissalSequencedAction(
+                                route: .manage,
+                                title: localized("管理訂閱源"),
+                                systemImage: "checklist"
+                            ),
+                            DismissalSequencedAction(
+                                route: .toggleGrid,
+                                title: showsSourceGrid ? localized("樹狀列表") : localized("方格顯示"),
+                                systemImage: showsSourceGrid ? "list.bullet.indent" : "square.grid.3x3"
+                            ),
+                            DismissalSequencedAction(
                                 route: .organize,
                                 title: localized("整理訂閱"),
                                 systemImage: "arrow.up.arrow.down",
@@ -276,6 +303,9 @@ struct RSSListView: View {
             .sheet(item: $sourceToEdit) { source in
                 EditRSSSourceSheet(source: source, store: store)
             }
+            .navigationDestination(isPresented: $showManagement) {
+                RSSSourceManagementView(store: store)
+            }
             .sheet(isPresented: $showOrganize) {
                 RSSOrganizeSheet(store: store)
             }
@@ -328,12 +358,50 @@ struct RSSListView: View {
             } message: { target in
                 Text(target.message)
             }
+            .task(id: RSSGridRefreshKey(revision: store.sourceBrowseRevision, group: selectedGroup, hideRead: hideReadFeeds)) {
+                isLoadingGrid = true
+                let sources = store.sources
+                let groups = store.orderedFolders()
+                let unread = hideReadFeeds ? Set(sources.filter { store.unreadCount(for: $0.id) > 0 }.map(\.id)) : nil
+                let group = selectedGroup
+                let result = await Task.detached(priority: .userInitiated) {
+                    RSSSourceBrowse.sources(sources, folders: groups, group: group, unreadIDs: unread)
+                }.value
+                guard !Task.isCancelled else { return }
+                gridSources = result
+                isLoadingGrid = false
+            }
             .task {
                 seedExpandedFoldersIfNeeded()
                 await backfillMissingSourceMetadata()
             }
             .onChange(of: store.folders) { _, _ in
                 seedExpandedFoldersIfNeeded()
+                if selectedGroup != RSSSourceBrowse.allGroups && selectedGroup != RSSSourceBrowse.ungrouped,
+                   !store.folders.contains(where: { RSSSourceBrowse.folder($0.id) == selectedGroup }) {
+                    selectedGroup = RSSSourceBrowse.allGroups
+                }
+            }
+        }
+    }
+
+    private var sourceGridSection: some View {
+        VStack(alignment: .leading, spacing: DSSpacing.md) {
+            RSSSourceGroupPicker(folders: folders, selection: $selectedGroup)
+            if isLoadingGrid {
+                ProgressView().accessibilityLabel(localized("載入中…"))
+            } else if gridSources.isEmpty {
+                ContentUnavailableView(localized(hideReadFeeds && !store.sources.isEmpty ? "沒有未讀訂閱" : "沒有訂閱源"),
+                                       systemImage: "newspaper")
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize
+                    ? DSLayout.rssSourceGridAccessibleWidth : DSLayout.rssSourceGridMinimumWidth), alignment: .top)],
+                          alignment: .leading, spacing: DSSpacing.lg) {
+                    ForEach(gridSources) { source in
+                        sourceRow(source, indent: 0, grid: true)
+                    }
+                }
+                .accessibilityIdentifier("rss.sourceGrid")
             }
         }
     }
@@ -345,7 +413,7 @@ struct RSSListView: View {
             isExpanded: $smartFeedsExpanded
         ) {
             ForEach(RSSSmartFeedKind.allCases) { smartFeed in
-                NavigationLink(destination: RSSSmartFeedView(kind: smartFeed)) {
+                NavigationLink(destination: RSSSmartFeedView(kind: smartFeed, store: store)) {
                     RSSMainFeedRow(
                         title: smartFeed.title,
                         unreadCount: store.unreadCount(for: smartFeed),
@@ -466,15 +534,20 @@ struct RSSListView: View {
         .tint(.orange)
     }
 
-    private func sourceRow(_ source: RSSSource, indent: CGFloat) -> some View {
-        NavigationLink(destination: RSSFeedView(source: source)) {
-            RSSMainFeedRow(
-                title: source.name,
-                unreadCount: store.unreadCount(for: source.id),
-                icon: .source(source),
-                indent: indent
-            )
+    private func sourceRow(_ source: RSSSource, indent: CGFloat, grid: Bool = false) -> some View {
+        NavigationLink(destination: RSSFeedView(source: source, store: store)) {
+            if grid {
+                RSSSourceGridLabel(source: source, unreadCount: store.unreadCount(for: source.id))
+            } else {
+                RSSMainFeedRow(
+                    title: source.name,
+                    unreadCount: store.unreadCount(for: source.id),
+                    icon: .source(source),
+                    indent: indent
+                )
+            }
         }
+        .accessibilityIdentifier("rss.source.\(source.id)")
         .buttonStyle(.plain)
         .tint(.primary)
         .contextMenu {
@@ -760,6 +833,9 @@ struct RSSListView: View {
                 onToggleHideRead: { hideReadFeeds.toggle() },
                 onMarkAllRead: { store.markAllRead() },
                 onOrganize: { showOrganize = true },
+                showsGrid: showsSourceGrid,
+                onToggleGrid: { showsSourceGrid.toggle() },
+                onManage: { showManagement = true },
                 onExportOPML: { showOPMLExporter = true },
                 onExportJSON: { showJSONExporter = true },
                 onSettings: { showSettings = true }
@@ -796,6 +872,10 @@ struct RSSListView: View {
             hideReadFeeds.toggle()
         case .organize:
             showOrganize = true
+        case .manage:
+            showManagement = true
+        case .toggleGrid:
+            showsSourceGrid.toggle()
         case .exportOPML:
             showOPMLExporter = true
         case .exportJSON:
@@ -1048,12 +1128,22 @@ private struct RSSHomeTopMenu: View {
     let onToggleHideRead: () -> Void
     let onMarkAllRead: () -> Void
     let onOrganize: () -> Void
+    let showsGrid: Bool
+    let onToggleGrid: () -> Void
+    let onManage: () -> Void
     let onExportOPML: () -> Void
     let onExportJSON: () -> Void
     let onSettings: () -> Void
 
     var body: some View {
         Menu {
+            Button(action: onManage) {
+                Label(localized("管理訂閱源"), systemImage: "checklist")
+            }
+            Button(action: onToggleGrid) {
+                Label(localized(showsGrid ? "樹狀列表" : "方格顯示"), systemImage: showsGrid ? "list.bullet.indent" : "square.grid.3x3")
+            }
+            Divider()
             Button {
                 onMarkAllRead()
             } label: {

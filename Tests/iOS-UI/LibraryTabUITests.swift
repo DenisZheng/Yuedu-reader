@@ -191,11 +191,7 @@ final class LibraryTabUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["來源配置管理"].waitForExistence(timeout: 5), app.debugDescription)
         back(app)
 
-        let rss = scrolledTo(app.buttons["library.rss"].firstMatch, in: app)
-        XCTAssertTrue(rss.waitForExistence(timeout: 5), app.debugDescription)
-        rss.tap()
-        XCTAssertTrue(app.navigationBars["RSS 訂閱"].waitForExistence(timeout: 5), app.debugDescription)
-        back(app)
+        XCTAssertFalse(app.buttons["library.rss"].firstMatch.exists, "RSS只从独立訂閱Tab进入")
 
         // Adding a source is 設定's (maintainer, 2026-10-27): 來源配置管理 and 遠端書庫 are its
         // rows, beside 模組. 遠端書庫 is no card here while nothing is connected.
@@ -213,19 +209,13 @@ final class LibraryTabUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["來源配置管理"].waitForExistence(timeout: 5), app.debugDescription)
     }
 
-    /// RSS 訂閱, the page's last card, as a reader who has closed 所有來源都在這裡 finds it. With
-    /// the card closed its section's lazy grid was an empty, zero-sized node in VoiceOver's tree
-    /// and in XCUITest's, so VoiceOver never reached it and a test could tap it only where it
-    /// was drawn (2026-10-26, iOS 27). `testTabsAndRows` closes the card mid-run and missed it.
+    /// 关闭资源提示后也不能恢复已移除的RSS副入口。
     @MainActor
     func testSubscriptionsWithTheNoticeClosed() throws {
         let app = try launch(["-library.tabNoticeDismissed", "YES"])
-        let rss = scrolledTo(app.buttons["library.rss"].firstMatch, in: app)
-        XCTAssertTrue(rss.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertEqual(rss.label, "RSS 訂閱")
-        attach(app, "library-subscriptions")
-        rss.tap()
-        XCTAssertTrue(app.navigationBars["RSS 訂閱"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(app.buttons["library.rss"].firstMatch.exists)
+        XCTAssertTrue(app.rootTab("訂閱").exists)
+        attach(app, "library-no-subscriptions")
     }
 
     /// Laid out as the old 探索 root was: 格狀 puts two tiles side by side, the list stacks
@@ -307,7 +297,7 @@ final class LibraryTabUITests: XCTestCase {
         // The page is drawn once 模組 is: AI 推薦 is always there.
         let modules = app.buttons["library.module.official.aiRecommendations"].firstMatch
         XCTAssertTrue(modules.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue(scrolledTo(app.buttons["library.rss"].firstMatch, in: app).exists, app.debugDescription)
+        XCTAssertFalse(app.buttons["library.rss"].firstMatch.exists, app.debugDescription)
         XCTAssertFalse(app.buttons["library.sources"].exists, app.debugDescription)
         XCTAssertFalse(app.buttons["library.sources.all"].exists, app.debugDescription)
         XCTAssertFalse(app.staticTexts["來源配置"].exists, app.debugDescription)

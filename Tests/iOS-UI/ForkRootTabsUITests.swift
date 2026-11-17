@@ -45,13 +45,11 @@ final class ForkRootTabsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["訂閱"].firstMatch.waitForExistence(timeout: 10))
         attach(app, "subscription-root")
 
-        // 資源庫的訂閱列推入同一模块（推入页inline标题）
+        // 資源庫不再提供RSS副入口，独立訂閱Tab仍存在。
         app.rootTab("資源庫").tap()
-        let row = app.buttons["library.rss"].firstMatch
-        for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(row.waitForExistence(timeout: 10))
-        row.tap()
-        XCTAssertTrue(app.navigationBars["RSS 訂閱"].firstMatch.waitForExistence(timeout: 10), "资源库推入同一RSS模块")
+        XCTAssertFalse(app.buttons["library.rss"].firstMatch.exists)
+        app.rootTab("訂閱").tap()
+        XCTAssertTrue(app.staticTexts["訂閱"].firstMatch.waitForExistence(timeout: 10))
     }
 
     @MainActor

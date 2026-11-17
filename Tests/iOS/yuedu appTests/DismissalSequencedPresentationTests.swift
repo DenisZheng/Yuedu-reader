@@ -94,6 +94,8 @@ struct DismissalSequencedPresentationTests {
                 .markAllRead,
                 .toggleHideRead,
                 .organize,
+                .manage,
+                .toggleGrid,
                 .exportOPML,
                 .exportJSON,
                 .settings,

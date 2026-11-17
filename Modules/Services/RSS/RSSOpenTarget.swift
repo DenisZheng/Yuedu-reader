@@ -74,7 +74,8 @@ enum RSSOpenTarget: Equatable, Sendable {
             try await context?.validate(source: source, owner: owner)
             let executor = SourceRequestExecutor(session: session, rate: source.concurrentRate ?? "",
                 rateKey: RSSRuntime.authenticationKey(for: source), cookieJarEnabled: source.enabledCookieJar, runtimeState: runtime.state)
-            let cacheKey = RSSWebDocumentCache.key(request, source: source)
+            // 活性检查必须真的请求入口，不能以cacheFirst旧页面冒充网络可达，也不写诊断缓存。
+            let cacheKey = RSSRuntime.isAvailabilityCheck ? nil : RSSWebDocumentCache.key(request, source: source)
             let cached = cacheKey.flatMap(RSSWebDocumentCache.lookup)
             let data: Data, response: URLResponse
             if let cached { (data, response) = (cached.0, cached.1) }

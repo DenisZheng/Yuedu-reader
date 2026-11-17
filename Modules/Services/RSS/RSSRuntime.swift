@@ -2,6 +2,8 @@ import Foundation
 
 /// RSS只适配上下文和模型；JS生命周期、AnalyzeUrl、登录检查、网络和规则回调均复用共享会话。
 struct RSSRuntime: Sendable {
+    /// 只由用户主动活性检查设置；不提供给源JS或普通刷新/导航。
+    @TaskLocal static var isAvailabilityCheck = false
     let source: RSSSource
     let session: BookSourceSession
     let state: RSSRuntimeState
@@ -18,7 +20,7 @@ struct RSSRuntime: Sendable {
         let ticket: RSSRequestTicket?
         if let owner {
             let context = try await MainActor.run { (try owner.runtimeSnapshot(for: source), owner.runtimeIdentity,
-                                                owner.requestTicket(for: source.id), owner.source(id: source.id)) }
+                                                owner.requestTicket(for: source.id, allowsDisabledDiagnostic: isAvailabilityCheck), owner.source(id: source.id)) }
             guard context.3 == source, let currentTicket = context.2 else { throw CancellationError() }
             initial = context.0; ownerID = context.1; ticket = currentTicket
         } else {

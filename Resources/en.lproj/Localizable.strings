@@ -1121,6 +1121,28 @@
 "已解鎖" = "Unlocked";
 "需要 Pro" = "Requires Pro";
 "管理訂閱" = "Manage Subscription";
+
+/* 订阅源布局、批量维护与活性验证 */
+"管理訂閱源" = "Manage Feed Sources";
+"樹狀列表" = "Tree List";
+"方格顯示" = "Grid View";
+"訂閱分類" = "Feed Group";
+"全部分類" = "All Groups";
+"沒有訂閱源" = "No Feed Sources";
+"搜尋訂閱源" = "Search Feed Sources";
+"全選只選取目前列表；跨分類選取會保留。" = "Select All applies to the current list. Selections across groups are kept.";
+"確定刪除選取的 %d 個訂閱源及其文章、收藏和閱讀狀態嗎？此操作無法復原。" = "Delete the %d selected feed sources, their articles, favorites, and reading state? This cannot be undone.";
+"驗證活性" = "Check Availability";
+"開始驗證" = "Start Check";
+"取消驗證" = "Cancel Check";
+"驗證進度" = "Check Progress";
+"驗證會請求各源的啟動頁或首個分類列表，不抓取文章正文或載入媒體子資源。源腳本可能更新登入或變數；空列表和需互動會分開標示，網頁可達不代表影片可播。" = "Checks request the start page or first group list, without fetching article bodies or loading media subresources. Source scripts may update login state or variables. Empty lists and required interaction are reported separately. A reachable page does not prove video playback.";
+"驗證結果只在本次管理頁面保留，不會自動停用或刪除源。" = "Results are kept only for this management session. Sources are never automatically disabled or deleted.";
+"首頁可用：%d 個條目" = "Start List Available: %d Items";
+"首頁解析成功，列表為空" = "Start List Parsed, No Items";
+"啟動網頁可達（未驗證媒體）" = "Start Page Reachable (Media Not Checked)";
+"啟動頁已生成（未驗證網路）" = "Start HTML Generated (Network Not Checked)";
+"媒體入口（需人工播放驗證）" = "Media Entry (Playback Requires Manual Check)";
 "跟隨系統" = "Use System Setting";
 "主題包" = "Theme Packs";
 "純色主題" = "Solid Color Themes";

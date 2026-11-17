@@ -1,6 +1,6 @@
 import XCTest
 
-/// Export the same RSS JSON document from the new tab root and the existing Library destination.
+/// 从独立订阅Tab验证导出；资源库不再提供RSS副入口。
 /// Each test checks that the system save UI is visible, not merely that the menu action was tapped.
 final class RSSExportPresentationUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
@@ -20,13 +20,10 @@ final class RSSExportPresentationUITests: XCTestCase {
         let library = app.rootTab("資源庫")
         XCTAssertTrue(library.waitForExistence(timeout: 20), app.debugDescription)
         library.tap()
-        let rss = app.buttons["library.rss"].firstMatch
-        for _ in 0..<8 where !rss.exists || !rss.isHittable { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(rss.waitForExistence(timeout: 10), app.debugDescription)
-        rss.tap()
-        XCTAssertTrue(app.navigationBars["RSS 訂閱"].waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertFalse(app.buttons["library.rss"].firstMatch.exists)
+        app.rootTab("訂閱").tap()
         presentJSONExporter(in: app)
-        assertSavePickerVisible(in: app, route: "library-destination")
+        assertSavePickerVisible(in: app, route: "subscription-after-library")
     }
 
     @MainActor

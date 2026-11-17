@@ -4,7 +4,16 @@ import SwiftUI
 
 @MainActor
 final class RSSStore: ObservableObject {
-    static let shared = RSSStore()
+    static let shared = RSSStore(storageDirectory: defaultStorageDirectory)
+    private static var defaultStorageDirectory: URL {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-rss-store-dir"), arguments.indices.contains(index + 1) {
+            return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
+        }
+        #endif
+        return FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
+    }
 
     @Published var sources: [RSSSource] = [] { didSet {
         configurationRevision &+= 1
@@ -63,6 +72,7 @@ final class RSSStore: ObservableObject {
     }
     @Published private var cachedArticlesBySource: [String: [RSSArticleRecord]] = [:] { didSet { contentRevision &+= 1 } }
     @Published private var articleStatuses: [String: RSSArticleStatus] = [:] { didSet { contentRevision &+= 1 } }
+    var sourceBrowseRevision: UInt64 { configurationRevision &+ contentRevision }
     private var contentRevision: UInt64 = 0
     // 仅owner派生索引：避免状态动作逐次扫描全库；不持有另一份内容/状态。
     private var articleLocations: [String: (sourceID: String, index: Int)] = [:]
@@ -610,14 +620,15 @@ final class RSSStore: ObservableObject {
         sources.first { $0.id == sourceID }
     }
 
-    func requestTicket(for sourceID: String) -> RSSRequestTicket? {
+    func requestTicket(for sourceID: String, allowsDisabledDiagnostic: Bool = false) -> RSSRequestTicket? {
         guard restoreTransaction == nil, source(id: sourceID) != nil else { return nil }
         return .init(sourceID: sourceID, configurationRevision: runtimeRevision(for: sourceID),
-                     authenticationRevision: authenticationRevisions[sourceID, default: 0])
+                     authenticationRevision: authenticationRevisions[sourceID, default: 0], allowsDisabledDiagnostic: allowsDisabledDiagnostic)
     }
 
     func accepts(_ ticket: RSSRequestTicket) -> Bool {
-        requestTicket(for: ticket.sourceID) == ticket && source(id: ticket.sourceID)?.enabled == true
+        guard let source = source(id: ticket.sourceID), source.enabled || ticket.allowsDisabledDiagnostic else { return false }
+        return requestTicket(for: ticket.sourceID, allowsDisabledDiagnostic: ticket.allowsDisabledDiagnostic) == ticket
     }
 
     func authenticationChanged(for sourceID: String) {

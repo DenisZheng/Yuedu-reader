@@ -475,6 +475,9 @@ enum DSSpacing {
 enum DSLayout {
     /// RSS列表的方形缩略图与大图比例；网格方形、瀑布流按实际图片尺寸显示。
     static let rssThumbnailSide: CGFloat = 60
+    /// 订阅源图标网格最小宽度；大字模式扩列宽，列数由可用容器宽度决定。
+    static let rssSourceGridMinimumWidth: CGFloat = 92
+    static let rssSourceGridAccessibleWidth: CGFloat = 180
     static let rssLargeImageAspectRatio: CGFloat = 16.0 / 9.0
     /// Smallest comfortable hit target for any control (HIG default). Reach for
     /// it when a control's own content is shorter than a finger — a bare menu

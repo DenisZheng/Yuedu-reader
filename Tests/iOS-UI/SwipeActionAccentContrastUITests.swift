@@ -42,16 +42,10 @@ final class SwipeActionAccentContrastUITests: XCTestCase {
         for accent in Self.accents {
             for appearance in Self.appearances {
                 let app = try launch(accent: accent, appearance: appearance, extra: ["-seed-rss-articles"])
-                let library = app.tabBars.buttons["資源庫"].firstMatch
-                XCTAssertTrue(library.waitForExistence(timeout: 30), app.debugDescription)
-                library.tap()
-                // 訂閱 is the last section. Its RSS 訂閱 tile is drawn but reads as a 0×0 element with
-                // no identifier here (theme and seeded feed on), so it is tapped where it is drawn.
-                let header = app.staticTexts["訂閱"].firstMatch
-                for _ in 0..<6 { app.swipeUp(velocity: .slow) }
-                XCTAssertTrue(header.waitForExistence(timeout: 10), app.debugDescription)
-                header.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 1)).withOffset(CGVector(dx: 60, dy: 50)).tap()
-                XCTAssertTrue(app.navigationBars["RSS 訂閱"].waitForExistence(timeout: 10), app.debugDescription)
+                let subscription = app.rootTab("訂閱")
+                XCTAssertTrue(subscription.waitForExistence(timeout: 30), app.debugDescription)
+                subscription.tap()
+                XCTAssertTrue(app.staticTexts["訂閱"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
 
                 // RSSListView:504's leading 標記全部已讀 is not measured: the page is a ScrollView, not a
                 // List, so its `.swipeActions` never open (its context menu carries the same action).

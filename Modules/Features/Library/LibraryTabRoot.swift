@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 資源庫, a tab since Phase 5's 5h (decisions 30 and 31): where every source lives, grouped by
 /// kind. 古騰堡 and 青空文庫 open what they offer, a remote library its catalog, and the
-/// source configurations and the RSS feeds are managed here. Adding a 來源配置, a module or a
+/// source configurations are managed here; RSS has its own 訂閱 tab. Adding a 來源配置, a module or a
 /// remote library is 設定's (maintainer, 2026-10-27: 「把添加資源的入口都放在設置頁」): this page
 /// lists what is there. 探索 stays the cover wall across them all.
 ///
@@ -19,7 +19,6 @@ struct LibraryTabRoot: View {
     @ObservedObject private var connections = RemoteLibraryConnectionStore.shared
     @ObservedObject private var sourceStore = BookSourceStore.shared
     @ObservedObject private var aozora = AozoraCatalogStore.shared
-    @ObservedObject private var rss = RSSStore.shared
     @ObservedObject private var modules = RuleModuleLibrary.shared
     @AppStorage(ExploreSettings.showsGridKey) private var showsGrid = true
     @AppStorage(ExploreSettings.gridColumnCountKey) private var gridColumnCount = ExploreGridDensity.default.rawValue
@@ -72,7 +71,6 @@ struct LibraryTabRoot: View {
                         }
                         remoteLibrariesSection
                         sourcesSection
-                        subscriptionsSection
                     } else if !matchingSources.isEmpty {
                         LibrarySection(localized("來源配置")) { layout in
                             ForEach(matchingSources) { source in
@@ -266,27 +264,6 @@ struct LibraryTabRoot: View {
                     .accessibilityIdentifier("library.group.\(group.name)")
                 }
             }
-        }
-    }
-
-    private var subscriptionsSection: some View {
-        // Eager, not lazy, as 匯入的模組 (`RuleModuleSection`): with 所有來源都在這裡 closed, this
-        // section's lazy grid stayed in the accessibility tree as an empty, zero-sized node once
-        // scrolled to, so VoiceOver never reached RSS 訂閱 (iOS 27.0 iPhone 18 Pro Max,
-        // 2026-10-26; not seen on iOS 26.5 iPhone 17 Pro). One card: laziness bought nothing.
-        // Delete `isLazy: false` once `testSubscriptionsWithTheNoticeClosed` passes without it.
-        LibrarySection(localized("訂閱"), isLazy: false) { layout in
-            let unread = rss.totalUnreadCount()
-            NavigationLink(value: ExploreNavigationRoute.subscriptions) {
-                // RSS's unread count, which its tab carried (maintainer's choice, 2026-10-13).
-                ExploreEntryLabel(title: localized("RSS 訂閱"), artwork: .symbol("newspaper.fill"), layout: layout,
-                                  subtitle: rss.sources.isEmpty ? nil : String(format: localized("%d 個訂閱源"), rss.sources.count),
-                                  corner: unread > 0 ? .count(unread) : nil)
-            }
-            .buttonStyle(ExploreTileButtonStyle())
-            .accessibilityLabel(localized("RSS 訂閱"))
-            .accessibilityValue(unread > 0 ? String(format: localized("%d 未讀"), unread) : "")
-            .accessibilityIdentifier("library.rss")
         }
     }
 

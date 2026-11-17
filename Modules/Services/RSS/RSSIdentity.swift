@@ -37,6 +37,8 @@ struct RSSRequestTicket: Equatable, Sendable {
     var sourceID: String
     var configurationRevision: UInt64
     var authenticationRevision: UInt64
+    /// 仅显式诊断允许检查停用源，不改变其enabled或普通读取合同。
+    var allowsDisabledDiagnostic = false
 }
 
 struct RSSMediaProgress: Codable, Equatable, Sendable {

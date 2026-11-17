@@ -34,7 +34,7 @@ final class RSSHomeSwipeActionsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES",
                                "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",
-                               "-yd_source_disclaimer_accepted", "YES", "-seed-rss-articles"]
+                               "-yd_source_disclaimer_accepted", "YES", "-seed-rss-articles", "-rss_source_home_grid", "NO"]
         app.launch()
         openRSSHome(app)
 
@@ -47,7 +47,7 @@ final class RSSHomeSwipeActionsUITests: XCTestCase {
         let article = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "首頁訂閱測試文章一")).firstMatch
         XCTAssertTrue(article.waitForExistence(timeout: 10), app.debugDescription)
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.navigationBars["RSS 訂閱"].waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["訂閱"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
 
         // Its trailing actions: 編輯訂閱 presents its sheet, 刪除 asks first.
         reveal(feed, .trailing)
@@ -92,25 +92,13 @@ final class RSSHomeSwipeActionsUITests: XCTestCase {
 
     // MARK: - Route
 
-    /// 資源庫 › 訂閱 › RSS 訂閱. The RSS 訂閱 tile reads as a 0×0 element with no identifier
-    /// (`SwipeActionAccentContrastUITests`), so it is tapped where it is drawn.
+    /// 从独立订阅Tab进入树型模式，不再借资源库坐标入口。
     @MainActor
     private func openRSSHome(_ app: XCUIApplication) {
-        let library = app.rootTab("資源庫")
-        XCTAssertTrue(library.waitForExistence(timeout: 30), app.debugDescription)
-        library.tap()
-        let header = app.staticTexts["訂閱"].firstMatch
-        // UI state restoration may reopen a pushed module page from an earlier test; tapping an
-        // already-selected tab does not necessarily pop it. Return through native Back first.
-        for _ in 0..<8 where !app.navigationBars["RSS 訂閱"].exists {
-            let back = app.navigationBars.buttons.element(boundBy: 0)
-            guard back.exists else { break }
-            back.tap()
-        }
-        XCTAssertTrue(header.waitForExistence(timeout: 10), app.debugDescription)
-        for _ in 0..<6 where !header.isHittable { app.swipeUp(velocity: .slow) }
-        header.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 1)).withOffset(CGVector(dx: 60, dy: 50)).tap()
-        XCTAssertTrue(app.navigationBars["RSS 訂閱"].waitForExistence(timeout: 10), app.debugDescription)
+        let tab = app.rootTab("訂閱")
+        XCTAssertTrue(tab.waitForExistence(timeout: 30), app.debugDescription)
+        tab.tap()
+        XCTAssertTrue(app.staticTexts["訂閱"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
     }
 
     @MainActor
@@ -121,7 +109,7 @@ final class RSSHomeSwipeActionsUITests: XCTestCase {
     /// ＋ › 新增資料夾, named in ASCII: typing CJK through XCUITest submits the field.
     @MainActor
     private func addFolder(_ app: XCUIApplication) {
-        app.navigationBars["RSS 訂閱"].buttons["新增或匯入"].tap()
+        app.navigationBars.buttons["新增或匯入"].firstMatch.tap()
         let item = app.buttons["新增資料夾"].firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), app.debugDescription)
         item.tap()
