@@ -38,7 +38,7 @@ enum RSSArticleContentService {
                                  isPartial: result.isPartial, variables: result.variables)
             return !result.isPartial
         }
-        let extracted = try await RSSArticleContentLoader.loadFullText(for: article)
+        let extracted = try await RSSArticleContentLoader.loadFullText(for: article, source: source, owner: store, session: session)
         try Task.checkCancellation()
         guard store.accepts(ticket), store.article(id: article.id) != nil else { throw CancellationError() }
         store.updateFullText(articleId: article.id, text: extracted.text, html: extracted.html)

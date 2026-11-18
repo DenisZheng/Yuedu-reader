@@ -172,7 +172,7 @@ enum RSSOpenTarget: Equatable, Sendable {
     }
 
     static func originalArticle(_ article: RSSArticleRecord, source: RSSSource, owner: RSSStore? = nil,
-                                session: URLSession = LegadoJSBridge.requestSession) async throws -> Self {
+                                session: URLSession = LegadoJSBridge.requestSession, interpretsRuleURL: Bool = true) async throws -> Self {
         if case .system(let url) = RSSLinkRoute.route(article.link, relativeTo: source.articleLinkBaseURL) {
             return .external(url)
         }
@@ -186,7 +186,14 @@ enum RSSOpenTarget: Equatable, Sendable {
                 object.title = article.title
                 return try bridge.withRuleContext(content: "", baseURL: source.sourceKey, scope: data,
                                                    bindings: ["rssArticle": object], stage: "rss.content") { _ in
-                    let request = try bridge.prepareRuleWebRequest(LegadoRSSScraper.normalizedRequestURL(article.link), scope: data)
+                    let request: SourcePreparedWebRequest
+                    if interpretsRuleURL {
+                        request = try bridge.prepareRuleWebRequest(LegadoRSSScraper.normalizedRequestURL(article.link), scope: data)
+                    } else {
+                        // 普通Feed链接是外部数据，不得把模板或URL options升级为源脚本。
+                        let url = try RSSWebActionRouter.pageURL(article.link, base: source.articleLinkBaseURL)
+                        request = try bridge.prepareNativeWebRequest(URLRequest(url: url), scope: data)
+                    }
                     return .request(request.request, context: .init(request, runtime: runtime, article: .init(title: article.title, link: article.link,
                                                                                          category: article.categoryName ?? "", id: article.id)))
                 }

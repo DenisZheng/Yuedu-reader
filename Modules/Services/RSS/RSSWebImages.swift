@@ -1,4 +1,5 @@
 import Foundation
+import SwiftSoup
 import WebKit
 
 /// 图片专用的有界scheme，不接管http(s)，不接收任意method/body/headers，也不返回网页或脚本。
@@ -51,9 +52,17 @@ import WebKit
             || (context?.headers ?? [:]).contains { !SourceRequestHeaderScope.publicHeaderNames.contains($0.key.lowercased()) && $0.key.lowercased() != "cookie" }
     }
     func rewrite(_ html: String) async throws -> String {
-        guard needsPipeline else { return html }
-        let prefix = prefix, base = base, id = generation
-        let output = try await SourceScriptThread.run { try RSSImageMarkup.rewrite(html, base: base, prefix: prefix) }
+        let normalizeLazy = source?.enableJs == false
+        guard needsPipeline || normalizeLazy else { return html }
+        let prefix = prefix, base = base, id = generation, pipeline = needsPipeline
+        let output = try await SourceScriptThread.run {
+            if pipeline { return try RSSImageMarkup.rewrite(html, base: base, prefix: prefix, normalizeLazy: normalizeLazy) }
+            guard html.utf8.count <= 8 * 1_024 * 1_024 else { throw RSSWebFailure.resourceUnavailable }
+            let document = try SwiftSoup.parse(html)
+            document.outputSettings().prettyPrint(pretty: false)
+            try RSSImageMarkup.normalizeLazySources(in: document)
+            return RSSImageMarkup.Document(html: try document.outerHtml(), images: [:])
+        }
         try Task.checkCancellation()
         guard id == generation, state?.isCurrent == true else { throw CancellationError() }
         images = output.images

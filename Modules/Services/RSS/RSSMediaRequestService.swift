@@ -1,5 +1,18 @@
 import Foundation
 
+/// 确定受限与暂时网络失败分开，避免对不支持的协议／DRM反复求值或重抓。
+enum RSSMediaRestriction: Error, LocalizedError, Sendable {
+    case dash, protectedHLS, playlistFeature, resourceTooLarge
+    var errorDescription: String? {
+        switch self {
+        case .dash: localized("這一集是 DASH 串流，iOS 無法播放")
+        case .protectedHLS: localized("此 HLS 使用 SAMPLE-AES 或 DRM，当前播放器不支援")
+        case .playlistFeature: localized("此 HLS 清單包含当前播放器不支援的功能")
+        case .resourceTooLarge: localized("媒體回應超出大小上限，請使用支援 Range 的來源")
+        }
+    }
+}
+
 /// RSS音视频复用共享AnalyzeUrl与SourceRequestExecutor；AVPlayer只访问当前会话的有界资源端点，不持有源凭据。
 enum RSSMediaRequestService {
     struct Prepared: Sendable {
@@ -49,6 +62,7 @@ enum RSSMediaRequestService {
               (prepared.request.httpMethod ?? "GET").uppercased() == "GET", prepared.request.httpBody == nil else {
             throw RSSWebFailure.resourceUnavailable
         }
+        if url.pathExtension.lowercased() == "mpd" { throw RSSMediaRestriction.dash }
         let resources = try RSSMediaResourceSession(prepared)
         do { return (try await resources.start(), resources) }
         catch { resources.stop(); throw error }

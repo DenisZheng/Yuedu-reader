@@ -362,6 +362,10 @@ final class VideoPlaybackController {
             resume()
             activateNowPlaying()
         case .failed:
+            if case .rss = source, let message = mediaResources?.restrictionMessage {
+                phase = .failed(message)
+                return
+            }
             // A script's link has nothing to resolve it again from.
             if case .rss = source, rssRefresh != nil, refetchedChapter != chapterIndex {
                 refetchedChapter = chapterIndex

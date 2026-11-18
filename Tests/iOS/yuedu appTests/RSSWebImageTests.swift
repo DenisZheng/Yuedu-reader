@@ -19,6 +19,27 @@ import Testing
             #expect(server.requests.first?.headers["x-fixture"] == "private-image-fixture")
         }
     }
+    @Test("禁止页面JS时data-src与data-original仍加载受保护图片")
+    func staticLazyImageAttributes() async throws {
+        try await withPage(js: false, html: "<img id='photo' data-src='/protected'><img id='original' data-original='/protected'>") { web, state, server in
+            let values = try await web.evaluateJavaScript("['photo','original'].map(id=>document.getElementById(id).naturalWidth)") as? [Int]
+            #expect(values == [4,4])
+            #expect(state.error == nil)
+            #expect(!server.requests.isEmpty)
+            #expect(server.requests.allSatisfy { $0.headers["x-fixture"] == "private-image-fixture" })
+        }
+    }
+
+    @Test("安全文章清洗先规范化懒加载地址，危险协议仍删除")
+    func sanitizedLazyImageAttributes() async throws {
+        let result = await SourceScriptThread.run {
+            RSSArticleHTMLSanitizer.sanitizedHTML("<p>图片</p><img data-src='/safe.png'><img data-original='javascript:alert(1)'>",
+                baseURL: URL(string: "https://lazy-fixture.invalid/article"))
+        }
+        #expect(result.contains("https://lazy-fixture.invalid/safe.png"))
+        #expect(!result.contains("javascript:"))
+    }
+
     @Test("懒加载src及动态innerHTML/srcset都使用同一资源管道；逻辑URL不变")
     func dynamicImages() async throws {
         try await withPage(js: true, html: "<div id='host'></div>", inject: """

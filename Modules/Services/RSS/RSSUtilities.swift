@@ -546,6 +546,14 @@ enum RSSArticleHTMLSanitizer {
 
         do {
             let denoised = removeNoise(from: trimmed, baseURL: baseURL)
+            let document = try SwiftSoup.parseBodyFragment(denoised, baseURL?.absoluteString ?? "")
+            try RSSImageMarkup.normalizeLazySources(in: document)
+            // 全文在重定向后可能跨origin；落盘前按最终文档地址固定相对资源／链接。
+            for element in try document.select("a[href],img[src],blockquote[cite]") {
+                let attribute = element.tagName() == "a" ? "href" : element.tagName() == "img" ? "src" : "cite"
+                let absolute = try element.absUrl(attribute)
+                if !absolute.isEmpty { try element.attr(attribute, absolute) }
+            }
             let whitelist = try Whitelist.none()
                 .addTags(
                     "article", "section", "div", "footer",
@@ -559,7 +567,8 @@ enum RSSArticleHTMLSanitizer {
                 .addProtocols("a", "href", "http", "https", "mailto", "tel")
                 .addProtocols("img", "src", "http", "https")
                 .addProtocols("blockquote", "cite", "http", "https")
-            let cleaned = try SwiftSoup.clean(denoised, baseURL?.absoluteString ?? "", whitelist) ?? ""
+            let normalized = try document.body()?.html() ?? denoised
+            let cleaned = try SwiftSoup.clean(normalized, baseURL?.absoluteString ?? "", whitelist) ?? ""
             return removeAdMarkers(fromHTML: cleaned)
                 .replacingOccurrences(of: #"(?i)<p>\s*</p>"#, with: "", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1205,23 +1214,38 @@ enum RSSArticleHTMLRenderer {
 }
 
 enum RSSArticleContentLoader {
-    static func loadFullText(for article: RSSArticleRecord) async throws -> RSSExtractedArticle {
-        guard let url = URL(string: article.link)?.upgradedToHTTPS() else {
-            throw URLError(.badURL)
-        }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 25
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        RSSRequestFactory.applyHeaders(to: &request)
-
+    static func loadFullText(for article: RSSArticleRecord, source: RSSSource? = nil, owner: RSSStore? = nil,
+                             session: URLSession = LegadoJSBridge.requestSession) async throws -> RSSExtractedArticle {
         do {
-            let (data, response) = try await URLSession.trusting.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                throw RSSArticleContentLoaderError.httpStatus(http.statusCode)
+            let data: Data
+            let baseURL: URL
+            if let source {
+                let target = try await RSSOpenTarget.originalArticle(article, source: source, owner: owner,
+                    session: session, interpretsRuleURL: false)
+                guard case .request(let request, let context) = target else { throw URLError(.unsupportedURL) }
+                let document = try await RSSOpenTarget.loadDocument(request, context: context, source: source,
+                    owner: owner, session: session)
+                data = document.data
+                baseURL = document.url
+            } else {
+                guard let url = URL(string: article.link)?.upgradedToHTTPS() else { throw URLError(.badURL) }
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 25
+                request.cachePolicy = .reloadIgnoringLocalCacheData
+                RSSRequestFactory.applyHeaders(to: &request)
+                let executor = SourceRequestExecutor(session: session, rate: "", rateKey: article.sourceId, cookieJarEnabled: nil)
+                let (bytes, response) = try await executor.data(for: request)
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    throw RSSArticleContentLoaderError.httpStatus(http.statusCode)
+                }
+                data = bytes
+                baseURL = response.url ?? url
             }
-
-            let extracted = RSSArticleExtractor.extract(from: data, baseURL: url)
+            let extracted = await SourceScriptThread.run {
+                SourcePerfTrace.span("rss.fulltext.extract", "main=\(Thread.isMainThread) bytes=\(data.count)") {
+                    RSSArticleExtractor.extract(from: data, baseURL: baseURL)
+                }
+            }
             let text = extracted.text.trimmingCharacters(in: .whitespacesAndNewlines)
             let html = extracted.html.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty || !html.isEmpty else {
@@ -1230,6 +1254,8 @@ enum RSSArticleContentLoader {
             return extracted
         } catch let error as RSSArticleContentLoaderError {
             throw error
+        } catch ScraperError.httpStatus(let status) {
+            throw RSSArticleContentLoaderError.httpStatus(status)
         } catch {
             if isATSBlocked(error) {
                 throw RSSArticleContentLoaderError.atsBlocked

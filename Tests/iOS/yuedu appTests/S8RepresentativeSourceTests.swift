@@ -234,6 +234,12 @@ final class S8RepresentativeSourceTests: XCTestCase {
                              && source.coverDecodeJs?.isEmpty != false && source.shouldOverrideUrlLoading?.isEmpty != false
                              && source.ruleArticles?.isEmpty == false && source.ruleImage?.isEmpty == false,
                              "R217候选必须保持已审查的公开规则列表与图片配置")
+        // 用户要求继续维护后独立预审的配置修订，不修改固定原包或以站点fallback污染共享解析器。
+        try requirePreflight(source.ruleArticles == ".item" && source.ruleTitle == "tag.a.2@text"
+                             && source.ruleLink == "tag.a.2@href" && source.ruleImage == "tag.img@data-original",
+                             "R217原规则已变化，停止配置修订")
+        let originalSource = source
+        source = S8R217ReviewedRevision.applying(to: source)
         for rule in [source.sortUrl, source.ruleArticles, source.ruleTitle, source.ruleLink,
                      source.ruleDescription, source.ruleImage, source.ruleNextPage].compactMap({ $0 }) {
             let lowercased = rule.lowercased()
@@ -255,7 +261,11 @@ final class S8RepresentativeSourceTests: XCTestCase {
 
         let root = URL.temporaryDirectory.appendingPathComponent("S8RSSCrossOriginImageCandidate-" + UUID().uuidString)
         let store = RSSStore(storageDirectory: root)
-        store.addSource(source)
+        store.addSource(originalSource)
+        let originalTicket = try XCTUnwrap(store.requestTicket(for: source.id))
+        store.updateSource(source)
+        XCTAssertFalse(store.accepts(originalTicket), "规则修订必须失效旧请求，不能覆盖新配置")
+        XCTAssertEqual(store.source(id: source.id)?.id, originalSource.id)
         try await store.flushPersistence()
         let (_, session, meter) = try makeFetcher(urls: [entry.url], maximumRequests: 2,
                                                   expectedOrigin: Self.origin(of: entry.url))
@@ -301,19 +311,25 @@ final class S8RepresentativeSourceTests: XCTestCase {
                 return (inspectedBytes, imageItems, uniqueImages.count, hostHashes.sorted(), queryTargets,
                         fragments, invalidTargets, credentials, extensions.sorted())
             }
-            try requirePreflight(audit.0 == 0 && audit.1 == 18 && audit.2 == 17
+            try requirePreflight(audit.0 == 0 && audit.1 == 18 && audit.2 == 18
                                  && audit.3 == ["0336c9b73661988775e65e74fb5b8a891afe86e13bbf4b226c25b51e440860b1"]
                                  && audit.4 == 0 && audit.5 == 0 && audit.6 == 0 && audit.7 == 0
-                                 && audit.8 == ["png", "webp"],
+                                 && audit.8 == ["avif", "png", "webp"],
                                  "R217列表图片形状变化，停止资源请求并重新预审")
-            guard let article = articles.first(where: { $0.imageURL?.isEmpty == false }),
-                  let raw = article.imageURL else { throw PreflightFailure.rejected }
+            guard let article = articles.first(where: { entry in
+                guard let raw = entry.imageURL else { return false }
+                return SHA256.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
+                    == S8R217ReviewedRevision.imageURLHash
+            }), let raw = article.imageURL else {
+                XCTFail("已预审图片不在当前列表中；保持未准入，不请求替代图片")
+                throw PreflightFailure.rejected
+            }
             try await validateFlowURL(raw, source: source, sameOrigin: false)
             let imageURL = try XCTUnwrap(URL(string: raw))
             let imageURLHash = SHA256.hash(data: Data(imageURL.absoluteString.utf8))
                 .map { String(format: "%02x", $0) }.joined()
             try requirePreflight(Self.hostDigest(imageURL) == "0336c9b73661988775e65e74fb5b8a891afe86e13bbf4b226c25b51e440860b1"
-                                 && imageURLHash == "a8dfb32af7f036c216fc9d3222840cf2ee9a078675b6ff5e7c98f35ac02c5aef"
+                                 && imageURLHash == S8R217ReviewedRevision.imageURLHash
                                  && imageURL.scheme?.lowercased() == "https" && imageURL.user == nil
                                  && imageURL.password == nil && imageURL.query == nil && imageURL.fragment == nil
                                  && imageURL.pathExtension.lowercased() == "webp",
@@ -344,6 +360,8 @@ final class S8RepresentativeSourceTests: XCTestCase {
             let recovered = try XCTUnwrap(reloaded.article(id: article.id))
             XCTAssertTrue(recovered.isRead && recovered.isFavorite)
             XCTAssertEqual(recovered.imageURL, article.imageURL)
+            XCTAssertEqual(reloaded.source(id: source.id)?.ruleArticles, source.ruleArticles)
+            XCTAssertEqual(reloaded.source(id: source.id)?.ruleImage, source.ruleImage)
             let request = meter.snapshot()
             XCTAssertEqual(request.transactions, 2)
             XCTAssertEqual(request.statusCodes, [200, 200])
@@ -352,7 +370,7 @@ final class S8RepresentativeSourceTests: XCTestCase {
             XCTAssertEqual(request.redirectsBlocked, 0)
             XCTAssertEqual(request.transactionsOutsideExpectedOrigin, 1)
             XCTAssertFalse(browser.canLoadMore, "只读一页和一张已预审图片")
-            print("S8_REAL_IMAGE ordinal=217 pages=1 requests=\(request.transactions) status=200,200 parsedItems=\(articles.count) imageMime=\(image.mime) bytes=\(image.data.count) decodedWidth=\(Int(displayed.size.width)) decodedHeight=\(Int(displayed.size.height)) outsideOriginRequests=\(request.transactionsOutsideExpectedOrigin) cookies=disabled credentials=none redirects=blocked savedReadFavorite=imageURL-reloaded imageRequests=1")
+            print("S8_REAL_IMAGE ordinal=217 revision=reviewed-20261118 originalRulesUsable=false pages=1 requests=\(request.transactions) status=200,200 parsedItems=\(articles.count) imageMime=\(image.mime) bytes=\(image.data.count) decodedWidth=\(Int(displayed.size.width)) decodedHeight=\(Int(displayed.size.height)) outsideOriginRequests=\(request.transactionsOutsideExpectedOrigin) elapsedMs=\(elapsed) cookies=disabled credentials=none redirects=blocked savedReadFavorite=imageURL-reloaded imageRequests=1")
         } catch {
             if error is PreflightFailure { throw error }
             XCTFail("R217图片目标静态审阅失败；不输出网页、图片URL或原始异常")
@@ -443,6 +461,8 @@ final class S8RepresentativeSourceTests: XCTestCase {
             XCTAssertEqual(request.redirectsBlocked, 0)
             XCTAssertEqual(request.transactionsOutsideExpectedOrigin, 0)
             XCTAssertFalse(browser.canLoadMore, "仅读取首列表，不自动翻页")
+            // 刷新结果异步合并落盘；清理测试目录前等待唯一owner收口，避免删除与写入竞争。
+            try await store.flushPersistence()
             print("S8_REAL_SOURCE ordinal=128 kind=public-rss-image-target-preflight requests=\(request.transactions) status=200 parsedItems=\(articles.count) inspectedHtmlBytes=\(audit.0) imageItems=\(audit.1) uniqueImages=\(audit.2) imageHostHashes=\(audit.3) queryTargets=\(audit.4) fragments=\(audit.5) invalidHTTPS=\(audit.6) embeddedCredentials=\(audit.7) extensions=\(audit.8) elapsedMs=\(elapsed) cookies=disabled credentials=none redirects=blocked imageRequests=0 pages=1 nextStep=no-image-target")
         } catch {
             if error is PreflightFailure { throw error }
@@ -707,6 +727,10 @@ final class S8RepresentativeSourceTests: XCTestCase {
         do {
             let browser = RSSFeedSession(source: source, store: store, session: session, maxPages: 1, entries: entries)
             await browser.refresh(entry: entry)
+            if browser.error != nil || browser.currentPage != 1 {
+                let audit = meter.snapshot()
+                print("S8_AUDIO_CATALOG_FAILURE requests=\(audit.transactions) statuses=\(audit.statusCodes) rejected=\(meter.boundary?.counts.rejected ?? -1) page=\(browser.currentPage)")
+            }
             try requirePreflight(browser.error == nil && browser.currentPage == 1,
                                  "预审音频源目录失败，停止后续请求")
             let articles = store.articles(for: source.id, scope: browser.scope)

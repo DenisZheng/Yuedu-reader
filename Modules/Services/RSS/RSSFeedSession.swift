@@ -79,6 +79,12 @@ final class RSSFeedSession {
         await load(.init(page: 1, url: nil, append: false, entry: entry, key: query))
     }
 
+    /// 只由可见行触发；失败保留手动重试，不因布局重复出现而持续请求同一失败页。
+    func preloadIfNeeded() async {
+        guard canLoadMore, failedRequest == nil else { return }
+        await nextPage()
+    }
+
     func nextPage() async {
         guard canLoadMore, let nextURL else { return }
         await load(.init(page: currentPage + 1, url: nextURL, append: true, entry: selectedEntry, key: searchKey))

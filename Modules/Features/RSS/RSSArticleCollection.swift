@@ -20,6 +20,8 @@ struct RSSArticleCollection<Row: View, Header: View, Footer: View>: View {
     let articles: [RSSArticleRecord]
     let presentation: RSSArticlePresentation
     private let row: (RSSArticleRecord) -> Row
+    private let onNearEnd: (() async -> Void)?
+    private let preloadingIDs: Set<String>
     private let header: Header
     private let footer: Footer
     @Environment(\.dynamicTypeSize) private var dynamicType
@@ -27,9 +29,13 @@ struct RSSArticleCollection<Row: View, Header: View, Footer: View>: View {
 
     init(articles: [RSSArticleRecord], presentation: RSSArticlePresentation,
          @ViewBuilder header: () -> Header, @ViewBuilder footer: () -> Footer,
-         @ViewBuilder row: @escaping (RSSArticleRecord) -> Row) {
+         @ViewBuilder row: @escaping (RSSArticleRecord) -> Row,
+         preloadDistance: Int = 1, onNearEnd: (() async -> Void)? = nil) {
         self.articles = articles; self.presentation = presentation
         self.header = header(); self.footer = footer(); self.row = row
+        self.onNearEnd = onNearEnd
+        // 只取最后1～5个稳定id，不为可见行在body里反复扫描全量列表。
+        self.preloadingIDs = Set(articles.suffix(min(5, max(1, preloadDistance))).map(\.id))
     }
 
     var body: some View {
@@ -44,7 +50,7 @@ struct RSSArticleCollection<Row: View, Header: View, Footer: View>: View {
                                 ForEach(columns) { column in
                                     LazyVStack(spacing: DSSpacing.md) {
                                         ForEach(column.articles) { entry in
-                                            row(entry.article).accessibilitySortPriority(entry.priority)
+                                            visibleRow(entry.article).accessibilitySortPriority(entry.priority)
                                         }
                                     }
                                     .frame(maxWidth: .infinity)
@@ -56,7 +62,7 @@ struct RSSArticleCollection<Row: View, Header: View, Footer: View>: View {
                             }
                         } else {
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: DSSpacing.md, alignment: .top), count: count), spacing: DSSpacing.md) {
-                                ForEach(articles) { article in row(article) }
+                                ForEach(articles) { article in visibleRow(article) }
                             }
                         }
                         footer
@@ -67,10 +73,16 @@ struct RSSArticleCollection<Row: View, Header: View, Footer: View>: View {
         } else {
             List {
                 header
-                ForEach(articles) { article in row(article) }
+                ForEach(articles) { article in visibleRow(article) }
                 footer
             }
             .listStyle(.plain)
+        }
+    }
+
+    private func visibleRow(_ article: RSSArticleRecord) -> some View {
+        row(article).task(id: articles.count) {
+            if preloadingIDs.contains(article.id) { await onNearEnd?() }
         }
     }
 

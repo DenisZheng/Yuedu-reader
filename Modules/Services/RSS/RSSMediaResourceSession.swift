@@ -20,6 +20,8 @@ final class RSSMediaResourceSession: @unchecked Sendable {
     private let lock = NSLock()
     private var clients: [ObjectIdentifier: Client] = [:]
     private var closed = false
+    private var restriction: RSSMediaRestriction?
+    var restrictionMessage: String? { lock.withLock { restriction?.errorDescription } }
     private var startWaiter: CheckedContinuation<URL, Error>?
     private var requests = 0
     private var cancellation: UUID?
@@ -37,7 +39,10 @@ final class RSSMediaResourceSession: @unchecked Sendable {
         listener = try NWListener(using: parameters)
         self.prepared = prepared
         let nonce = UUID().uuidString + UUID().uuidString
-        rootPath = "/" + nonce + "/0/stream" + (prepared.request.url?.pathExtension.lowercased() == "m3u8" ? ".m3u8" : ".mp4")
+        let format = prepared.request.url?.pathExtension.lowercased() ?? ""
+        let supportedSuffixes: Set<String> = ["m3u8", "mp4", "mp3", "m4a", "aac", "wav", "flac", "mov"]
+        // AVPlayer会使用URL后缀判断容器；真实MP3不能在本地端点伪装为MP4。
+        rootPath = "/" + nonce + "/0/stream." + (supportedSuffixes.contains(format) ? format : "mp4")
         graph = RSSMediaResourceGraph(prepared: prepared, rootPath: rootPath, prefix: "/" + nonce)
     }
     deinit { stop() }
@@ -185,6 +190,7 @@ final class RSSMediaResourceSession: @unchecked Sendable {
                 guard prepared.runtime.state.isCurrent else { throw CancellationError() }
             } catch is CancellationError { finish(connection); return }
             catch {
+                if let restriction = error as? RSSMediaRestriction { lock.withLock { self.restriction = restriction } }
                 // 不把URL、上游异常、认证或密钥写入响应/日志。
                 AppLogger.network("RSS media resource failed", context: ["stage": "rss.media.resource"], level: .warning)
                 send(.init(status: 502, headers: [:], body: Data()), to: connection, head: method == "HEAD")
@@ -262,7 +268,11 @@ private actor RSSMediaResourceGraph {
             if requested.start == nil { upstreamRange = "bytes=-\(min(requested.end ?? Int64(Self.chunk), Int64(Self.chunk)))" }
             else {
                 let aligned = start / Int64(Self.chunk) * Int64(Self.chunk)
-                upstreamRange = "bytes=\(aligned)-\(aligned + Int64(Self.chunk) - 1)"
+                // AVPlayer可能一次请求完整短音频；2MiB分块不能截断有限Range后冒称已满足。
+                // 仍限制单响应最多16MiB，不接收任意大Range，也不扩大内存缓存预算。
+                let maximumEnd = aligned + Int64(16 * 1_024 * 1_024) - 1
+                let end = min(maximumEnd, max(aligned + Int64(Self.chunk) - 1, requested.end ?? 0))
+                upstreamRange = "bytes=\(aligned)-\(end)"
             }
         } else { upstreamRange = resource.kind == .root ? "bytes=0-\(Self.chunk - 1)" : nil }
         let key = RSSIdentity.digest([resource.url.absoluteString, method, upstreamRange ?? ""])
@@ -287,7 +297,9 @@ private actor RSSMediaResourceGraph {
                     runtimeState: prepared.runtime.state, cookieScope: permitted,
                     maximumBytes: resource.kind == .playlist ? 1_024 * 1_024 : 16 * 1_024 * 1_024,
                     requestValidator: { try RSSImageService.validateResourceURL($0, permitted: permitted, trusted: false) })
-                let (data, response) = try await executor.data(for: request)
+                let data: Data, response: URLResponse
+                do { (data, response) = try await executor.data(for: request) }
+                catch let error as URLError where error.code == .dataLengthExceedsMaximum { throw RSSMediaRestriction.resourceTooLarge }
                 guard let response = response as? HTTPURLResponse,
                       (200..<300).contains(response.statusCode) || response.statusCode == 416 else { throw RSSWebFailure.resourceUnavailable }
                 return Loaded(data: data, response: response)
@@ -312,6 +324,9 @@ private actor RSSMediaResourceGraph {
             guard let value = loaded.response.value(forHTTPHeaderField: "Content-Range"), value.hasPrefix("bytes */"),
                   let total = Int64(value.dropFirst(8)), total >= 0 else { throw RSSWebFailure.resourceUnavailable }
             return unsatisfied(total: total)
+        }
+        if loaded.response.mimeType?.lowercased() == "application/dash+xml" || loaded.response.url?.pathExtension.lowercased() == "mpd" {
+            throw RSSMediaRestriction.dash
         }
         let isManifest = resource.kind == .playlist || loaded.data.starts(with: Data("#EXTM3U".utf8))
         if isManifest, method != "HEAD" {
@@ -351,10 +366,11 @@ private actor RSSMediaResourceGraph {
             let pattern = try NSRegularExpression(pattern: "(?<=[:,])URI=\"([^\"]*)\"")
             var nextIsPlaylist = false
             let rewritten = try lines.map { line -> String in
+                guard !line.contains("METHOD=SAMPLE-AES"), !line.contains("KEYFORMAT=\"") || line.contains("KEYFORMAT=\"identity\"")
+                else { throw RSSMediaRestriction.protectedHLS }
                 guard !line.hasPrefix("#EXT-X-CONTENT-STEERING"), !line.hasPrefix("#EXT-X-DEFINE"),
-                      !(line.hasPrefix("#EXT-X-DATERANGE") && line.contains("X-ASSET")),
-                      !line.contains("METHOD=SAMPLE-AES"), !line.contains("KEYFORMAT=\"") || line.contains("KEYFORMAT=\"identity\"")
-                else { throw RSSWebFailure.resourceUnavailable }
+                      !(line.hasPrefix("#EXT-X-DATERANGE") && line.contains("X-ASSET"))
+                else { throw RSSMediaRestriction.playlistFeature }
                 if line.hasPrefix("#EXT-X-STREAM-INF") { nextIsPlaylist = true }
                 if line.hasPrefix("#") {
                     var result = line
@@ -401,7 +417,7 @@ private struct RSSMediaByteRange {
         guard parts.count == 2 else { throw RSSWebFailure.resourceUnavailable }
         start = parts[0].isEmpty ? nil : Int64(parts[0]); end = parts[1].isEmpty ? nil : Int64(parts[1])
         guard (parts[0].isEmpty || start != nil), (parts[1].isEmpty || end != nil),
-              start.map({ $0 >= 0 && $0 <= Int64.max - 4_194_304 }) ?? true,
+              start.map({ $0 >= 0 && $0 <= Int64.max - 16 * 1_024 * 1_024 }) ?? true,
               end.map({ $0 >= 0 && (start != nil || $0 > 0) }) ?? (start != nil), start != nil || end != nil,
               start == nil || end == nil || start! <= end! else { throw RSSWebFailure.resourceUnavailable }
     }
