@@ -96,6 +96,29 @@ bash scripts/validate_reader_fork_s8.sh full
 
 收尾实际执行`python3 -B .artifacts/rss-review-20261117/check-current-delivery.py`，输出`RSS_REVIEW_DELIVERY_CHECK_OK docs=8 localLinks=151 swiftFiles=22 sourceHashesUnchanged=2 stagedFiles=0 UTF8_LF=true diagnosticsRemoved=true fullPassed=68 suites=16 devices=2 stageAccepted=false`；核对8文档／151本地链接、原包哈希、临时诊断移除和两个最终结果精确门槛。`ruby scripts/check_localizations.rb`退出0（五语4288键／2975调用键），`bash -n scripts/validate_reader_fork_s8.sh`、`git diff --check`均退出0。静态检查不代替行为验收；产物、脚本、日志、xcresult、原包和Review原稿不提交。
 
+## 提交、推送与本机IPA（2026-11-18）
+
+本轮37文件精确提交为`890285fac47bb39cacb7d9ee78756000941b5308`，`git push -u origin fix/rss-review-20261117`实际退出0；`git ls-remote`核对远端分支一致，main仍`40065b99a212a64da2dd4a5af6b9fbc319211a21`，没有合并／改tag／发布。原包、Review原稿、日志及诊断未暂存／提交。
+
+按用户最新授权本机生成IPA，不关机；复用已有Actions的归档参数和打包器，不更改签名／工程配置／依赖。Xcode27.2（27B52）、iPhoneOS27.2，`Reader-Fork-Dev` Release／arm64、最低声明iOS17.0：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+work=.artifacts/rss-review-20261117/local-ipa-890285fa
+xcodebuild archive -project Yuedu-Reader.xcodeproj -scheme Reader-Fork-Dev \
+  -configuration Release -destination 'generic/platform=iOS' \
+  -archivePath "$work/ReaderFork.xcarchive" \
+  -resultBundlePath "$work/ReaderForkArchive.xcresult" \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
+  > "$work/archive.log" 2>&1
+python3 -B scripts/package_unsigned_ipa.py --archive "$work/ReaderFork.xcarchive" --output "$work/output"
+```
+
+归档实际退出0，`archive.log`最终`** ARCHIVE SUCCEEDED **`；包装退出0。`python3 -B -m unittest discover -s scripts/tests -p 'test_*ipa*.py' -v`实际19项／OK。产物`.artifacts/rss-review-20261117/local-ipa-890285fa/output/LegadoPro-unsigned.ipa`，36,646,075 B（约34.95MiB），SHA-256 `edd56c09c6f68dd6c89b860196f4e2329acd9373ef89a96bd402671a950df9b2`，同目录`.sha256`一致。
+
+实际打开ZIP校验无损；Info.plist确认LegadoPro／`dev.denis.readerfork.dev`／3.0（5）／iPhoneOS／最低17.0，Widget和ShareExtension两个独立ID正确；`xcrun lipo -archs`为arm64，`codesign -d --entitlements :-`返回未签名，包无embedded.mobileprovision。主App源entitlements没有CloudKit，App Group仍按既有配置保留；**安装前须自行签名，扩展／共享组权限取决于该签名授权**。未安装真机、验证实际启动／声音或上传Release；IPA与archive只留本机，未加入Git。
+
 ## 回滚
 
 本轮未改变持久格式版本、Bundle ID、依赖、签名、原包或 App 数据；旧附件 JSON 继续可读。回滚仅撤销 `9ee66fb5` 后本轮 RSS／播放器／本地化／测试／verifier／文档改动，不撤回首批上游提交，不清用户库或诊断。独立 R217 测试配置随本轮撤销，不替用户改写原源；旧失败证据保留。

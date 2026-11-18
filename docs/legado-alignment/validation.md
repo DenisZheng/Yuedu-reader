@@ -2,6 +2,12 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 当前修复分支推送与本机IPA（2026-11-18）
+
+已提交并Push `fix/rss-review-20261117@890285fa`（37文件793增／59删，包含本地首批`9ee66fb5`），远端核对一致，main仍40065b99；不合并main／改tag／发布。用户最新决定取消关机、推送后本机编译IPA。本机Xcode27.2（27B52）／iPhoneOS27.2，复用`Reader-Fork-Dev` Release和现有unsigned打包器，`xcodebuild archive`退出0／`** ARCHIVE SUCCEEDED **`，`python3 -B scripts/package_unsigned_ipa.py`退出0，IPA合同19项／OK。
+
+产物`.artifacts/rss-review-20261117/local-ipa-890285fa/output/LegadoPro-unsigned.ipa`，36,646,075 B，SHA-256 `edd56c09c6f68dd6c89b860196f4e2329acd9373ef89a96bd402671a950df9b2`；真实ZIP、arm64、LegadoPro／dev.denis.readerfork.dev／3.0（5）／最低17.0、两个扩展及校验和核对通过，无签名和embedded profile。主App无CloudKit权限，既有App Group配置保留；需自行签名安装，未验证该包真机启动／扩展权限／声音，不冒充S8或发布通过。命令和限制见[本轮交付记录](rss-external-review-fixes-2026-11-17.md)；原包、用户数据、日志／IPA未提交，不关机。
+
 ## RSS 外部 Review 修复与双设备 full 通过（2026-11-17～18）
 
 当前 `fix/rss-review-20261117` 在 `9ee66fb5` 上补普通 Feed 全文的 owner／session／动态源 header、重定向基址、未知附件与元数据、静态懒加载图片、近尾预取和受限媒体诊断。定向集合实际25／13／26项通过，范围有重叠不混算；音频端点格式、有限Range及极端起点溢出修正后，当前**full两设备各68项／16 suites、零失败／跳过／预期失败，最终`** TEST SUCCEEDED **`、脚本退出0**。证据`.artifacts/rss-review-20261117/full-maintained-iphone/`与`full-maintained-ipad-final/`，verifier精确集／设备／模板探针通过，`stageAccepted=false`不变。
