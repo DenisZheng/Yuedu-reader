@@ -1,4 +1,6 @@
 import Foundation
+import AVFoundation
+import XCTest
 import Testing
 @testable import yuedu_app
 
@@ -86,6 +88,103 @@ struct RSSMediaResourceSessionTests {
         let (_, denied) = try await session.data(from: redirectStream.url)
         #expect((denied as? HTTPURLResponse)?.statusCode == 502)
         #expect(target.requests.isEmpty, "不向未授权loopback origin发送任何源私有头")
+    }
+
+    @Test("DASH资源在建立播放器前明确报告平台受限")
+    func dashHasExplicitRestriction() async throws {
+        let source = RSSSource(name: "DASH fixture", url: "https://media-fixture.invalid/feed")
+        let prepared = try await RSSMediaRequestService.prepare("https://media-fixture.invalid/stream.mpd", source: source,
+            base: nil, context: nil, owner: nil, trustedRuleURL: false)
+        do {
+            let (_, resources) = try await RSSMediaRequestService.stream(prepared)
+            resources.stop()
+            Issue.record("DASH不应伪装成可播放MP4资源会话")
+        } catch {
+            #expect(error.localizedDescription.contains("DASH"))
+        }
+    }
+
+    @Test("MP3资源端点保留音频扩展名，不伪装成MP4容器")
+    func audioEndpointKeepsFormat() async throws {
+        let source = RSSSource(name: "Audio extension", url: "https://media-format.invalid/feed")
+        let prepared = try await RSSMediaRequestService.prepare("https://media-format.invalid/episode.mp3", source: source,
+            base: nil, context: nil, owner: nil, trustedRuleURL: false)
+        let (stream, resources) = try await RSSMediaRequestService.stream(prepared)
+        defer { resources.stop() }
+        #expect(stream.url.pathExtension == "mp3")
+        #expect(stream.headers.isEmpty)
+    }
+
+    @Test("播放器一次请求超过2MiB的有限Range时返回完整所请求字节")
+    func finiteRangeBeyondOneChunkIsComplete() async throws {
+        let count = 2 * 1_024 * 1_024 + 512 * 1_024
+        let bytes = Data(repeating: 0x42, count: count)
+        let server = try VideoStillFixtureServer(directory: fixtures, routes: [
+            "/large.mp3": .init(body: bytes, type: "audio/mpeg")
+        ])
+        let base = try await server.start()
+        defer { server.stop() }
+        let source = RSSSource(name: "Range boundary", url: base.absoluteString)
+        let prepared = try await RSSMediaRequestService.prepare(base.appendingPathComponent("large.mp3").absoluteString,
+            source: source, base: base, context: nil, owner: nil, trustedRuleURL: false)
+        let (stream, resources) = try await RSSMediaRequestService.stream(prepared)
+        defer { resources.stop() }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        var request = URLRequest(url: stream.url)
+        request.setValue("bytes=0-\(count - 1)", forHTTPHeaderField: "Range")
+        let (data, response) = try await session.data(for: request)
+        #expect(data.count == count)
+        #expect((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Range") == "bytes 0-\(count - 1)/\(count)")
+    }
+
+    @Test("接近Int64上限的Range在计算分块前拒绝，不溢出或发出上游请求")
+    func extremeRangeIsRejectedBeforeFetch() async throws {
+        let server = try VideoStillFixtureServer(directory: fixtures)
+        let base = try await server.start()
+        defer { server.stop() }
+        let source = RSSSource(name: "Extreme range", url: base.absoluteString)
+        let prepared = try await RSSMediaRequestService.prepare(base.appendingPathComponent("video-still-landscape.mp4").absoluteString,
+            source: source, base: base, context: nil, owner: nil, trustedRuleURL: false)
+        let (stream, resources) = try await RSSMediaRequestService.stream(prepared)
+        defer { resources.stop() }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        var request = URLRequest(url: stream.url)
+        request.setValue("bytes=\(Int64.max - 4_194_304)-", forHTTPHeaderField: "Range")
+        let (_, response) = try await session.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 502)
+        #expect(server.requests.isEmpty)
+    }
+
+    @Test("合成大MP3通过生产资源端点后AVPlayer能推进")
+    @MainActor
+    func largeMP3AdvancesThroughResourceSession() async throws {
+        let parts = try await Task.detached {
+            let fixture = VideoStillFixtures.directory().deletingLastPathComponent().appendingPathComponent("TTS/tts-edge-xiaoxiao-24k-48kbps.mp3")
+            let audio = try Data(contentsOf: fixture)
+            var combined = Data()
+            while combined.count < 2 * 1_024 * 1_024 + 512 * 1_024 { combined.append(audio) }
+            return combined
+        }.value
+        let server = try VideoStillFixtureServer(directory: fixtures, routes: ["/fixture.mp3": .init(body: parts, type: "audio/mpeg")])
+        let base = try await server.start()
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let owner = RSSStore(storageDirectory: directory)
+        let source = RSSSource(name: "Synthetic MP3", url: base.absoluteString)
+        owner.addSource(source)
+        defer { server.stop(); do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) } }
+        let prepared = try await RSSMediaRequestService.prepare(base.appendingPathComponent("fixture.mp3").absoluteString, source: source, base: base, context: nil, owner: owner, trustedRuleURL: false)
+        let (stream, resources) = try await RSSMediaRequestService.stream(prepared)
+        let controller = VideoPlaybackController(rss: owner, articleID: nil, attachmentKey: "primary", stream: stream, title: "Synthetic", resources: resources)
+        defer { controller.close(); resources.stop() }
+        let advanced = XCTestExpectation(description: "大MP3播放时钟推进")
+        let observer = controller.player.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: 0.2, preferredTimescale: 600))], queue: .main) { advanced.fulfill() }
+        defer { controller.player.removeTimeObserver(observer) }
+        controller.start()
+        #expect(await XCTWaiter.fulfillment(of: [advanced], timeout: 10) == .completed)
+        #expect(controller.player.currentTime().seconds > 0.1)
+        try await owner.flushPersistence()
     }
 
     @Test("未知capability、跨origin网页与媒体结束后请求都不能获得任意URL代理")

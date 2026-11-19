@@ -309,6 +309,8 @@ final class CoreTextPageEngine: PageRenderingProvider, LinkNavigationProviding, 
     /// spine → the background restyle of its installed layout after a theme change.
     private var appearanceTasks: [Int: Task<Void, Never>] = [:]
     private var layoutGeneration: Int = 0
+    /// 取消会改变generation；真实拆除后，旧等待者不能把它当成需要重试的新布局。
+    private var isTornDown = false
     private var nextLayoutInvalidationOperationID: UInt64 = 0
     private var activeLayoutInvalidationOperationID: UInt64?
 
@@ -729,6 +731,7 @@ final class CoreTextPageEngine: PageRenderingProvider, LinkNavigationProviding, 
         Task { @MainActor [weak self] in
             // The engine went away mid-flight; nobody is left to receive a layout.
             guard let self else { return .cancelled }
+            guard !self.isTornDown else { return .cancelled }
             defer {
                 if self.preloadTaskIDs[spineIndex] == taskID {
                     self.preloadTasks.removeValue(forKey: spineIndex)
@@ -792,6 +795,7 @@ final class CoreTextPageEngine: PageRenderingProvider, LinkNavigationProviding, 
             "⟐ layoutGeneration \(layoutGeneration) → \(layoutGeneration + 1) cause=\(cause.rawValue) discardingPreloads",
             level: .notice
         )
+        if cause == .readerTeardown { isTornDown = true }
         cancelPendingWorkInternal()
     }
 

@@ -100,11 +100,13 @@ struct RSSArticleReaderView: View {
                                             if attachment.kind == .image {
                                                 let base = URL(string: article.link) ?? source.articleLinkBaseURL
                                                 webActions.destination = .init(target: .photo(source, attachment.url, base, false, nil))
+                                            } else if attachment.kind == .other {
+                                                open(RSSLinkRoute.route(attachment.url, relativeTo: source.articleLinkBaseURL))
                                             } else {
                                                 webActions.playMedia(attachment, article: article, source: source, owner: store)
                                             }
                                         } label: {
-                                            Label(attachmentTitle(attachment), systemImage: attachment.kind == .image ? "photo" : attachment.kind == .audio ? "waveform" : "play.rectangle")
+                                            Label(attachmentTitle(attachment), systemImage: attachment.kind == .image ? "photo" : attachment.kind == .audio ? "waveform" : attachment.kind == .other ? "paperclip" : "play.rectangle")
                                         }
                                         .accessibilityIdentifier("rss.attachment." + String(attachment.kind.rawValue))
                                     }
@@ -176,8 +178,9 @@ struct RSSArticleReaderView: View {
     }
 
     private func attachmentTitle(_ media: RSSMediaReference) -> String {
+        let title = media.title?.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = URL(string: media.url)?.lastPathComponent ?? localized("附件")
-        return String((fallback.isEmpty ? localized("附件") : fallback).prefix(160))
+        return String((title?.isEmpty == false ? title! : fallback.isEmpty ? localized("附件") : fallback).prefix(160))
     }
 
     /// The article's own link, resolved against its source — feeds and Legado rules

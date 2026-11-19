@@ -1942,11 +1942,13 @@ struct BookRow: View {
                     if let onShowWork {
                         Button(localized("作品詳情")) { onShowWork() }
                     }
-                    if let onTogglePin {
+                    if !BookshelfRowSwipe.reachesVoiceOver, let onTogglePin {
                         Button(BookshelfPinLabel.title(isPinned: book.isPinned)) { onTogglePin() }
                     }
                     Button(localized("編輯書籍資訊")) { onEdit() }
-                    Button(localized("刪除書籍"), role: .destructive) { onDelete() }
+                    if !BookshelfRowSwipe.reachesVoiceOver {
+                        Button(localized("刪除書籍"), role: .destructive) { onDelete() }
+                    }
                 }
         }
     }
@@ -2695,6 +2697,14 @@ private struct BookOverflowMenu: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(localized("更多"))
+    }
+}
+
+/// iOS27起List会把原生滑动动作加入VoiceOver，重复声明会出现多个删除／置顶。
+/// 旧系统仍由BookRow提供这些动作；最低系统升至iOS27后可移除此兼容判断。
+enum BookshelfRowSwipe {
+    static var reachesVoiceOver: Bool {
+        if #available(iOS 27.0, *) { true } else { false }
     }
 }
 

@@ -4,6 +4,9 @@
 "尚無分類" = "No categories";
 "沒有登入欄位" = "No sign-in fields";
 "附件" = "Attachments";
+"此 HLS 使用 SAMPLE-AES 或 DRM，当前播放器不支援" = "This HLS stream uses SAMPLE-AES or DRM, which this player does not support.";
+"此 HLS 清單包含当前播放器不支援的功能" = "This HLS playlist contains features this player does not support.";
+"媒體回應超出大小上限，請使用支援 Range 的來源" = "The media response exceeds the size limit. Use a source that supports Range requests.";
 "確認網頁操作" = "Confirm web action";
 "網頁要求開啟 %@。將使用該來源的原生功能或外部應用程式。" = "This page requests opening %@ using native source features or an external app.";
 "此網頁操作尚不支援" = "This web action is not supported.";

@@ -29,6 +29,59 @@ import XCTest
         #expect(RSSItem(from: renewed, sourceId: "source").media?.first?.url.contains("token=two") == true)
     }
 
+    @Test("没有MIME或非媒体MIME的合法附件仍由RSSStore持久化")
+    func unknownAttachmentsSurviveReload() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = RSSStore(storageDirectory: directory)
+        let source = RSSSource(name: "Unknown attachments", url: "https://attachments.invalid/feed")
+        store.addSource(source)
+        defer { do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) } }
+        let xml = """
+        <rss version="2.0"><channel><title>Fixture</title><link>https://attachments.invalid/</link>
+        <item><guid>attachment-item</guid><title>附件</title><link>https://attachments.invalid/article</link>
+        <enclosure url="https://attachments.invalid/unknown"/><enclosure url="https://attachments.invalid/file.pdf" type="application/pdf"/>
+        </item></channel></rss>
+        """
+        let feed = try #require(RSSFeedParser.parse(data: Data(xml.utf8), url: source.url))
+        let parsed = RSSItem(from: try #require(feed.items.first), sourceId: source.id)
+        #expect(parsed.media?.count == 2)
+        #expect(parsed.media?.allSatisfy { $0.kind == .other } == true)
+        store.mergeFetchedItems([parsed], for: source.id)
+        try await store.flushPersistence()
+        let restored = RSSStore(storageDirectory: directory)
+        #expect(restored.article(id: parsed.id)?.media?.count == 2)
+        #expect(restored.article(id: parsed.id)?.media?.contains { $0.mimeType == "application/pdf" } == true)
+        let legacy = Data(#"{"key":"legacy","articleID":"article","kind":{"rawValue":2},"url":"https://attachments.invalid/a.mp4"}"#.utf8)
+        let decoded = try JSONDecoder().decode(RSSMediaReference.self, from: legacy)
+        #expect(decoded.kind == .video && decoded.mimeType == nil && decoded.title == nil)
+    }
+
+    @Test("SAMPLE-AES清单报告受限而不是自动重抓或通用网络错误")
+    func protectedHLSReportsRestriction() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let owner = RSSStore(storageDirectory: directory)
+        let server = try VideoStillFixtureServer(directory: directory, routes: [
+            "/protected.m3u8": .init(body: Data("#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"key\"\n#EXTINF:1,\npart.ts\n".utf8), type: "application/vnd.apple.mpegurl")
+        ])
+        let base = try await server.start()
+        defer { server.stop(); do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) } }
+        let source = RSSSource(name: "Protected HLS", url: base.absoluteString)
+        owner.addSource(source)
+        let prepared = try await RSSMediaRequestService.prepare(base.appendingPathComponent("protected.m3u8").absoluteString,
+            source: source, base: base, context: nil, owner: owner, trustedRuleURL: false)
+        let (stream, resources) = try await RSSMediaRequestService.stream(prepared)
+        let controller = VideoPlaybackController(rss: owner, articleID: nil, attachmentKey: "fixture", stream: stream,
+            title: "Protected fixture", resources: resources)
+        defer { controller.close(); resources.stop() }
+        controller.start()
+        let deadline = ContinuousClock.now + .seconds(10)
+        while controller.phase == .loading, ContinuousClock.now < deadline { await Task.yield() }
+        guard case .failed(let message) = controller.phase else { Issue.record("受保护HLS应明确停止播放"); return }
+        #expect(message == localized("此 HLS 使用 SAMPLE-AES 或 DRM，当前播放器不支援"))
+        #expect(server.requests.allSatisfy { $0.path == "/protected.m3u8" })
+        try await owner.flushPersistence()
+    }
+
     @Test("RSS媒体切后台停止且不开画中画；后台就绪/锁屏命令不重启，回前台不自动续播")
     func backgroundStopsPlayback() async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)

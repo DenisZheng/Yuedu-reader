@@ -72,5 +72,10 @@ struct RSSMediaReference: Codable, Equatable, Sendable, Identifiable {
     var articleID: String
     var kind: RSSAttachmentKind
     var url: String
+    // 新字段均可选，旧附件与进度key保持可解码；未知MIME仍保留而不冒称可播放。
+    var mimeType: String? = nil
+    var title: String? = nil
+    var sizeInBytes: Int? = nil
+    var durationInSeconds: Int? = nil
     var id: String { RSSIdentity.attachment(articleID: articleID, key: key) }
 }

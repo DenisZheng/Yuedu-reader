@@ -1776,6 +1776,10 @@ struct ReaderView: View {
             // 在 onDisappear 销毁源网页会让返回重新加载 autoplay，再次弹出播放器。
             EPUBVideoPlaybackManager.shared.stopAll()
             ReaderWebEmbedManager.shared.stopAll()
+            // 仅真正拆除时停止布局；朗读仍可能持有引擎继续供给章节。
+            if tts.playbackState == .stopped {
+                renderer.engine?.cancelPendingWork(cause: .readerTeardown)
+            }
             NowPlayingHub.shared.holdNarrationPastReader(tts)
         }
     }

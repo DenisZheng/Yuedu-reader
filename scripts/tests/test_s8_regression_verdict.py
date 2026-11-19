@@ -23,10 +23,10 @@ class S8RegressionVerdictTests(unittest.TestCase):
         return summary, tree, console
 
     def test_modes_are_exact_and_never_accept_stage(self):
-        for mode, count, suites, excluded in [("nonmedia", 22, 5, 2), ("full", 47, 12, 0)]:
+        for mode, count, suites, excluded in [("nonmedia", 22, 5, 2), ("full", 68, 16, 0)]:
             result = gate.verify(mode, *self.fixture(mode), device_id="SIM")
             self.assertEqual((result["passed"], result["suites"], result["explicitExclusions"]), (count, suites, excluded))
-            self.assertEqual(result["notSelectedFromFull"], 47 - count)
+            self.assertEqual(result["notSelectedFromFull"], 68 - count)
             self.assertEqual(result["externalPreconditionsNotRun"], 1)
             self.assertIs(result["stageAccepted"], False)
         self.assertTrue(gate.EXCLUDED_NONMEDIA <= gate.selected_cases("full"))
@@ -41,6 +41,31 @@ class S8RegressionVerdictTests(unittest.TestCase):
             summary["passedTests"] += 1
             with self.assertRaises(ValueError):
                 gate.verify(mode, summary, tree, console, device_id="SIM")
+
+    def test_review_fixes_are_in_full_and_missing_any_is_rejected(self):
+        expected = {
+            "RSSArticleFullTextRequestTests/sourceHeadersAndSessionReachFullText()",
+            "RSSWebImageTests/staticLazyImageAttributes()",
+            "RSSWebImageTests/sanitizedLazyImageAttributes()",
+            "RSSListPreloadTests/masonryNearEndPreloads()",
+            "RSSListPreloadTests/preloadFailureKeepsManualRetry()",
+            "RSSMediaPlaybackTests/unknownAttachmentsSurviveReload()",
+            "RSSMediaPlaybackTests/protectedHLSReportsRestriction()",
+            "RSSMediaResourceSessionTests/dashHasExplicitRestriction()",
+            "RSSMediaResourceSessionTests/audioEndpointKeepsFormat()",
+            "RSSMediaResourceSessionTests/finiteRangeBeyondOneChunkIsComplete()",
+            "RSSMediaResourceSessionTests/largeMP3AdvancesThroughResourceSession()",
+            "RSSSourceRevisionAuditTests/testConfigurationRevisionPreservesOriginalFailureAndRecovers()",
+            "RSSMediaResourceSessionTests/extremeRangeIsRejectedBeforeFetch()",
+        }
+        self.assertTrue(expected <= gate.selected_cases("full"))
+        for identifier in expected:
+            summary, tree, console = self.fixture("full")
+            tree["testNodes"] = [n for n in tree["testNodes"] if n["nodeIdentifier"] != identifier]
+            summary["passedTests"] -= 1
+            summary["totalTestCount"] -= 1
+            with self.assertRaises(ValueError):
+                gate.verify("full", summary, tree, console)
 
     def test_wrapper_failure_cannot_be_overridden_by_passed_summary(self):
         with self.assertRaises(ValueError):

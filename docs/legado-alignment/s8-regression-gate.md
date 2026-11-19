@@ -1,5 +1,9 @@
 # S8自动回归门槛（2026-11-14）
 
+## 当前修复分支状态（2026-11-17～18）
+
+当前full **68项／16 suites已双设备完整通过**，新增全文、附件、懒加载、媒体诊断／Range、近尾预取及配置修订回归；nonmedia仍22项／5 suites，本轮不另重跑。证据`.artifacts/rss-review-20261117/full-maintained-iphone/`与`full-maintained-ipad-final/`，零失败／跳过／预期失败、最终TEST SUCCEEDED、脚本退出0，stageAccepted=false。R217原包规则仍失效，独立预审的测试配置及精确新版WebP实际闭环通过，不改原包／通用解析器、不删旧失败；过程与回滚见[当前修复记录](rss-external-review-fixes-2026-11-17.md)。下文47项通过属于历史版本。
+
 ## 用法与范围
 
 新增`scripts/validate_reader_fork_s8.sh`，复用已有`xctest.sh`、PoC隔离宿主和DerivedData，不重置设备或数据。
@@ -17,8 +21,8 @@ YUEDU_DEST="$(bash scripts/sim.sh dest iPad)" \
 
 | 模式 | 精确集合 | 明确不包含的范围 |
 | --- | --- | --- |
-| full | 当前47项/12 suites | R146图片（外部前置条件）、原307规模/全包导入、旧47项整合集、完整S0–S7、iOS17/真机/人工/发布 |
-| nonmedia | 当前22项/5 suites | full中25项未执行：23项所属suite未选择，2项在选中suite内显式排除（真实MP3、R217真实图片）；R146图片同样不运行 |
+| full | 当前68项/16 suites（双设备完整通过） | R146图片（外部前置条件）、原307规模/全包导入、旧47项整合集、完整S0–S7、iOS17/真机/人工/发布 |
+| nonmedia | 当前22项/5 suites（本轮未重跑） | full中46项未执行：44项所属suite未选择，2项在选中suite内显式排除（真实MP3、R217真实图片）；R146图片同样不运行 |
 
 **外部前置条件（2026-11-14）**：`testReviewedR146ImageRequiresSystemTrustAndNativeDecode`由第三方证书链决定（`-1202/-9814`），客户端无修复路径。它保留在源码中可单独运行，但不属于任何模式；verifier输出`externalPreconditionsNotRun=1`，结果树里出现该用例会按多出项目拒绝，所以它既不会让门槛失败，也不会被计为通过。证书链恢复后把它从`EXTERNAL_PRECONDITIONS`移回即可。
 
@@ -36,12 +40,12 @@ YUEDU_DEST="$(bash scripts/sim.sh dest iPad)" \
 - 失败也尝试导出最终summary/tests树；结果不存在不回退为成功。模式输出区分`explicitExclusions`与`notSelectedFromFull`，不把0 skipped当作全量覆盖。
 - 所有业务请求仍受各测试的精确URL、预算、凭据与TLS边界；脚本不增添站点准入或重试。
 
-## 实际验证与开发失败
+## 历史验证与开发失败（2026-11-14）
 
 - 10项Python单元测试通过，包含物理目标在任何xctest调用前拒绝的shell对照；也验证假Passed、零项、缺失/重复/换项、日志漏探针/载荷、设备错配及真正执行bash footer。
 - 更新后的`nonmedia`双设备完整退出0，各22项/5 suites、零失败/跳过，精确集合及模板探针通过；证据 `/tmp/readerfork-s8-current-nonmedia-iPhone.kDBTd1/`、`/tmp/readerfork-s8-current-nonmedia-iPad.42BVWD/`。R128受控只读实源一页20条无图检查也在此集合内。
 - 历史证据：`/tmp/readerfork-s8-header-gate-{iPhone,iPad}/`（21项/5 suites）及`/tmp/readerfork-s8-gate-verified-{iPhone,iPad}/`（初版16项/4 suites）保留；更新后的22项结果见上一项。所有结果各自含xcresult、log、summary、tests树及当次模拟器清单。
-- **full已实际整套运行：iPhone/iPad各47项/12 suites通过**，零失败/跳过/预期失败，证据`/tmp/readerfork-s8-full-iPhone.skTNEI/`、`/tmp/readerfork-s8-full-iPad.44CJ0U/`；同轮原始本地音频合同双设备各1项通过（`/tmp/readerfork-s8-audio-contract-174833-{iPhone,iPad}.xcresult`）。此前的48项manifest含R146图片，从未整套运行过。真实MP3/本地音频的历史失败及随后同文件双宿主有限复查见[音频记录](s8-audio-clock-diagnostics.md)；R146 TLS独立失败保留在[TLS记录](s8-r146-tls.md)。此前37项实际通过属于历史完整聚焦批次。
+- **历史full（2026-11-14）实际整套运行：iPhone/iPad各47项/12 suites通过**，零失败/跳过/预期失败，证据`/tmp/readerfork-s8-full-iPhone.skTNEI/`、`/tmp/readerfork-s8-full-iPad.44CJ0U/`；同轮原始本地音频合同双设备各1项通过（`/tmp/readerfork-s8-audio-contract-174833-{iPhone,iPad}.xcresult`）。此前的48项manifest含R146图片，从未整套运行过。真实MP3/本地音频的历史失败及随后同文件双宿主有限复查见[音频记录](s8-audio-clock-diagnostics.md)；R146 TLS独立失败保留在[TLS记录](s8-r146-tls.md)。此前37项实际通过属于历史完整聚焦批次。
 
 `R217`单张图及`R128`无图停止的资源边界与证据见[R217记录](s8-r217-image.md)。初版脚本在16项已通过后的最后一条echo因`$EVIDENCE`紧邻全角括号，被当前macOS bash误读为带首字节的变量，`set -u`导致脚本非零；当时流程不能写作整体通过。已先用执行真实footer的单元对照固定复现，再改`${EVIDENCE}`/`${MODE}`明确边界，10项单元及上述双设备完整脚本均通过。原结果保留`/tmp/readerfork-s8-gate-iPhone/`。
 

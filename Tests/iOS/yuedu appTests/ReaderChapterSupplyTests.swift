@@ -146,6 +146,23 @@ struct ReaderChapterSupplyTests {
         #expect([.supersededByGeneration, .contentUnavailable, .cancelled].contains(outcome))
     }
 
+    /// 改编自上游e8bc688b：generation改变后，旧等待者不能为已关闭的阅读器重启排版。
+    @Test("真正关闭后旧章节等待者不再启动排版")
+    func teardownStopsSupersededRetry() async throws {
+        let builder = ControllableChapterBuilder(chapterCount: 2)
+        let engine = makeEngine(builder: builder)
+        await engine.start(renderSize: Self.renderSize, bookId: UUID().uuidString)
+        await builder.gateNextBuild(chapter: 1)
+        let waiter = Task { await engine.preloadChapter(at: 1) }
+        await builder.waitUntilBuilding(chapter: 1)
+        engine.cancelPendingWork(cause: .readerTeardown)
+        await builder.releaseGate(chapter: 1)
+        let outcome = await waiter.value
+        #expect(!outcome.isReady)
+        #expect(await builder.buildCount(chapter: 1) == 1)
+        #expect(engine.layouts[1] == nil)
+    }
+
     @Test("an unresolved chapter tells the paged view, not just the log")
     func unresolvedChapterNotifiesTheView() async throws {
         let builder = ControllableChapterBuilder(chapterCount: 2)

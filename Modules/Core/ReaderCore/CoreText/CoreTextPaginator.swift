@@ -890,7 +890,8 @@ final class CoreTextPaginator: Sendable {
         }
 
         let sharedAttrStr = LayoutShared(attrStr)
-        let layout = await Task.detached(priority: .userInitiated) {
+        // detached不继承调用方取消；真正关闭阅读器后必须停止其后台排版。
+        let computation = Task.detached(priority: .userInitiated) {
             Self.computeLayout(spineIndex: spineIndex,
                                attrStr: sharedAttrStr.wrappedValue,
                                imagePage: imagePage,
@@ -904,8 +905,14 @@ final class CoreTextPaginator: Sendable {
                                writingMode: writingMode,
                                bottomJustify: bottomJustify,
                                centresSinglePage: centresSinglePage)
-        }.value
-
+        }
+        let layout = await withTaskCancellationHandler {
+            await computation.value
+        } onCancel: {
+            computation.cancel()
+        }
+        // 中途取消只得到残缺布局，不能缓存为下次打开的完整结果。
+        guard !layout.isPartial else { return layout }
         storeLayout(layout, for: key)
         return layout
     }
@@ -994,7 +1001,7 @@ final class CoreTextPaginator: Sendable {
             return cached
         }
         let sharedAttrStr = LayoutShared(attrStr)
-        return await Task.detached(priority: .userInitiated) {
+        let computation = Task.detached(priority: .userInitiated) {
             Self.computeLayout(spineIndex: spineIndex,
                                attrStr: sharedAttrStr.wrappedValue,
                                imagePage: nil,
@@ -1009,7 +1016,12 @@ final class CoreTextPaginator: Sendable {
                                bottomJustify: bottomJustify,
                                maxPages: 1,
                                centresSinglePage: centresSinglePage)
-        }.value
+        }
+        return await withTaskCancellationHandler {
+            await computation.value
+        } onCancel: {
+            computation.cancel()
+        }
     }
 
     private func cachedLayout(for key: CacheKey) -> ChapterLayout? {
@@ -1180,8 +1192,11 @@ final class CoreTextPaginator: Sendable {
         var pageFloatAttachments: [Int: [RenderedAttachment]] = [:]
         // 底部對齊 candidates: pages that end only because CoreText ran out of room.
         var columnFilledPages = IndexSet()
+        // 每页读取attrStr.string会重复桥接整章，长章成本随字数×页数增长。
+        let layoutText = attrStr.string
 
         while currentLocation < attrStr.length {
+            if Task.isCancelled { break }
             if let breakRange = forcedPageBreakRanges.first(where: { $0.location <= currentLocation && currentLocation < $0.location + $0.length }) {
                 currentLocation = breakRange.location + breakRange.length
                 continue
@@ -1251,7 +1266,7 @@ final class CoreTextPaginator: Sendable {
             let proposedEnd = currentLocation + proposedAdvance
             let protectedEnd = CJKTypographyProcessor.protectedLineBreakOffset(
                 proposedEnd,
-                in: attrStr.string,
+                in: layoutText,
                 lowerBound: currentLocation
             )
             var advance = min(remainingLength, max(1, protectedEnd - currentLocation))
@@ -2498,7 +2513,7 @@ final class CoreTextPaginator: Sendable {
         let start = max(0, lineRange.location)
         let end = min(attrStr.length, lineRange.location + lineRange.length)
         guard end > start else { return true }
-        let ns = attrStr.string as NSString
+        let ns = CFAttributedStringGetString(attrStr as CFAttributedString) as NSString
         var idx = start
         while idx < end {
             if idx >= imageRunRange.location, idx < imageRunRange.location + imageRunRange.length {
@@ -3412,7 +3427,8 @@ final class CoreTextPaginator: Sendable {
         let mergedRange = mergeRanges(ranges)
         let mergedText: String
         if let mergedRange, mergedRange.location < attrStr.length {
-            mergedText = (attrStr.string as NSString).substring(with: mergedRange)
+            mergedText = (CFAttributedStringGetString(attrStr as CFAttributedString) as NSString)
+                .substring(with: mergedRange)
         } else {
             mergedText = ""
         }

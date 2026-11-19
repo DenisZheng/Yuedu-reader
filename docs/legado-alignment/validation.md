@@ -2,6 +2,42 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 当前修复分支推送与本机IPA（2026-11-18）
+
+已提交并Push `fix/rss-review-20261117@890285fa`（37文件793增／59删，包含本地首批`9ee66fb5`），远端核对一致，main仍40065b99；不合并main／改tag／发布。用户最新决定取消关机、推送后本机编译IPA。本机Xcode27.2（27B52）／iPhoneOS27.2，复用`Reader-Fork-Dev` Release和现有unsigned打包器，`xcodebuild archive`退出0／`** ARCHIVE SUCCEEDED **`，`python3 -B scripts/package_unsigned_ipa.py`退出0，IPA合同19项／OK。
+
+产物`.artifacts/rss-review-20261117/local-ipa-890285fa/output/LegadoPro-unsigned.ipa`，36,646,075 B，SHA-256 `edd56c09c6f68dd6c89b860196f4e2329acd9373ef89a96bd402671a950df9b2`；真实ZIP、arm64、LegadoPro／dev.denis.readerfork.dev／3.0（5）／最低17.0、两个扩展及校验和核对通过，无签名和embedded profile。主App无CloudKit权限，既有App Group配置保留；需自行签名安装，未验证该包真机启动／扩展权限／声音，不冒充S8或发布通过。命令和限制见[本轮交付记录](rss-external-review-fixes-2026-11-17.md)；原包、用户数据、日志／IPA未提交，不关机。
+
+## RSS 外部 Review 修复与双设备 full 通过（2026-11-17～18）
+
+当前 `fix/rss-review-20261117` 在 `9ee66fb5` 上补普通 Feed 全文的 owner／session／动态源 header、重定向基址、未知附件与元数据、静态懒加载图片、近尾预取和受限媒体诊断。定向集合实际25／13／26项通过，范围有重叠不混算；音频端点格式、有限Range及极端起点溢出修正后，当前**full两设备各68项／16 suites、零失败／跳过／预期失败，最终`** TEST SUCCEEDED **`、脚本退出0**。证据`.artifacts/rss-review-20261117/full-maintained-iphone/`与`full-maintained-ipad-final/`，verifier精确集／设备／模板探针通过，`stageAccepted=false`不变。
+
+R217网站改版导致原`.item`／第三a／data-original规则失效，不修共享解析器、不改原包。用户要求继续后独立预审新版测试配置和当前精确WebP，沿store更新验证旧票据失效／ID不变，2 GET／200／无凭据／禁重定向、13,674 B原生480×300解码与已读收藏／配置重载通过；**原包R217仍失效**，维护后配置不冒充原包可用。新增自建DOM生产请求回归固定旧0条→配置更新→新2条重载。iPad前一次full仅R128隔离目录清理竞争失败，补`flushPersistence`后完整通过。初轮63项双端61通过／2失败、67项65通过／2失败、外层超时和旧图片指纹缺失均保留为历史失败，不改断言刷过。
+
+`python3 -B -m unittest discover -s scripts/tests -p 'test_s8_regression_verdict.py' -v`实际`Ran 11 tests`／`OK`，要求full68／16；Ruby五语4288键、2975调用键通过；交付检查实际输出`RSS_REVIEW_DELIVERY_CHECK_OK docs=8 localLinks=151 swiftFiles=22 sourceHashesUnchanged=2 stagedFiles=0 UTF8_LF=true diagnosticsRemoved=true fullPassed=68 suites=16 devices=2 stageAccepted=false`，`git diff --check`退出0。Review采纳矩阵、命令、过程失败／回滚见[本轮记录](rss-external-review-fixes-2026-11-17.md)。私有捕获依赖已移出代码，产物／原包／Review原稿不提交。用户最新授权收尾后Push当前修复分支并本机编译IPA，**不关机、不合并main／改tag／发布**；iOS17、真机、实际VoiceOver／媒体／登录及签名发布不因自动通过而完成。
+
+## 用户授权的上游首批六项修复（2026-11-17）
+
+以40065b99为起点，在`merge/upstream-small-fixes-20261117`适配66124f63、97b4f5b7、e8bc688b、68e2c544、a4df38b6、5905b06d；不整包merge，不升级依赖／版本、不恢复Pro、不引入新首页／模块JS。本次按后续授权提交已验收补丁与正式记录，不Push，main引用不变；来源、逐文件适配、命令及回滚见[首批记录](upstream-small-batch-2026-11-17.md)。保留已有媒体真正拆除／临时覆盖区分，搜索仍为Fork推入页，不加上游搜索Tab根标题锚点。
+
+原始RED：7项单元行为失败、iPad静置最近记录2项UI失败。修复后xcresult为green-unit7通过、iPad搜索3通过、iPhone回归56通过／3跳过、iPad回归58通过／3跳过、iOS26.2无障碍3通过；所有run最终`** TEST SUCCEEDED **`。跳过均为私人EPUB缺失，不计通过；另用自建图片／Unicode／装饰块及既有合成图片用例补测，5通过／0跳过。集合含重复，不相加宣称独立总数。
+
+同机固定HTML的857790字符分页由16372ms变1576ms，页数1362保持；4倍正文耗时比9.24→3.56，是本次单次模拟器证据，不外推真机。首次fixture编译错误与补图测试缺import均保留为失败记录，修正后才实际通过。最低iOS17、真机、实际VoiceOver／连续朗读、真实源及云产物／自签仍未验收；不宣布S8或发布完成。
+
+`ruby scripts/check_localizations.rb`退出0，5语言4285键、Modules／Targets2972 literal key均齐全。交付检查`python3 .artifacts/upstream-small-batch-2026-11-17/check-delivery.py`输出`SMALL_BATCH_CHECK_OK docs=7 localLinks=108 swiftFiles=12 greenRuns=6 dependencyChanges=0 stagedFiles=0`，`git diff --check`退出0；仅本地留存脚本／日志，不提交源包或其他用户资料。
+
+## 后续复审核对与发布表述修正（2026-11-17，先前只读快照）
+
+核对固定`main@40065b99`：`git ls-remote origin refs/tags/reader-fork-v3.0-rc.1 refs/heads/main`实查main为`40065b99`、rc.1为`23b7d7de`；本地`upstream/main`快照`5671a240`相对`dbd25567`为36提交，没有fetch或实际merge。历史build 5的`cb28a56e…`产物对应`5ac9b1b9`，不是当前main；新RC必须以同一目标commit／同一产物建立云归档与自签启动验收，旧开发签名成功不替代年度自签或新代码。
+
+更正历史修复记录中a0ff4497已提交／推送状态；复审表述明确活性检查不写文章／已读／进度但源脚本仍可能更新变量／Cookie／认证，不能写成“完全不写状态”。发布说明及S8清单标明rc.1的已知CloudKit启动风险、不推荐安装，保留历史tag而不强制移动／删除或自动创建Release。用户复审原稿先备份到本地`.artifacts/review-2026-11-17/`，仅按本次明确要求精准修正文义。
+
+[固定上游评估](upstream-5671a240-assessment.md)实查36提交、289文件、两侧45重叠路径；`git merge-tree --write-tree --name-only 40065b99 5671a240`退出1，20冲突路径，仅生成Git对象，无MERGE_HEAD或实际合并。建议小批稳定性修复，不把新增Pro、模块JS、新首页与YueduCoreText0.19.0作为RSS发布必需项。`bash scripts/sim.sh doctor`退出0，仅26.2／27.2 runtime、无17.x。
+
+文档检查命令`python3 .artifacts/review-2026-11-17/check-review-docs.py`实际输出`REVIEW_DOCS_CHECK_OK files=6 localLinks=100 upstreamCommits=36 conflicts=20 head=40065b99 UTF8_LF=true`；检查UTF-8／LF／代码围栏、本地链接、36提交覆盖、发布口径与未实际合并状态。本地脚本不纳入提交。
+
+本轮只有文档修正、只读Git与环境核查，不重跑／宣称Swift、IPA或设备验收；原文档中的历史执行证据保持其对应提交。验收范围、原始失败及回滚记录不改为阶段通过。
+
 ## 订阅入口、方格与源维护／活性检查（2026-11-17）
 
 按用户确认移除资源库RSS副入口，保留独立订阅Tab；新增记忆的树型／原生方格切换与平铺分类筛选、源级多选／全选当前列表／确认删除，复用唯一RSSStore。主动活性验证走动态启动页／首分类首列表／标准Feed，不要求搜索接口；合法空、网页可达、仅HTML生成、直接媒体需人工、交互、失败和取消分开，跳过cacheFirst且不写文章。停用源诊断票据与正常读取分离，正常读取仍拒绝停用源。
@@ -48,7 +84,7 @@ iPhone/iPad iOS27.2 Simulator各28项／4 suites合同通过，`** TEST SUCCEEDE
 | 媒体前置/#36 | 当前0f31f857基线加诊断后，正常Dev两设备最新各36/36；完整S6也实际执行音频通过。用户确认Mac音频正常，afplay不作门槛；旧间歇失败根因未唯一定位，见[音频记录](../../Technotes/RSSSimulatorAudioClock.md) |
 | S6 | 当前模拟器门槛通过（按用户确认范围）：iPhone/iPad各S5 270/38、S6 99/19 + 网页UI 3项，零失败零跳过。2项真实音频输出时钟PoC移出模拟器集合但保留源码；稳定15a29143真机S6 101/101覆盖HTTP/本地音频时钟，详见[S7范围说明](s7-restore-interruption.md)和[真机记录](device-s6-15a29143.md) |
 | S7 | 双设备自动门槛通过：各S5 270/38、S6 99/19 + UI 3、S7 93/20，零失败零跳过；推送前补齐Release构建及81项回归，见[S7记录](s7-restore-interruption.md)。本批未安装真机，发布项待验 |
-| S8 | 进行中：307源配置/两页刷新规模、受控RSS分页/正文/状态已有证据；完整批次双设备曾各37项/9 suites补R014真实图片、R141真实MP3原生资源层/进度重载与RSS快速退出修复；随后媒体再次失败，本地音频对照两端ready/clock失败；用户纠偏后同一隔离App/同文件XCTest↔独立App双端均ready且时钟推进，原用例、PCM及R141受控真实MP3双端复查通过；转交的交错A/B又以3轮交替先行、5对采样/10次探针提高了对宿主顺序/单次预热混杂的排除置信度，但当天仍未复现停滞，#77根因未知、不能外推真机或永久修复。最新nonmedia子集两端22项/5 suites通过，新增未知私有头发出前阻断与R128一页无图停止，显式排除R141 MP3、R146 TLS图和R217实图；R217另有独立双设备单图真实解码通过，R146不覆盖。独立R146图片连接两端-1202/SSL -9814证书链时效错误，代码审阅未发现客户端TLS绕过或图片解析缺陷，#78仍是外部证书/信任链前置条件；B122原词无匹配DOM/0条、源检查词12节点/12条，搜索输入响应差异已收敛，不修解析器。按用户决定#77转监控、#78改列外部前置条件后，full门槛双设备各47项/12 suites首次整套实跑通过，原始本地音频合同各1项通过。当前提交Release模拟器编译通过；用户确认保留iframe／JS，R265/R267实播转#58人工、不阻塞其他开发。真实登录、B122后续图片、R146图片（未验收）及设备／发布仍待验，见[收口清单](s8-release-checklist.md)；书源漫画／视频问题独立 |
+| S8 | 进行中：当前修复分支full双设备各68项／16 suites通过，R217仅独立维护的测试配置通过、原包仍失效，见[本轮记录](rss-external-review-fixes-2026-11-17.md)；人工／发布未接受。以下为历史证据：307源配置/两页刷新规模、受控RSS分页/正文/状态已有证据；完整批次双设备曾各37项/9 suites补R014真实图片、R141真实MP3原生资源层/进度重载与RSS快速退出修复；随后媒体再次失败，本地音频对照两端ready/clock失败；用户纠偏后同一隔离App/同文件XCTest↔独立App双端均ready且时钟推进，原用例、PCM及R141受控真实MP3双端复查通过；转交的交错A/B又以3轮交替先行、5对采样/10次探针提高了对宿主顺序/单次预热混杂的排除置信度，但当天仍未复现停滞，#77根因未知、不能外推真机或永久修复。最新nonmedia子集两端22项/5 suites通过，新增未知私有头发出前阻断与R128一页无图停止，显式排除R141 MP3、R146 TLS图和R217实图；R217另有独立双设备单图真实解码通过，R146不覆盖。独立R146图片连接两端-1202/SSL -9814证书链时效错误，代码审阅未发现客户端TLS绕过或图片解析缺陷，#78仍是外部证书/信任链前置条件；B122原词无匹配DOM/0条、源检查词12节点/12条，搜索输入响应差异已收敛，不修解析器。按用户决定#77转监控、#78改列外部前置条件后，full门槛双设备各47项/12 suites首次整套实跑通过，原始本地音频合同各1项通过。当前提交Release模拟器编译通过；用户确认保留iframe／JS，R265/R267实播转#58人工、不阻塞其他开发。真实登录、B122后续图片、R146图片（未验收）及设备／发布仍待验，见[收口清单](s8-release-checklist.md)；书源漫画／视频问题独立 |
 
 ## 3.0首次Actions归档与SDK阻碍（2026-11-15）
 

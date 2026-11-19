@@ -447,9 +447,10 @@ struct RSSItem: Codable, Identifiable, Sendable {
                 : mime.hasPrefix("audio/") ? RSSAttachmentKind.audio
                 : sourceContentType?.rawValue == RSSContentType.image.rawValue ? RSSAttachmentKind.image
                 : sourceContentType?.rawValue == RSSContentType.video.rawValue ? RSSAttachmentKind.video
-                : nil
-            guard let kind else { return nil }
-            return RSSMediaReference(key: "attachment:\(index):\(kind.rawValue):\(mime)", articleID: id, kind: kind, url: original.absoluteString)
+                : RSSAttachmentKind.other
+            return RSSMediaReference(key: "attachment:\(index):\(kind.rawValue):\(mime)", articleID: id, kind: kind, url: original.absoluteString,
+                mimeType: attachment.mimeType, title: attachment.title, sizeInBytes: attachment.sizeInBytes,
+                durationInSeconds: attachment.durationInSeconds)
         }
         media = references.isEmpty ? nil : references
         // 普通Feed仍打开安全文章；附件是用户主动选择的媒体，不将整篇Feed改为type=1/2。

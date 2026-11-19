@@ -237,7 +237,9 @@ struct RSSFeedView: View {
 
     var body: some View {
         RSSArticleCollection(articles: session.openTarget == nil ? articles : [], presentation: articlePresentation,
-            header: { collectionHeader }, footer: { collectionFooter }, row: { articleButton($0) })
+            header: { collectionHeader }, footer: { collectionFooter }, row: { articleButton($0) },
+            preloadDistance: currentSource.preload == true && articlePresentation == .masonry ? 5 : 1,
+            onNearEnd: { await session.preloadIfNeeded() })
         .softScrollEdges()
         .toolbarTitleDisplayMode(.inline)
         .themedAppSurface(for: .rss)
