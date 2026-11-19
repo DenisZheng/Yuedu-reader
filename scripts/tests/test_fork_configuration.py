@@ -16,6 +16,12 @@ def project_objects(content):
     return json.loads(result.stdout)["objects"]
 
 
+def target_settings(objects, name):
+    target, = (item for item in objects.values() if item.get("isa") == "PBXNativeTarget" and item["name"] == name)
+    configurations = objects[target["buildConfigurationList"]]["buildConfigurations"]
+    return {objects[key]["name"]: objects[key]["buildSettings"] for key in configurations}
+
+
 class ForkConfigurationTests(unittest.TestCase):
     def test_no_google_products_resources_or_billing_configuration(self):
         project = (ROOT / "Yuedu-Reader.xcodeproj/project.pbxproj").read_text()
@@ -74,29 +80,35 @@ class ForkConfigurationTests(unittest.TestCase):
                 self.assertNotIn('"group.com.zhangruilin.yuedureader"', path.read_text(), str(path))
                 self.assertNotIn('"iCloud.com.zhangruilin.yuedureader"', path.read_text(), str(path))
 
-    def test_legadopro_display_name_preserves_data_identity(self):
+    def test_legadopro_display_name_in_both_configurations(self):
         objects = project_objects((ROOT / "Yuedu-Reader.xcodeproj/project.pbxproj").read_bytes())
-        main_settings = [item["buildSettings"] for item in objects.values()
-                         if item.get("buildSettings", {}).get("PRODUCT_BUNDLE_IDENTIFIER") == "dev.denis.readerfork.dev"]
-        self.assertEqual(len(main_settings), 2)
-        self.assertTrue(all(s["INFOPLIST_KEY_CFBundleDisplayName"] == "LegadoPro" for s in main_settings))
+        main_settings = target_settings(objects, "yuedu app")
+        self.assertEqual(set(main_settings), {"Debug", "Release"})
+        self.assertTrue(all(s["INFOPLIST_KEY_CFBundleDisplayName"] == "LegadoPro" for s in main_settings.values()))
         for lang in ("zh-Hans", "zh-Hant", "en", "ja", "ko"):
             file = ROOT / "Resources" / (lang + ".lproj") / "InfoPlist.strings"
             values = json.loads(subprocess.check_output(["plutil", "-convert", "json", "-o", "-", str(file)]))
             self.assertEqual(values["CFBundleDisplayName"], "LegadoPro")
 
-    def test_bundle_ids_and_signature_do_not_reuse_upstream(self):
+    def test_release_bundle_ids_are_distinct_from_development(self):
         objects = project_objects((ROOT / "Yuedu-Reader.xcodeproj/project.pbxproj").read_bytes())
-        ids = set()
+        debug = "dev.denis.readerfork.dev"
+        release = "com.deniszheng.legadopro"
+        for name, suffix, embedded in [
+            ("yuedu app", "", True),
+            ("Yuedu-Reader Widget", ".widget", True),
+            ("Yuedu-Reader ShareExtension", ".shareextension", True),
+            ("yuedu appTests", ".tests", False),
+            ("yuedu appUITests", ".uitests", False),
+        ]:
+            with self.subTest(target=name):
+                settings = target_settings(objects, name)
+                self.assertEqual({config: value["PRODUCT_BUNDLE_IDENTIFIER"] for config, value in settings.items()},
+                                 {"Debug": debug + suffix, "Release": (release if embedded else debug) + suffix})
         for item in objects.values():
             settings = item.get("buildSettings", {})
-            if "PRODUCT_BUNDLE_IDENTIFIER" in settings:
-                value = settings["PRODUCT_BUNDLE_IDENTIFIER"]
-                self.assertTrue(value.startswith("dev.denis.readerfork.dev"), value)
-                ids.add(value)
             if "DEVELOPMENT_TEAM" in settings:
                 self.assertEqual(settings["DEVELOPMENT_TEAM"], "")
-        self.assertEqual(len(ids), 5)
 
     def test_language_and_isolation_settings_unchanged(self):
         before = subprocess.check_output(["git", "show", "HEAD:Yuedu-Reader.xcodeproj/project.pbxproj"], cwd=ROOT)

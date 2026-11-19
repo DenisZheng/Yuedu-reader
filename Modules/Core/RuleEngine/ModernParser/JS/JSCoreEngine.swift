@@ -316,7 +316,8 @@ class JSCoreEngine {
 
     // MARK: - Resolved source headers
 
-    private var resolvedHeaderCache: [String: String]?
+    // 缓存源声明的头；应用的缺省 UA 不属于源配置。
+    private var declaredHeaderCache: [String: String]?
     private var resolvedHeaderLoginInfoRevision: UInt64?
     private let resolvedHeaderCacheLock = NSLock()
     private var resolvingHeaderGeneration: UInt64?
@@ -347,7 +348,7 @@ class JSCoreEngine {
     ///
     /// Never called on the main thread: the source's host resolves it, and readers that
     /// cannot wait read `headerSnapshot` (`BookSource.parsedHeaders`).
-    func resolvedSourceHeaders() -> [String: String] {
+    func resolvedSourceHeaders(includesLegadoDefaultUserAgent: Bool = true) -> [String: String] {
         // `java.ajaxAll` waits on worker requests while occupying the JS queue, so no worker
         // may reach here: hopping onto that queue deadlocks the batch until its timeout.
         // Every request reads its headers on the JS thread instead — `ajaxAll` resolves them
@@ -357,9 +358,9 @@ class JSCoreEngine {
             let currentRevision = currentLoginInfoRevision()
             let currentGeneration = withQueueLock { generation }
             resolvedHeaderCacheLock.lock()
-            if sourcePropertiesJSON != nil, let cached = resolvedHeaderCache, resolvedHeaderLoginInfoRevision == currentRevision {
+            if sourcePropertiesJSON != nil, let cached = declaredHeaderCache, resolvedHeaderLoginInfoRevision == currentRevision {
                 resolvedHeaderCacheLock.unlock()
-                return cached
+                return includesLegadoDefaultUserAgent && bookSource != nil ? BookSource.withLegadoUserAgent(cached) : cached
             }
             guard resolvingHeaderGeneration != currentGeneration else {
                 resolvedHeaderCacheLock.unlock()
@@ -372,16 +373,18 @@ class JSCoreEngine {
                 if resolvingHeaderGeneration == currentGeneration { resolvingHeaderGeneration = nil }
                 resolvedHeaderCacheLock.unlock()
             }
-            let headers = bookSource.map { BookSource.withLegadoUserAgent(parseHeaders($0.header)) } ?? [:]
+            let source = bookSource
+            let declared = source.map { parseHeaders($0.header) } ?? [:]
+            let legacy = source == nil ? declared : BookSource.withLegadoUserAgent(declared)
             withQueueLock {
                 guard generation == currentGeneration else { return }
                 resolvedHeaderCacheLock.lock()
-                resolvedHeaderCache = headers
+                declaredHeaderCache = declared
                 resolvedHeaderLoginInfoRevision = currentRevision
                 resolvedHeaderCacheLock.unlock()
-                headerSnapshot?.store(headers)
+                headerSnapshot?.store(legacy)
             }
-            return headers
+            return includesLegadoDefaultUserAgent ? legacy : declared
         }
         switch onJSQueueWithTimeout(work) {
         case .completed(let headers): return headers
@@ -411,7 +414,7 @@ class JSCoreEngine {
 
     private func clearResolvedHeaderCache() {
         resolvedHeaderCacheLock.lock()
-        resolvedHeaderCache = nil
+        declaredHeaderCache = nil
         resolvedHeaderLoginInfoRevision = nil
         resolvingHeaderGeneration = nil
         resolvedHeaderCacheLock.unlock()

@@ -14,10 +14,10 @@ struct RSSBrowserSessionTests {
     }
 
     @Test("普通singleUrl从浏览器发起并在原会话完成表单，保留来源、UA、Cookie与DOM存储",
-          arguments: [(false, true), (true, true), (false, false)])
-    func documentAndPostShareBrowserSession(directWebKitControl: Bool, customUserAgent: Bool) async throws {
+          arguments: [(false, "ReaderBrowserSessionFixture/1" as String?), (true, "ReaderBrowserSessionFixture/1"),
+                      (false, nil), (false, BookSource.legadoDefaultUserAgent)])
+    func documentAndPostShareBrowserSession(directWebKitControl: Bool, userAgent: String?) async throws {
         let cookie = "fixture" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        let userAgent = customUserAgent ? "ReaderBrowserSessionFixture/1" : nil
         var requiredHeaders = ["cookie": cookie + "=scoped"]
         if let userAgent { requiredHeaders["user-agent"] = userAgent }
         let firstHTML = """
@@ -49,9 +49,14 @@ struct RSSBrowserSessionTests {
         source.singleUrl = true
         source.cacheFirst = false
         source.enabledCookieJar = true
-        source.header = userAgent.map { "{\"User-Agent\":\"" + $0 + "\"}" } ?? "{}"
+        source.header = userAgent.map { "{\"uSeR-aGeNt\":\"" + $0 + "\"}" } ?? "{}"
         source.enableJs = true
         let target = try #require(try await RSSOpenTarget.resolve(source: source))
+        let expectedUserAgent = userAgent ?? defaultPhoneUserAgent
+        if case .request(let request, let context) = target {
+            #expect(request.value(forHTTPHeaderField: "User-Agent") == expectedUserAgent)
+            #expect(context?.headers.first { $0.key.lowercased() == "user-agent" }?.value == expectedUserAgent)
+        } else { Issue.record("未生成网页请求") }
         let state = State()
         let window: UIWindow?
         let control: RSSPoCWebPage?
@@ -80,8 +85,7 @@ struct RSSBrowserSessionTests {
         #expect(try await web.evaluateJavaScript("location.href") as? String == source.url)
         #expect(try await web.evaluateJavaScript("window.storageReady") as? Bool == true)
         let effectiveUserAgent = try #require(try await web.evaluateJavaScript("navigator.userAgent") as? String)
-        if let userAgent { #expect(effectiveUserAgent == userAgent) }
-        else { #expect(effectiveUserAgent.contains("AppleWebKit/")) }
+        #expect(effectiveUserAgent == expectedUserAgent)
         #expect(server.requests.first?.headers["user-agent"] == effectiveUserAgent)
         #expect(server.requests.filter { $0.path == "/start" }.count == 1)
         #expect(server.requests.first?.headers["sec-fetch-mode"] == "navigate", "首文档必须真实浏览器导航，不能仅将原生取得的HTML灌入浏览器")
@@ -143,6 +147,8 @@ struct RSSBrowserSessionTests {
         #expect(!webNavigation.canGoBack)
         #expect(server.requests.count == 1)
         #expect((server.requests[0].headers["sec-fetch-mode"] == "navigate") == !sharedExecutor)
+        let browserUserAgent = try await web.evaluateJavaScript("navigator.userAgent") as? String
+        #expect(browserUserAgent == defaultPhoneUserAgent)
 
         _ = try await web.evaluateJavaScript("document.getElementById('child').click(); void 0")
         let childDeadline = ContinuousClock.now + .seconds(8)
@@ -168,6 +174,8 @@ struct RSSBrowserSessionTests {
         try #require(web.url?.path == "/home" && !web.isLoading && !webNavigation.canGoBack)
         #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Home")
         #expect(server.requests.filter { $0.path == "/child" }.count == 2)
+        let userAgents = Set(server.requests.map { $0.headers["user-agent"] })
+        #expect(userAgents == [defaultPhoneUserAgent])
         if sharedExecutor {
             #expect(server.requests.allSatisfy { $0.headers["x-history"] == "fixture" && $0.headers["sec-fetch-mode"] == nil })
             #expect(try await web.evaluateJavaScript("window.readHistoryFixture()") as? String == "", "返回后原页面桥必须绑定到恢复后的请求上下文")
@@ -207,6 +215,7 @@ struct RSSBrowserSessionTests {
         try #require(!state.loading && state.error == nil)
         let web = try #require(findWeb(window))
         #expect(!webNavigation.canGoBack)
+        if injectedHTML { #expect(web.customUserAgent == defaultPhoneUserAgent) }
         let initialURL = web.url
         _ = try await web.evaluateJavaScript(destination == "hash" ? "location.hash = 'child'; void 0" : "history.pushState({}, '', '\(destination)'); updatePage(); void 0")
         let childDeadline = ContinuousClock.now + .seconds(8)
@@ -247,6 +256,8 @@ struct RSSBrowserSessionTests {
         while state.loading, ContinuousClock.now < firstDeadline { await Task.yield() }
         try #require(!state.loading && state.error == nil)
         let web = try #require(findWeb(window))
+        #expect(server.requests.first?.headers["user-agent"] == defaultPhoneUserAgent)
+        #expect(web.customUserAgent == defaultPhoneUserAgent)
         _ = try await web.evaluateJavaScript("document.getElementById('child').click(); void 0")
         let deadline = ContinuousClock.now + .seconds(8)
         while (!webNavigation.canGoBack || state.loading), ContinuousClock.now < deadline { await Task.yield() }
@@ -360,6 +371,11 @@ struct RSSBrowserSessionTests {
         #expect(origin.requests.count == 1 && destination.requests.count == 1)
         let web = try #require(findWeb(window))
         #expect(try await web.evaluateJavaScript("document.getElementById('final').textContent") as? String == "Final")
+    }
+
+    private var defaultPhoneUserAgent: String {
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return "Mozilla/5.0 (iPhone; CPU iPhone OS \(os.majorVersion)_\(os.minorVersion) like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/\(os.majorVersion).\(os.minorVersion) Mobile/15E148 Safari/604.1"
     }
 
     private func host(_ view: some View) throws -> UIWindow {

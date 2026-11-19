@@ -8,6 +8,22 @@ import os
 @Suite("RSS web request contract", .serialized)
 @MainActor
 struct RSSWebRequestTests {
+    @Test("网页使用脚本声明的 UA，URL options 可以显式覆盖它")
+    func explicitPageUserAgentPrecedence() async throws {
+        let base = "https://rss-ua-" + UUID().uuidString.lowercased() + ".invalid"
+        var source = RSSSource(name: "Web user agent fixture", url: base)
+        source.header = #"@js:JSON.stringify({"user-agent":"RSSHeaderFixture/1"})"#
+        for (suffix, expected) in [
+            ("/article", "RSSHeaderFixture/1"),
+            (#"/article,{"headers":{"USER-AGENT":"RSSOptionsFixture/1"}}"#, "RSSOptionsFixture/1")
+        ] {
+            let target = try await RSSOpenTarget.rulePage(base + suffix, source: source, owner: nil)
+            guard case .request(let request, let context) = target else { Issue.record("未生成网页请求"); return }
+            #expect(request.value(forHTTPHeaderField: "User-Agent") == expected)
+            #expect(context?.headers.first { $0.key.lowercased() == "user-agent" }?.value == expected)
+        }
+    }
+
     @Test("实际首文档保留charset/bodyJs和登录检查；动态URL及POST仅执行一次")
     func preparedRequestReachesSharedResponsePipeline() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

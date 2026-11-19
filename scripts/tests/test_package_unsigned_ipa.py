@@ -78,6 +78,11 @@ class UnsignedIPAPackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Fork Bundle ID"):
             PACKER.package(self.archive, self.output)
 
+    def test_debug_bundle_id_cannot_be_packaged_as_release(self):
+        self.change_info(self.app, CFBundleIdentifier="dev.denis.readerfork.dev")
+        with self.assertRaisesRegex(ValueError, "Fork Bundle ID"):
+            PACKER.package(self.archive, self.output)
+
     def test_missing_executable_is_rejected(self):
         (self.app / "Executable").unlink()
         with self.assertRaisesRegex(ValueError, "可执行文件"):

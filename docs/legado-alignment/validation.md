@@ -2,6 +2,77 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 合入 main（2026-11-19）
+
+用户随后明确要求合入主分支并切换到 main。修复分支 `fix/rss-review-20261117` 的 `3cc914dc576d5af1b145738e896347baf11c361a` 已正常推送；本地 main 先用 `git merge --ff-only origin/main` 同步到远端 `9a88554c`，再以 `git merge --no-ff --no-commit fix/rss-review-20261117` 无冲突合入。补本条记录前，`git write-tree` 与 `3cc914dc^{tree}` 同为 `07d6a2844f52c3d2f3e87a840764a8092d557c0b`：源码、测试与配置未发生额外变化，复用本会话已执行的 25 项 RSS／47 项稳定性回归和 Release 归档证据，不重复 build／测试或声称新提交重新生成过 IPA。合并提交只追加此条交付记录，保留两个父级历史，不 force／rebase、不移动 tag 或发布，未跟踪的用户包／原稿和构建产物保持原样。
+
+## 本轮提交与推送授权（2026-11-19）
+
+用户在上游移植、回归和下载目录 IPA 交付完成后要求提交并推送当前修复分支。提交范围为本轮 RSS 网页 UA、Release 身份、上游首批三项、正式测试和记录；原始源包、用户审查原稿、IPA／归档／日志和其他未跟踪目录不纳入。下文“未提交／未推送”保留各阶段当时状态，不代表后续操作授权。当前 IPA 是提交前的已验证工作区产物，源码与待提交代码一致，但内嵌 GitCommitSHA 仍为构建时的 `8f699695`；不将其说成新提交重新归档的产物，不合并 main、改 tag 或发布。
+
+## 下载目录新版 IPA（2026-11-19）
+
+用户在本批上游移植过程中要求编译 IPA 到下载目录。47 项定向回归通过后，使用当前工作区归档，包含 `75381a89`、`2a66e1e2`、`82177e65` 的适配和此前 RSS 网页 UA 修复；不是之前已交付的旧 IPA。源码差异快照保存后，归档至完成未变化，不自动提交、推送或发布。
+
+Xcode 27.2（27B52）、iPhoneOS SDK 27.2，`xcodebuild archive -project Yuedu-Reader.xcodeproj -scheme Reader-Fork-Dev -configuration Release -destination 'generic/platform=iOS'`，保留 `-disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile`，签名参数为 `CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM=`，未新建 DerivedData 或 clean。归档和 `python3 -B scripts/package_unsigned_ipa.py --archive … --output …` 均退出 0，最终 `** ARCHIVE SUCCEEDED **`。
+
+实际成品位于系统 Downloads 下 `LegadoPro-20261119-211604-wjiAXy/LegadoPro-unsigned.ipa`，36,648,931 B，SHA-256 `86acaf5a41f15a4cde2be9e1798810cbfbf715e980b69c555c5ae3ed6aad6822`，同目录 `.sha256` 一致。真实 ZIP／主包及两个扩展／可执行文件与归档字节一致／arm64 iPhoneOS／3.0（5）／最低声明 17.0／无签名无 profile 均通过核验。主包 `com.deniszheng.legadopro`，扩展分别为 `.widget`、`.shareextension`。归档、源码差异和 `verification.log` 保留在未跟踪 `.artifacts/legadopro-upstream-20261119-HTAeXr/`，未覆盖旧包。
+
+需要用户自签后安装；未做真机启动、Cloudflare 验证、页脚视觉或共享组权限验收。本次只生成新的本地安装文件，不改变既有用户数据；安装、数据恢复与签名授权不由归档成功证明。
+
+## 上游第一批三项移植与回归（2026-11-19）
+
+用户批准后，在 `8f699695` 当前工作区移植 `75381a89`、`2a66e1e2`、`82177e65`，保留 RSS 网页 UA 和 Release 包名修改，不整包 merge／切分支／提交／推送。RED 实际 5 项、1 通过／4 失败：三十章后保留 52 份完整排版、内存警告后仍有 4 份、两个封面空头期望过时。GREEN 的同一输入保留 8 份、警告后 0 份；iOS 27.2 iPhone 模拟器串行回归 47 项／9 suites 全通过，最终 `** TEST SUCCEEDED **`、退出 0。内存增长单次观察 40.8→9.1 MB，不外推实机。页脚原始视觉与真机／iPad／最低系统未验；用户样本没有 `c51b91a0` 接口引用，本批不扩大 Cookie 能力。命令、来源、样本统计与回滚见[本批记录](upstream-stability-batch-2026-11-19.md)。
+
+## 上游 78199517 只读评估（2026-11-19）
+
+上游 `main` 自上次评估的 `5671a240` 起新增 36 个提交。本轮只做补丁适用性检查和整包合并预演，没有合入、构建或运行上游测试；工作区、暂存区和引用前后一致。结论与逐项取舍见[评估记录](upstream-78199517-assessment.md)。
+
+## 本机试用 IPA 与正式版 Bundle ID（2026-11-19）
+
+应用户要求在 `8f699695` 的当前工作区本机归档，包含下节 RSS 网页 UA 修复。Release 主 App 为 `com.deniszheng.legadopro`，Widget 与分享扩展分别为 `.widget` 与 `.shareextension`；Debug、App Group、URL scheme、iCloud 停用与签名项目设置保持原样。[身份决定](../adr/0006-pause-icloud-for-current-release.md)不等于数据迁移；旧 App 的沙盒和凭据不会自动进入新安装。
+
+环境：Xcode 27.2（27B52）、iPhoneOS SDK 27.2。从仓库根目录运行：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+work="$(mktemp -d -t legadopro-local)"
+xcodebuild archive -project Yuedu-Reader.xcodeproj -scheme Reader-Fork-Dev \
+  -configuration Release -destination 'generic/platform=iOS' \
+  -archivePath "$work/LegadoPro.xcarchive" -resultBundlePath "$work/LegadoProArchive.xcresult" \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
+  > "$work/archive.log" 2>&1
+python3 -B scripts/package_unsigned_ipa.py --archive "$work/LegadoPro.xcarchive" --output "$work/output"
+```
+
+实际目录 `.artifacts/legadopro-local-20261119-lg0A2f/`，归档与包装均退出 0，`** ARCHIVE SUCCEEDED **`。最终 `output/LegadoPro-unsigned.ipa` 36,648,128 B，SHA-256 `11f40b94b3e0f2f3152cf67e2e67dce16e0d6d6770ba053442d6d89f0d641bc6`。ZIP 内容、实际 Info.plist、两个扩展、Mach-O arm64/iPhoneOS（3.0／5，最低声明 iOS 17.0）、无签名／无 profile 已核对，见同目录 `verification.log`。`python3 -B -m unittest discover -s scripts/tests -p 'test_fork_configuration.py'` 9 项 OK、以 `test_*ipa*.py` 为筛选 20 项 OK。未使用证书、未安装、未运行云构建或发布；签名、共享组授权及实源验证由实际安装后确认。配置回滚用同目录 `before/` 对照，仅恢复本轮身份和打包合同差异，不撤销 RSS 补丁或改动用户数据。
+
+## RSS 网页缺省 User-Agent（2026-11-19）
+
+在 `8f699695` 复现（相关请求代码与报告基线 `9a88554c` 一致）：`header: {}` 并非不发送 UA。RSS 适配复用书源脚本运行时，`58ab9cb2` 加入的 `JSCoreEngine.resolvedSourceHeaders` 会先补桌面 Chrome UA，再由 `applySourceAuthentication` 合入请求。对照[先前的单网页诊断](rss-single-page-diagnostics.md)，`64149fd1` 修的是同一原生 WebKit 会话内的请求连续性；单个实源的恢复还伴有网络节点和源头变化，不能证明本次循环也是同一原因。
+
+网页准备读取源实际声明的头（JSON 或脚本），在 URL options 与同源导航上下文合入后，只有缺少 UA 才补按系统主次版本生成的手机 Safari UA；不按字符串判定来源，显式配置相同的桌面 UA 仍保留。直接传入的网页请求也在发送前补默认值（文档缓存键随实际 UA 自然失效）；无请求上下文的 HTML 由 WebView 使用同一默认值。书源、标准 Feed 刷新、独立图片/媒体请求、Cookie 和导航准入不变。
+
+本地合成 HTTP 页面复用了生产 WebView 和请求执行器。原版 RED 聚焦 3 个测试、12 条 UA 断言失败：请求快照与 `navigator.userAgent` 实际是桌面 UA；第一次只在缺头时补值，仍失败，并有一次既有 POST 返回测试在截止前未出现历史项；未放宽等待，最终该用例也通过。最终在 Xcode 27.2（27B52）、iOS 27.2 iPhone 模拟器运行：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+result_dir="$(mktemp -d -t yuedu-rss-web-ua)"
+bash scripts/xctest.sh -l "$result_dir/final.log" -- -resultBundlePath "$result_dir/final.xcresult" \
+  -only-testing:'yuedu appTests/RSSBrowserSessionTests' \
+  -only-testing:'yuedu appTests/RSSWebRequestTests' \
+  -only-testing:'yuedu appTests/RSSWebDocumentCacheTests' \
+  -only-testing:'yuedu appTests/RSSArticleFullTextRequestTests' \
+  -only-testing:'yuedu appTests/RSSNativeWebFlowTests/loginPageOwnsItsForm()' \
+  -only-testing:'yuedu appTests/LegadoDefaultUserAgentTests' \
+  -only-testing:'yuedu appTests/HeaderRulePerRequestTests/analyzeUrlRequestEvaluatesOnce()'
+```
+
+`Test run with 25 tests in 7 suites passed`、`** TEST SUCCEEDED **`、退出 0；xcresult 为 25/25 通过（含参数组合共 39 个通过项），0 失败/跳过。覆盖原生首请求和表单、文档首请求和后续导航、无上下文 HTML、显式 UA 和原缓存/登录边界。未访问实际受影响站点或进行真机验证，Cloudflare 是否仍循环需用户用原出问题源手动复测。回滚只需反向应用本次代码和测试差异，无源配置或持久数据迁移。
+
 ## 当前修复分支推送与本机IPA（2026-11-18）
 
 已提交并Push `fix/rss-review-20261117@890285fa`（37文件793增／59删，包含本地首批`9ee66fb5`），远端核对一致，main仍40065b99；不合并main／改tag／发布。用户最新决定取消关机、推送后本机编译IPA。本机Xcode27.2（27B52）／iPhoneOS27.2，复用`Reader-Fork-Dev` Release和现有unsigned打包器，`xcodebuild archive`退出0／`** ARCHIVE SUCCEEDED **`，`python3 -B scripts/package_unsigned_ipa.py`退出0，IPA合同19项／OK。

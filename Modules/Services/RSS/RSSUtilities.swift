@@ -129,12 +129,21 @@ enum RSSFeedResponse {
 }
 
 enum RSSRequestFactory {
-    private static let userAgent: String = {
-        let webKitVersion = "605.1.15"
-        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
-        let osVersionString = "\(osVersion.majorVersion)_\(osVersion.minorVersion)"
-        return "Mozilla/5.0 (iPhone; CPU iPhone OS \(osVersionString) like Mac OS X) AppleWebKit/\(webKitVersion) (KHTML, like Gecko) yuedu/1.0"
-    }()
+    private static let osVersion = ProcessInfo.processInfo.operatingSystemVersion
+    private static let phoneWebKitUserAgentPrefix =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS \(osVersion.majorVersion)_\(osVersion.minorVersion) like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+    private static let userAgent = "\(phoneWebKitUserAgentPrefix) yuedu/1.0"
+
+    /// RSS 网页请求和 WKWebView 共用当前系统版本的手机 Safari UA，标准 Feed 保持原 UA。
+    static let webPageUserAgent =
+        "\(phoneWebKitUserAgentPrefix) Version/\(osVersion.majorVersion).\(osVersion.minorVersion) Mobile/15E148 Safari/604.1"
+
+    static func withDefaultWebPageUserAgent(_ request: URLRequest) -> URLRequest {
+        guard request.value(forHTTPHeaderField: "User-Agent") == nil else { return request }
+        var request = request
+        request.setValue(webPageUserAgent, forHTTPHeaderField: "User-Agent")
+        return request
+    }
 
     static func applyHeaders(to request: inout URLRequest) {
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")

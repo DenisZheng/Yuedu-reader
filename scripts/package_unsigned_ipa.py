@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import zipfile
 
-BUNDLE_ID = "dev.denis.readerfork.dev"
+BUNDLE_ID = "com.deniszheng.legadopro"
 APP_NAME = "LegadoPro"
 IPA_NAME = "LegadoPro-unsigned.ipa"
 EXTENSIONS = {BUNDLE_ID + ".widget", BUNDLE_ID + ".shareextension"}

@@ -682,7 +682,8 @@ struct BookSourceProviderTests {
         }
         #expect(frozen.book.name == "甲")
         #expect(record.key.instance == SourceInstanceKey(type: .bookSource, id: source.bookSourceUrl))
-        #expect(summary.cover == .remote(URL(string: "https://src.test/c/%E7%94%B2.jpg")!, headers: [:]))
+        // 上游 82177e65：书源未声明 header 时，封面仍沿用 Legado 默认 UA。
+        #expect(summary.cover == .remote(URL(string: "https://src.test/c/%E7%94%B2.jpg")!, headers: BookSource.withLegadoUserAgent([:])))
         #expect(summary.blurb?.contains("<p>") == false)
     }
 

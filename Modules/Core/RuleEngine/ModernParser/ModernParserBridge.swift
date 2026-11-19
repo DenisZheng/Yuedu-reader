@@ -3457,10 +3457,12 @@ class ModernParserBridge {
 
     /// `fetch`'s script half before the network: the rule URL resolved into a request.
     /// 只准备显式打开的网页请求；复用AnalyzeUrl/源认证，不发起网络或另一套URL解析。
-    func prepareRuleWebRequest(_ ruleURL: String, scope: RuleData? = nil) throws -> SourcePreparedWebRequest {
+    func prepareRuleWebRequest(_ ruleURL: String, scope: RuleData? = nil,
+                               includesLegadoDefaultUserAgent: Bool = true) throws -> SourcePreparedWebRequest {
         let scope = scope ?? RuleData()
         switch try prepareFetch(ruleUrl: ruleURL, key: nil, page: nil, runtimeVariables: nil,
-                                pageScope: scope, isPrimaryRequest: true, additionalHeaders: [:], allowsWebView: true) {
+                                pageScope: scope, isPrimaryRequest: true, additionalHeaders: [:], allowsWebView: true,
+                                includesLegadoDefaultUserAgent: includesLegadoDefaultUserAgent) {
         case .network(let url, let request):
             return .init(request: request, responseOptions: .init(charset: url.charset, bodyJs: url.bodyJs), variables: scope.variableMap)
         case .dataURI: throw ModernParserBridgeError.invalidURL(ruleURL)
@@ -3469,7 +3471,8 @@ class ModernParserBridge {
 
     /// WebKit已解析的URL是网页数据，不是源表达式：不得把其中的{{...}}或options升级为源脚本。
     /// 这里只复用源认证/限流边界；HTTP method/body保持原样，不创建第二套AnalyzeUrl解析器。
-    func prepareNativeWebRequest(_ raw: URLRequest, scope: RuleData? = nil) throws -> SourcePreparedWebRequest {
+    func prepareNativeWebRequest(_ raw: URLRequest, scope: RuleData? = nil,
+                                 includesLegadoDefaultUserAgent: Bool = true) throws -> SourcePreparedWebRequest {
         guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
         guard let url = raw.url, SourceRequestHeaderScope.origin(url) != nil, url.user == nil, url.password == nil,
               raw.httpBodyStream == nil else { throw ModernParserBridgeError.invalidURL("Web navigation") }
@@ -3480,7 +3483,8 @@ class ModernParserBridge {
             where !SourceRequestHeaderScope.publicHeaderNames.contains(key.lowercased()) && !["referer", "origin"].contains(key.lowercased()) {
             request.setValue(nil, forHTTPHeaderField: key)
         }
-        applySourceAuthentication(to: &request)
+        let sourceHeaders = jsEngine.resolvedSourceHeaders(includesLegadoDefaultUserAgent: includesLegadoDefaultUserAgent)
+        applySourceAuthentication(to: &request, sourceHeaders: sourceHeaders)
         if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
         if runtimeOverrides != nil, _jsEngine?.lastError != nil { throw ModernParserBridgeError.parseError("Source JavaScript failed") }
         request.httpShouldHandleCookies = sourceRuleData.source.enabledCookieJar
@@ -3500,7 +3504,8 @@ class ModernParserBridge {
 
     private func prepareFetch(
         ruleUrl: String, key: String?, page: Int?, runtimeVariables: [String: String]?,
-        pageScope: RuleData?, isPrimaryRequest: Bool, additionalHeaders: [String: String], allowsWebView: Bool = false
+        pageScope: RuleData?, isPrimaryRequest: Bool, additionalHeaders: [String: String], allowsWebView: Bool = false,
+        includesLegadoDefaultUserAgent: Bool = true
     ) throws -> PreparedFetch {
         // A book's request is built against its variables, as Legado's `AnalyzeUrl(ruleData =
         // book)` builds it: a detail, TOC or content URL can read back what the book's search
@@ -3520,7 +3525,7 @@ class ModernParserBridge {
         // URL's JS. G站漫画 and the other qyyuapi sources (YCK 1329) depend on it: the header
         // `<js>` puts the headers into `cache`, and the search URL's script parses them back.
         // They are also the headers this request sends.
-        let sourceHeaders = jsEngine.resolvedSourceHeaders()
+        let sourceHeaders = jsEngine.resolvedSourceHeaders(includesLegadoDefaultUserAgent: includesLegadoDefaultUserAgent)
         // A search or explore page's URL puts into that page's own `RuleData`, which its list
         // then starts from (`pageScope`): Legado's `WebBook.searchBookAwait`/`exploreBookAwait`
         // build the `AnalyzeUrl` with `ruleData = RuleData()` and hand it to `BookList`. Stored
@@ -3541,7 +3546,9 @@ class ModernParserBridge {
             )
         }
 
-        installScriptRequest(on: analyzeUrl, sourceHeaders: sourceHeaders)
+        // URL 脚本内发起的请求仍沿用 Legado 默认；只让外层网页选择自己的缺省 UA。
+        let scriptHeaders = includesLegadoDefaultUserAgent ? sourceHeaders : BookSource.withLegadoUserAgent(sourceHeaders)
+        installScriptRequest(on: analyzeUrl, sourceHeaders: scriptHeaders)
 
         // A rule URL whose script threw has no URL, and the exception is why: Legado's
         // `AnalyzeUrl.initUrl` lets it propagate. Reporting the script's text as an invalid

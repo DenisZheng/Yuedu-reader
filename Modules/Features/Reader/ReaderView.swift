@@ -2374,6 +2374,11 @@ struct ReaderView: View {
                 guard let screen = window.windowScene?.screen else { return }
                 applyReaderBrightness(on: screen)
             }
+            // UIKit 推入时，safe-area 偏好可能先于视图进入窗口，底部曾被记录为 0。
+            // 等待现有窗口探针的实际绑定事件再补入安全区，不查询别的 key window（上游 2a66e1e2）。
+            readerWindow.withWindow { window in
+                readerSafeAreaBottom = max(readerSafeAreaBottom, window.safeAreaInsets.bottom)
+            }
             volumeHandler.onPageTurn = { dir in
                 switch dir {
                 case .prev: goToPrevPage()

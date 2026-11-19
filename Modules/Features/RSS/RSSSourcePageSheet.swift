@@ -434,7 +434,8 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                             // 第一请求及后续表单留在同一WebKit会话；Cookie只通过域约束的cookieStore播种。
                             nativeBrowser = true
                             sourceScriptsAllowed = false
-                            view.customUserAgent = request.value(forHTTPHeaderField: "User-Agent")
+                            // 直接传入的请求可能未准备 UA，但首请求和后续导航仍由 WebKit 统一设置。
+                            view.customUserAgent = request.value(forHTTPHeaderField: "User-Agent") ?? RSSRequestFactory.webPageUserAgent
                             var browserRequest = request
                             browserRequest.setValue(nil, forHTTPHeaderField: "User-Agent")
                             browserRequest.cachePolicy = .reloadIgnoringLocalCacheData
@@ -535,7 +536,9 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                 controller.addUserScript(WKUserScript(source: RSSWebConsoleLog.script, injectionTime: .atDocumentStart, forMainFrameOnly: false))
             }
             bridgePrompt = nil
+            // 无 HTTP 基址的生成 HTML 不携带请求上下文，直接使用同一个网页缺省 UA。
             view.customUserAgent = requestContext?.headers.first { $0.key.lowercased() == "user-agent" }?.value
+                ?? RSSRequestFactory.webPageUserAgent
             let preload = sourceScriptsAllowed ? source.preloadJs ?? "" : ""
             guard source.enableJs, !preload.isEmpty || images.needsPipeline else { return }
             let name = "__readerRSS_" + UUID().uuidString
