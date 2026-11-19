@@ -676,10 +676,45 @@ final class CoreTextPaginator: Sendable {
         case fontSizeChanged  // Clear all caches
         case viewSizeChanged  // Clear all caches
         case themeChanged     // Don't clear caches, only redraw
+        case memoryWarning    // 引擎释放排版时同步清空分页器缓存
     }
 
     private let layoutFingerprintProvider: @Sendable (NSAttributedString) -> Int
-    private let cache = OSAllocatedUnfairLock<[CacheKey: ChapterLayout]>(initialState: [:])
+    /// 改编自上游 75381a89：文档淘汰后同章重建会得到新 ContentRevision，
+    /// 旧修订的完整排版无法再命中，不能继续无上限持有正文、framesetter 和每页 CTFrame。
+    /// 复用原缓存，容量与 ChapterDocumentStore 一致，不增加第二条缓存路径。
+    private let cache = OSAllocatedUnfairLock(initialState: LayoutLRU())
+    private let cacheCapacity: Int
+
+    private struct LayoutLRU {
+        var layouts: [CacheKey: ChapterLayout] = [:]
+        var order: [CacheKey] = []
+
+        mutating func get(_ key: CacheKey) -> ChapterLayout? {
+            guard let layout = layouts[key] else { return nil }
+            touch(key)
+            return layout
+        }
+
+        mutating func set(_ layout: ChapterLayout, for key: CacheKey, capacity: Int) {
+            layouts[key] = layout
+            touch(key)
+            while order.count > capacity {
+                layouts[order.removeFirst()] = nil
+            }
+        }
+
+        mutating func removeAll() {
+            layouts.removeAll()
+            order.removeAll()
+        }
+
+        private mutating func touch(_ key: CacheKey) {
+            order.removeAll { $0 == key }
+            order.append(key)
+        }
+    }
+
     private enum ContentIdentity: Hashable {
         case revision(ContentRevision)
         case fingerprint(Int)
@@ -705,8 +740,10 @@ final class CoreTextPaginator: Sendable {
     }
 
     init(
+        cacheCapacity: Int = ChapterDocumentStore.defaultCapacity,
         layoutFingerprintProvider: @escaping @Sendable (NSAttributedString) -> Int = { CoreTextPaginator.layoutFingerprint(for: $0) }
     ) {
+        self.cacheCapacity = max(1, cacheCapacity)
         self.layoutFingerprintProvider = layoutFingerprintProvider
     }
 
@@ -1024,18 +1061,23 @@ final class CoreTextPaginator: Sendable {
         }
     }
 
+    /// 回归测试读取实际保留的完整排版数量，不影响缓存行为。
+    var cachedLayoutCount: Int {
+        cache.withLock { $0.layouts.count }
+    }
+
     private func cachedLayout(for key: CacheKey) -> ChapterLayout? {
-        cache.withLock { $0[key] }
+        cache.withLock { $0.get(key) }
     }
 
     private func storeLayout(_ layout: ChapterLayout, for key: CacheKey) {
-        cache.withLock { $0[key] = layout }
+        cache.withLock { $0.set(layout, for: key, capacity: cacheCapacity) }
     }
 
     @MainActor
     func invalidate(reason: InvalidationReason) {
         switch reason {
-        case .fontSizeChanged, .viewSizeChanged:
+        case .fontSizeChanged, .viewSizeChanged, .memoryWarning:
             removeAllCachedLayouts()
         case .themeChanged:
             break

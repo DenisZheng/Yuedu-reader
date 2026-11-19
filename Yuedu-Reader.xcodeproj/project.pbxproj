@@ -565,7 +565,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.deniszheng.legadopro.widget;
 				PRODUCT_NAME = yuedu_app_Widget;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -813,7 +813,7 @@
 					"$(inherited)",
 					"-liconv",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev;
+				PRODUCT_BUNDLE_IDENTIFIER = com.deniszheng.legadopro;
 				PRODUCT_MODULE_NAME = yuedu_app;
 				PRODUCT_NAME = YueduReader;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -950,7 +950,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.denis.readerfork.dev.shareextension;
+				PRODUCT_BUNDLE_IDENTIFIER = com.deniszheng.legadopro.shareextension;
 				PRODUCT_NAME = yuedu_app_ShareExtension;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

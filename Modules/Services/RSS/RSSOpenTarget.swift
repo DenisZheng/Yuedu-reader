@@ -65,9 +65,11 @@ enum RSSOpenTarget: Equatable, Sendable {
 
     /// 带私有头或响应规则的首文档先走共享网络边界，防止WebKit重定向继承私有头。
     /// 不重发POST、不把私有头写入页面，也不接管http(s)子资源scheme。
-    static func loadDocument(_ request: URLRequest, context: RequestContext? = nil, source: RSSSource, owner: RSSStore? = nil,
+    static func loadDocument(_ raw: URLRequest, context: RequestContext? = nil, source: RSSSource, owner: RSSStore? = nil,
                              session: URLSession = LegadoJSBridge.requestSession) async throws -> Document {
         try await context?.validate(source: source, owner: owner)
+        // 「以網頁開啟」可直接传入未准备的请求；缓存键和实际请求要使用相同 UA。
+        let request = RSSRequestFactory.withDefaultWebPageUserAgent(raw)
         let runtime = try await RSSRuntime.make(source: source, owner: owner, requestSession: session)
         return try await runtime.run { host in
             // 同源turn排队期间可能由其他流程刷新凭据；取得turn后才是发送边界。
@@ -116,6 +118,7 @@ enum RSSOpenTarget: Equatable, Sendable {
         if let context, context.requestURL.flatMap(SourceRequestHeaderScope.origin) == raw.url.flatMap(SourceRequestHeaderScope.origin) {
             for (name, value) in context.headers where request.value(forHTTPHeaderField: name) == nil { request.setValue(value, forHTTPHeaderField: name) }
         }
+        request = RSSRequestFactory.withDefaultWebPageUserAgent(request)
         let executor = SourceRequestExecutor(session: session, rate: source.concurrentRate ?? "",
             rateKey: RSSRuntime.authenticationKey(for: source), cookieJarEnabled: true, runtimeState: runtime.state,
             cookieScope: SourceRequestHeaderScope(urls: [request.url].compactMap { $0 }), maximumBytes: 8 * 1_024 * 1_024)
@@ -140,8 +143,9 @@ enum RSSOpenTarget: Equatable, Sendable {
                 let scope = RuleData(); scope.variableMap = context?.variables ?? [:]
                 return try bridge.withRuleContext(content: "", baseURL: source.sourceKey, scope: scope,
                                                   bindings: context?.bindings(source: source, data: scope) ?? [:], stage: "rss.navigation") { _ in
-                    let value = try bridge.prepareRuleWebRequest(LegadoRSSScraper.normalizedRequestURL(raw), scope: scope)
-                    return .request(value.request, context: .init(value, runtime: runtime, article: context?.article))
+                    let value = try bridge.prepareRuleWebRequest(LegadoRSSScraper.normalizedRequestURL(raw), scope: scope,
+                                                                 includesLegadoDefaultUserAgent: false)
+                    return webRequest(value, runtime: runtime, article: context?.article)
                 }
             }
         }
@@ -157,7 +161,7 @@ enum RSSOpenTarget: Equatable, Sendable {
                 let scope = RuleData(); scope.variableMap = context?.variables ?? [:]
                 return try bridge.withRuleContext(content: "", baseURL: request.url?.absoluteString ?? "", scope: scope,
                                                   bindings: context?.bindings(source: source, data: scope) ?? [:], stage: "rss.navigation") { _ in
-                    var value = try bridge.prepareNativeWebRequest(request, scope: scope)
+                    var value = try bridge.prepareNativeWebRequest(request, scope: scope, includesLegadoDefaultUserAgent: false)
                     if let context, let old = context.requestURL, let target = request.url,
                        SourceRequestHeaderScope.origin(old) == SourceRequestHeaderScope.origin(target) {
                         for (key, header) in context.headers where value.request.value(forHTTPHeaderField: key) == nil
@@ -165,7 +169,7 @@ enum RSSOpenTarget: Equatable, Sendable {
                             value.request.setValue(header, forHTTPHeaderField: key)
                         }
                     }
-                    return .request(value.request, context: .init(value, runtime: runtime, article: context?.article))
+                    return webRequest(value, runtime: runtime, article: context?.article)
                 }
             }
         }
@@ -188,14 +192,15 @@ enum RSSOpenTarget: Equatable, Sendable {
                                                    bindings: ["rssArticle": object], stage: "rss.content") { _ in
                     let request: SourcePreparedWebRequest
                     if interpretsRuleURL {
-                        request = try bridge.prepareRuleWebRequest(LegadoRSSScraper.normalizedRequestURL(article.link), scope: data)
+                        request = try bridge.prepareRuleWebRequest(LegadoRSSScraper.normalizedRequestURL(article.link), scope: data,
+                                                                   includesLegadoDefaultUserAgent: false)
                     } else {
                         // 普通Feed链接是外部数据，不得把模板或URL options升级为源脚本。
                         let url = try RSSWebActionRouter.pageURL(article.link, base: source.articleLinkBaseURL)
-                        request = try bridge.prepareNativeWebRequest(URLRequest(url: url), scope: data)
+                        request = try bridge.prepareNativeWebRequest(URLRequest(url: url), scope: data, includesLegadoDefaultUserAgent: false)
                     }
-                    return .request(request.request, context: .init(request, runtime: runtime, article: .init(title: article.title, link: article.link,
-                                                                                         category: article.categoryName ?? "", id: article.id)))
+                    return webRequest(request, runtime: runtime, article: .init(title: article.title, link: article.link,
+                                                                                 category: article.categoryName ?? "", id: article.id))
                 }
             }
         }
@@ -219,12 +224,21 @@ enum RSSOpenTarget: Equatable, Sendable {
                     let parts = value.components(separatedBy: "::")
                     let raw = parts.count > 1 ? parts[1] : value
                     if case .system(let url) = RSSLinkRoute.route(raw, relativeTo: nil) { return .external(url) }
-                    let request = try bridge.prepareRuleWebRequest(LegadoRSSScraper.normalizedRequestURL(raw))
-                    return .request(request.request, context: .init(request, runtime: runtime))
+                    let request = try bridge.prepareRuleWebRequest(LegadoRSSScraper.normalizedRequestURL(raw),
+                                                                   includesLegadoDefaultUserAgent: false)
+                    return webRequest(request, runtime: runtime)
                 }
                 let html = try evaluate(source.startHtml ?? "")
                 return html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : .html(html, baseURL: source.sourceKey)
             }
         }
+    }
+
+    private static func webRequest(_ prepared: SourcePreparedWebRequest, runtime: RSSRuntime,
+                                   article: RequestContext.Article? = nil) -> Self {
+        // 先解析源头和 URL options、完成导航继承，再补缺省值并记录最终请求头。
+        var prepared = prepared
+        prepared.request = RSSRequestFactory.withDefaultWebPageUserAgent(prepared.request)
+        return .request(prepared.request, context: .init(prepared, runtime: runtime, article: article))
     }
 }

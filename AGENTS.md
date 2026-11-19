@@ -28,7 +28,7 @@
 1. 首期 RSS 闭环：导入、运行时、分类/搜索/分页、规则网页、图片/音视频、状态、管理与诊断。
 2. 规则网页按 Android 源配置执行；普通 Feed 保持安全文章路径。不能统一去掉脚本/iframe 后声称兼容。
 3. 独立 Fork、全新安装，不迁移或覆盖原版数据。按后续 Q10–Q11 决策，移除 Google/Firebase 账号和后台，移除 StoreKit/会员/Pro 限制；已有本地能力不再收费，外部AI等仍需自己的服务配置。
-4. 本版按用户2026-11-15决定暂时停用 iCloud：隐藏入口、停止自动调用、不申请 CloudKit 权限，保留实现及已有数据，恢复前另验签名与无权限启动，见 [ADR-0006](docs/adr/0006-pause-icloud-for-current-release.md)。保留 WebDAV，按 Android 分类备份/恢复机制先保证 Fork 自身恢复；首期不做 Android 备份整包互通。App 显示名为 `LegadoPro`，Bundle ID 仍为 `dev.denis.readerfork.dev`，共享数据空间不变；正式签名/发布仍需独立确认。
+4. 本版按用户2026-11-15决定暂时停用 iCloud：隐藏入口、停止自动调用、不申请 CloudKit 权限，保留实现及已有数据，恢复前另验签名与无权限启动，见 [ADR-0006](docs/adr/0006-pause-icloud-for-current-release.md)。保留 WebDAV，按 Android 分类备份/恢复机制先保证 Fork 自身恢复；首期不做 Android 备份整包互通。App 显示名为 `LegadoPro`，Release Bundle ID 为 `com.deniszheng.legadopro`，Debug 保留 `dev.denis.readerfork.dev`，App Group 与 URL scheme 不变；正式签名/发布仍需独立确认。
 5. 默认 Tab：**探索｜书架｜订阅｜资源库｜设置**。搜索保留在书架/探索的明确页面入口；RSS只通过独立订阅Tab进入，资源库不再提供RSS副入口。订阅首页支持记忆的树型/图标方格切换，方格平铺并按分类筛选；源管理支持跨分类多选/全选/确认删除和用户主动活性验证。
 6. 当前播放器无法支持的格式/DRM 明确标受限；不自行引入另一套播放器依赖。
 7. 全包导入/字段检查 + 分层代表源验收，不宣称所有源都可用。

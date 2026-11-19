@@ -375,6 +375,8 @@ final class CoreTextPageEngine: PageRenderingProvider, LinkNavigationProviding, 
                 self?.invalidateSnapshots()
                 self?.prerenderer.purgeCaches()
                 self?._layouts.trim(keeping: 0)
+                // 分页器也持有相同排版；仅清空引擎缓存不能释放这些对象（上游 75381a89）。
+                self?.paginationManager.invalidate(reason: .memoryWarning)
                 self?.cancelPreloadTasks()
                 self?.chapterDocumentStore.invalidateAll()
                 MemoryFootprint.log("warning-after")
