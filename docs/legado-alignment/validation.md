@@ -1056,4 +1056,12 @@ python3 -I scripts/legado-compat/lc.py oracle "<自建纯JS字面量case JSON路
 
 用户随后反馈视频仍不能播放，并要求先提交push、再编译到下载目录；本轮不再扩大播放器排查，不把首列表恢复写成媒体通过。用户确认版本从3.0（5）递增为3.0.1（6），只改统一版本xcconfig。提交范围为RSS会话／分类／原生网页UA与CF提示修复、相关测试和本记录；私有源包、响应、暂存目录及无关用户文件不提交。
 
-既有已交付Debug IPA使用`dev.denis.readerfork.dev`及其两个扩展身份，当前脚本默认只允许Release。新增明确的`--configuration Debug`打包模式，不改写Bundle ID；默认Release和拒绝混合身份、缺扩展、模拟器、覆盖旧IPA等检查保留。新模式先复现不支持configuration参数；修复后`python3 -B -m unittest discover -s scripts/tests -p 'test_*ipa*.py' -v`实际24项／OK，版号解析及`git diff --check`均退出0。App行为沿用本轮已执行的29项／4 suites结果，不把包装测试当作播放或真机验证。归档和下载文件结果在实际完成后另补，不提前宣称成功。
+既有已交付Debug IPA使用`dev.denis.readerfork.dev`及其两个扩展身份，当前脚本默认只允许Release。新增明确的`--configuration Debug`打包模式，不改写Bundle ID；默认Release和拒绝混合身份、缺扩展、模拟器、覆盖旧IPA等检查保留。新模式先复现不支持configuration参数；修复后`python3 -B -m unittest discover -s scripts/tests -p 'test_*ipa*.py' -v`实际24项／OK，版号解析及`git diff --check`均退出0。App行为沿用本轮已执行的29项／4 suites结果，不把包装测试当作播放或真机验证。代码提交`15d3c138`已先推送origin/main，再执行以下归档和交付。
+
+### 3.0.1（6）实际归档与下载文件
+
+旧Debug真机临时DerivedData／xcconfig已不存在，未重建该路径或clean；沿用最近本地归档的默认DerivedData。动态选择Xcode，SDK27.2，`Reader-Fork-Dev`／Debug／generic/platform=iOS，禁用签名和自动更新依赖，新archive位于`.git/rss-3.0.1-build6.JE9zdTKY/LegadoPro-3.0.1-Debug.xcarchive`。`xcodebuild archive ...`实际退出0，决定性输出`** ARCHIVE SUCCEEDED **`。随后`python3 -B scripts/package_unsigned_ipa.py --archive <上述archive> --output <新目录>/ipa --configuration Debug`退出0。
+
+下载目录新增`LegadoPro-3.0.1-build6-local-Debug-unsigned.ipa`及同名`.sha256`，不覆盖旧包。主App和两个扩展均为3.0.1（6）、iPhoneOS、最低iOS17，Debug身份家族与上次包一致；ZIP CRC、可执行权限、三Bundle ID、复制SHA一致，三个Mach-O均无LC_CODE_SIGNATURE，未包含profile或签名资源目录。72,245,310字节，SHA-256为`a6eafa419b55a6a722650ca374eaa64a3be11bf856200b344facdb5491385406`。实际校验记录保存在本次`.git`暂存目录，无原始源包或私有响应进入IPA。
+
+这是本地Debug未签名真机产物，需要用户自行签名后安装；未安装本次包或重签，不承诺签名服务的权限配置。用户反馈的视频不能播放尚未修复，不能把归档、打包或首列表恢复当作媒体通过。回滚版本或代码使用普通后续提交，不force push；不删除旧IPA、用户App数据或源包。
