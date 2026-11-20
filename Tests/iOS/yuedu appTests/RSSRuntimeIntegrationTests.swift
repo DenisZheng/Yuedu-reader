@@ -5,6 +5,28 @@ import Testing
 @Suite("S4 RSS runtime integration", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct RSSRuntimeIntegrationTests {
+    @Test("分类脚本里的页码模板到列表请求时才求值", arguments: [false, true])
+    func categoryScriptPreservesPageTemplate(jsTag: Bool) async throws {
+        let host = hostName()
+        let session = RSSPageFixtureProtocol.makeSession()
+        RSSPageFixtureProtocol.serve(host: host, contentType: "text/html", body: html)
+        defer { session.invalidateAndCancel(); RSSPageFixtureProtocol.remove(host: host) }
+        var source = rules(host: host)
+        source.sortUrl = "@js: 'Recent::https://\(host)/list'"
+        let control = try await LegadoRSSScraper.resolveSortEntries(for: source, requestSession: session)
+        #expect(control.count == 1)
+        let script = "'Recent::https://\(host)/list?page={{page}}&keyword={{source.getVariable()}}'"
+        source.sortUrl = jsTag ? "<js>\(script)</js>" : "@js:\(script)"
+        let entries = try await LegadoRSSScraper.resolveSortEntries(for: source, requestSession: session)
+        let entry = try #require(entries.first)
+        #expect(entry.url == "https://\(host)/list?page={{page}}&keyword={{source.getVariable()}}")
+        #expect(RSSPageFixtureProtocol.requests(host: host).isEmpty, "生成分类不能提前请求列表")
+        let page = try await LegadoRSSScraper.fetchListPage(source: source, entry: entry, page: 2, requestSession: session)
+        #expect(!page.items.isEmpty)
+        #expect(RSSPageFixtureProtocol.requests(host: host).count == 1)
+        #expect(RSSPageFixtureProtocol.requests(host: host).first?.url?.query == "page=2&keyword=")
+    }
+
     @Test("源变量落盘/重载，JS全局连续，不变不写")
     func sourceLifetimeAndPersistence() async throws {
         try await withStore { store, directory in

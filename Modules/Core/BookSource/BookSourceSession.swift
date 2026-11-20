@@ -33,7 +33,8 @@ final class BookSourceSession: Sendable {
     let host: SourceScriptHost<ModernParserBridge>
     let runtimeOverrides: SourceRuntimeOverrides?
     enum SessionFailure: Error { case invalidated }
-    var isActive: Bool { runtimeOverrides?.state.isActive ?? true }
+    // 存活不代表仍有当前访问权；凭据/会话版本过期的缓存不能交给新页面。
+    var isActive: Bool { runtimeOverrides?.state.isCurrent ?? true }
     func invalidate() { runtimeOverrides?.state.invalidate() }
     /// The source's `@js:` header rule as its engine last resolved it, readable without the
     /// host (`BookSource.parsedHeaders`, `resolvedHeaders()`).

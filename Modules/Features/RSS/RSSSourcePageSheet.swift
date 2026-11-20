@@ -434,8 +434,8 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                             // 第一请求及后续表单留在同一WebKit会话；Cookie只通过域约束的cookieStore播种。
                             nativeBrowser = true
                             sourceScriptsAllowed = false
-                            // 直接传入的请求可能未准备 UA，但首请求和后续导航仍由 WebKit 统一设置。
-                            view.customUserAgent = request.value(forHTTPHeaderField: "User-Agent") ?? RSSRequestFactory.webPageUserAgent
+                            // 未声明 UA 时清除旧覆盖，让首请求与后续导航都使用系统 WebKit 默认值。
+                            view.customUserAgent = request.value(forHTTPHeaderField: "User-Agent")
                             var browserRequest = request
                             browserRequest.setValue(nil, forHTTPHeaderField: "User-Agent")
                             browserRequest.cachePolicy = .reloadIgnoringLocalCacheData
@@ -663,7 +663,11 @@ struct RSSSourcePageWebView: UIViewRepresentable {
             nativeHTTPStatus = http.statusCode
             pageURL = url
             RSSWebLoadDiagnostics.record(diagnosticAttempt, .received, phase: .browser, statusCode: http.statusCode)
-            if (400..<600).contains(http.statusCode) {
+            // CF 用 403 返回待用户操作的验证页，不应再用普通失败重试条遮住它。
+            // 仅凭 Server 名称或状态码不够；其他 403 和非验证错误仍必须显示。
+            let isChallenge = http.statusCode == 403
+                && http.value(forHTTPHeaderField: "cf-mitigated")?.lowercased() == "challenge"
+            if (400..<600).contains(http.statusCode), !isChallenge {
                 error.wrappedValue = String(format: localized("RSS 請求失敗：HTTP %d"), http.statusCode)
             }
             decisionHandler(.allow)

@@ -2,6 +2,86 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## CF 验证页与普通 HTTP 403 分开显示（2026-11-20）
+
+用户指出模拟器验证期间 App 的「HTTP 403／重试」条仍覆盖网页，Android 不显示这条。原因是原生网页响应代理把所有 4xx/5xx 都赋给普通错误状态；CF 本身会用 403 返回交互验证页，不能只按状态码判断加载失败。
+
+按 [Cloudflare 的响应合同](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)，只在已准入的原生主文档同时收到 `HTTP 403` 和 `cf-mitigated: challenge` 时，不生成普通失败重试条，让网页自身承载人工验证。只有 `Server: cloudflare` 或其他 `cf-mitigated` 值都不满足；普通 403、网络／脚本／安全检查失败仍保留原提示。不修改 UA、Cookie、导航限制或挑战内容，也不求解验证；诊断仍记录真实 403，不改成 200 或功能成功。
+
+本地 HTTP 合成页面通过生产 WebView 复现原症状：修复前，明确 challenge 的一组断言失败，错误值是「无法完成 RSS 请求（HTTP 403）」；无标记和未知标记两组符合原错误合同。回归还覆盖后续普通页面导航清理旧错误、文档仅请求一次，不自动重试。输入完全自建，不向外站发送请求，也不运行 CF 验证脚本。
+
+实际环境为 Xcode 27.2（27B52）、iOS 27.2 iPhone 模拟器；最终串行 20 项／4 suites 通过，0 失败／跳过，命令退出 0，`** TEST SUCCEEDED **`：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)" YUEDU_SCHEME=Reader-Fork-Dev
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+result_dir="$(mktemp -d -t yuedu-rss-cf-display)"
+bash scripts/xctest.sh -l "$result_dir/final.log" -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -resultBundlePath "$result_dir/final.xcresult" \
+  -only-testing:'yuedu appTests/RSSBrowserSessionTests' \
+  -only-testing:'yuedu appTests/RSSWebLoadDiagnosticsTests' \
+  -only-testing:'yuedu appTests/RSSWebRequestTests' \
+  -only-testing:'yuedu appTests/RSSNativeWebFlowTests/loginPageOwnsItsForm()'
+```
+
+`ruby scripts/check_localizations.rb` 检查通过（5 个语言、4288 个主文案键），本轮不新增文案。回滚只撤销 `decidePolicyFor navigationResponse` 中的 challenge 分类条件和本轮测试，保留先前 UA 修复；不改源包或用户数据。此次显示修复未重访实源、未重新打包／安装手机，不能说明循环已经永久解决。
+
+## 原生订阅网页的系统 UA 与实源对照（2026-11-20）
+
+用户指明项目根目录的 `rssSources 2.json`，实际 399 项，第 20 项精确匹配「禁漫天堂-漫画」；仓库既有 307 项包没有这条。新文件是待核对的输入，不修改、不导入真机或提交。导出中的该源显式声明 Android/Chrome UA；用户说明实际手机已经改成 `header: "{}"` 或删掉 `header`，两种都进入验证循环，Safari 不循环，不能把导出状态当作当前手机状态。
+
+本机用 `python3 -B -` 检查第 20 项为简单 HTTPS 单网页、无登录／脚本／认证头后，按导出中唯一显式 UA 发出一次 GET，不跟随跳转或保存响应正文。返回 `HTTP 403, cf_challenge=True`（678 ms），在验证入口停止，不切换 UA 复探。“本机首响应被挑战”不等于重现用户在真机勾选后循环的过程。
+
+在 `94401903`，留空和删除两种写法都在准备网页请求时补出项目拼接的手机 Safari UA，再赋给 `customUserAgent`，并非由 WebKit 自选。本地 HTTP 200 用例直接比对系统 WKWebView 和生产页面，修复前两种写法的首请求、首文档 DOM、后续请求与后续 DOM 共 8 条断言失败。现在在已准入的原生 WebKit 导航分支保持未声明值；显式 UA 仍保留。共享执行器及生成 HTML 的缺省、Cookie、认证和导航准入不变。不添加站点识别或挑战处理。回滚仅反向应用本次三处生产代码与回归差异，不涉及源配置或数据迁移。
+
+Xcode 27.2（27B52）、iOS 27.2 iPhone 模拟器定向回归（修复前以 `-only-testing:'yuedu appTests/RSSBrowserSessionTests/nativeBrowserKeepsSystemUserAgent(header:)'` 单独复现）：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)" YUEDU_SCHEME=Reader-Fork-Dev
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+result_dir="$(mktemp -d -t yuedu-rss-system-ua)"
+bash scripts/xctest.sh -l "$result_dir/final.log" -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -resultBundlePath "$result_dir/final.xcresult" \
+  -only-testing:'yuedu appTests/RSSBrowserSessionTests' \
+  -only-testing:'yuedu appTests/RSSWebRequestTests' \
+  -only-testing:'yuedu appTests/RSSWebDocumentCacheTests' \
+  -only-testing:'yuedu appTests/RSSNativeWebFlowTests/loginPageOwnsItsForm()'
+```
+
+最终 `Test run with 18 tests in 4 suites passed`，`** TEST SUCCEEDED **`，退出 0。覆盖空对象、缺字段、显式 UA、真实 HTTP 与 DOM、同源表单、历史导航、共享请求和缓存。中间一轮错误假设清除 `customUserAgent` 后 getter 必为 `nil`，模拟器实际返回空字符串；修正测试只比较可观察的 HTTP 与 DOM，未再改生产行为。未复探站点、未打 IPA，也未在真机、iPad 或 iOS 17 验证。
+
+用户另要求用实源对照视频。旧包 R115「央视直播」、R154「科普中国」各一次只读 GET 返回 200，静态首文档各无可直接测的点播媒体；直播入口不能代替点播快进。R265/R267 保持既有逐条人工验收边界，未请求其 iframe。没有测出用户视频的跳转延迟，也没有更改播放器或缓冲。
+
+### 真机对照准备与当前阻碍（2026-11-20）
+
+用户确认 Android 同源正常，作为已知对照；本轮不改 Android。`xcrun devicectl device info apps` 按确切 Bundle ID 查询，发现 iPhone 上只有正式自签版 3.0 (5)，没有 Debug 版。沿已有开发签名用 `bash scripts/device_dev_test.sh` 尝试单独的 Debug 构建，`xcodebuild` 返回 `Timed out waiting for all destinations matching the provided destination specifier to become available`，并提示解锁、接线／局域网及无线调试需要 Developer Mode。未完成构建或安装，没动正式版、书库或签名。仅从第 20 项生成隔离测试用的单条无 UA JSON，未导入手机或发实源请求。
+
+等设备可调试，用 Debug 版只导入同一条源；用户手动操作验证，是否进入正文并能重开是验收标准。若仍循环，现有 `[RSSWebLoad]` 只看该次加载阶段和状态，区分 App 重开页面与同一 WebKit 内反复收到拒绝；不采集 Cookie、认证或页面正文，不自动重试或更换网页身份。此段仅记录准备与失败证据，不改变上一节的模拟器结果。没有设备变更需要回滚。
+
+### 模拟器实源首屏与人工操作边界（2026-11-20）
+
+用户随后授权改用模拟器点开实源。使用第 20 项生成的单条测试输入，`RSSRealSourceOpeningUITests` 在单独的 RSS 目录经真实「Subscriptions → 源按钮 → 原生网页」进入；只为图标设置本机拒绝端口，避免首屏点击前额外抓取实站，网页地址和默认 WebKit 身份不变。正常回归不执行此用例，只有设置 `TEST_RUNNER_RSS_REAL_OPENING_INPUT` 与 `TEST_RUNNER_RSS_REAL_OPENING_STORE` 才会运行。未把原始包或 URL 写进测试源码。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)" YUEDU_SCHEME=Reader-Fork-Dev
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export TEST_RUNNER_RSS_REAL_OPENING_INPUT="<私有单条测试输入路径>"
+export TEST_RUNNER_RSS_REAL_OPENING_STORE="<新建的隔离 RSS 目录路径>"
+result_dir="$(mktemp -d -t yuedu-rss-real-opening)"
+bash scripts/xctest.sh -l "$result_dir/first-screen.log" -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -resultBundlePath "$result_dir/first-screen.xcresult" \
+  -only-testing:'yuedu appUITests/RSSRealSourceOpeningUITests/testOpenSingleSourceWithoutChallengeInteraction'
+```
+
+实际 Xcode 27.2、iOS 27.2 iPhone 模拟器，1 项 UI 用例退出 0，`** TEST SUCCEEDED **`。输出 `containerOpened=true http403Overlay=true challengeVisible=false observationCompleted=true automatedChallengeClicks=0`。此通过只证明真实网页入口可达且首屏呈现 HTTP 403；不能说明真人验证成功，也未模拟勾选、重试或播放。测试结束后保持同一隔离目录启动 Debug App，待用户本人查看和操作。
+
+当前 Xcode 的模拟器图形窗口由 Device Hub 提供，而非单独的 Simulator.app；已按安装位置打开 Device Hub，未安装工具或改系统设置。用户人工流程：选择该 iPhone 模拟器，在 App 中点 Subscriptions → RSS opening fixture，亲自完成验证。记录是否看到正式页面、是否再次出现验证，以及退出重开结果；只有完成这些才可判定本源的网页闭环是否修复。
+
+用户两次确认，手动验证后已能看到漫画列表／分类，不仅是绿色勾选提示；这是本轮模拟器的人工可见结果。对应脱敏日志有 10 条事件，最后仍是 403 文档完成，没有正式页面的 200 记录，因此不把用户可见内容说成日志已证明的 403→200，也不外推真机或退出重开已修复。本次 CF 403 提示条调整是在这次人工观察之后实施，尚未重新访问实源。
+
 ## 合入 main（2026-11-19）
 
 用户随后明确要求合入主分支并切换到 main。修复分支 `fix/rss-review-20261117` 的 `3cc914dc576d5af1b145738e896347baf11c361a` 已正常推送；本地 main 先用 `git merge --ff-only origin/main` 同步到远端 `9a88554c`，再以 `git merge --no-ff --no-commit fix/rss-review-20261117` 无冲突合入。补本条记录前，`git write-tree` 与 `3cc914dc^{tree}` 同为 `07d6a2844f52c3d2f3e87a840764a8092d557c0b`：源码、测试与配置未发生额外变化，复用本会话已执行的 25 项 RSS／47 项稳定性回归和 Release 归档证据，不重复 build／测试或声称新提交重新生成过 IPA。合并提交只追加此条交付记录，保留两个父级历史，不 force／rebase、不移动 tag 或发布，未跟踪的用户包／原稿和构建产物保持原样。
@@ -909,3 +989,71 @@ YCK205完整真实入口已修复：按钮页→3.x一键导入→原生确认�
 复用既有真机DerivedData、Debug、generic/platform=iOS、本地未签名archive退出0（`** ARCHIVE SUCCEEDED **`）；打包退出0，ZIP/profile/签名结构与复制SHA核验完成，SDK27.2/minos17.0，LegadoPro3.0（5）。下载目录新增`LegadoPro-3.0-build5-local-Debug-JSON-copy-import-unsigned.ipa`（72,013,515字节），SHA-256为`59824f6c337e00a9fceeaa80e1c61813806fa4d2961088c3272737ed8b835827`，旁有sha256校验文件。未覆盖旧IPA、未重签或安装，未commit/push/触发Actions。
 
 `ruby scripts/check_localizations.rb`退出0。用户随后确认上述新Debug包自签后“OK了，可以了”，本次JSON文件选择／导入原症状恢复；这是用户真机反馈，不冒充助手自动执行，也不展开为逐入口独立记录或所有源兼容。用户同时授权提交并push本轮相关修复。收尾额外执行`python3 -B -m unittest discover -s scripts/tests -p 'test_device_dev_script.py' -v`，1项／OK，验证此前TMPDIR路径修正。S8仍不标完成，最低iOS17／iPad／VoiceOver等人工范围不冒充通过。
+
+## 2026-11-20：电影源首次文章的过期会话误报
+
+用户报告影视组第一个「电影」源的任意条目首次打开提示“订阅来源或登录状态已变更，请重新打开”。只读确认其为根目录私有包的第154项、规则网页类型；登录脚本用于切换资源接口，description生成iframe，不是RSS原生AVPlayer附件。未修改、提交源包或运行分类规则的批量请求／登录动作。
+
+- 普通同结构页面与原电影规则的隔离重放均正常。因此没有把源脚本本身判为根因，也没有改缓冲、播放器或源UA。
+- **原提示的确定复现**：先缓存RSS会话，再只推进其访问版本，不改源配置、登录头或用户凭据。`RSSRuntimeState.isActive=true`而`isCurrent=false`；`BookSourceSession`仍以“存活”判断缓存可复用，新页面绑定后被撤销。`firstArticleRebindsStaleCachedAccess()`在修改前为1项／2个issue，日志明确为上述提示且文档被清空，最终`** TEST FAILED **`。
+- **最小修复**：`Modules/Core/BookSource/BookSourceSession.swift`的可用性判断改用`state.isCurrent`，让新页面获得当前会话；不授予旧文档访问权，不取消真正的源编辑、登录变化、变量修改或删除撤销。仍复用已有会话缓存／脚本桥，没有新增解析器或持久数据。
+- **实际验证**：动态选择Xcode／模拟器，SDK为iPhoneSimulator27.2、`Reader-Fork-Dev`、串行`scripts/xctest.sh`。选择`RSSWebInvalidationTests`、`RSSRuntimeIntegrationTests`及`RSSMoviePageReplayTests`，退出0，决定性输出`Test run with 27 tests in 3 suites passed after 12.572 seconds`、`** TEST SUCCEEDED **`。包含首次网页保留、过期会话重新绑定、旧页面仍失效，以及原有凭据／并发撤销回归。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export TEST_RUNNER_RSS_MOVIE_REPLAY_INPUT="<隔离的RSSSource JSON路径>"
+bash scripts/xctest.sh -- -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/RSSWebInvalidationTests' \
+  -only-testing:'yuedu appTests/RSSRuntimeIntegrationTests' \
+  -only-testing:'yuedu appTests/RSSMoviePageReplayTests'
+```
+
+私有重放输入为`RSSSource`的Codable JSON：从已预审的电影规则取必要字段，声明URL替换为loopback；测试用本机JSON条目、海报和iframe替换所有实际加载资源，不执行sortUrl和登录按钮，不复制源规则到公开fixture。未提供该环境变量时，私有重放suite禁用；此时只能报告其余实际执行项，不能把禁用项计为通过。
+
+**实源与视频边界**：以源声明UA、无Cookie／个人账号、低并发、限定响应大小只读默认API第一页：1次GET返回200／20项。随后只检查前3个条目各1个无query的HTTPS HLS链接，均返回404；未跟随重定向、改UA重试、取媒体key或segment。该结果不代表整个源不可用，也没有测出seek恢复时间。仍需与Android实际可播条目的名称／当前接口对齐，或用户允许真机验证。原电影真实页面完整闭环、快进改善、iPhone／iPad和最低iOS17没有验证，S8不标通过。
+
+本轮未安装到手机、打包、提交或push。回滚仅恢复本轮`BookSourceSession.isActive`判断并撤回对应新增测试；不还原同文件之外的先前UA／CF改动，不清理用户源包、模拟器或既有数据。
+
+## 2026-11-20：葫芦视频分类脚本提前求值修复
+
+用户补充根目录私有包第45项「葫芦视频」打开提示“RSS源脚本执行失败，请查看诊断”。静态预审确认：分类脚本只读请求一次分类API，生成的URL含未来页码与源变量模板；列表为JSON，类型0、非singleUrl、preload关闭。没有运行媒体脚本、登录动作或修改源包。
+
+- **原错误复现**：以声明UA、无Cookie／个人账号、禁止自动重定向、256KiB预算读取分类API一次，200／application/json／4504字节／29项，非CF challenge。隔离URLProtocol将这份响应供给原分类脚本，`RSSCategorySourceReplayTests`修改前1项失败、`.scriptFailure`，最终`** TEST FAILED **`。
+- **最小复现**：不联网，只让JS返回含`{{page}}`的分类URL；普通URL控制用例正常，`@js:`和`<js>`两种包装均失败。固定Android commit `330e606c4d57e08adc056ff8ab7a4132c784da9a`的`RssSourceExtensions.sortUrls()`直接`evalJS(script)`，不经正文规则解析。用户批准补齐现有工具固定依赖后，`lc.py oracle`实际输出原样保留的模板字符串，`typeof=string`；Rhino1.8.1／jsoup1.16.2下载后匹配项目固定SHA-256，仅进入Gradle工具缓存，没有加入App或改Android。
+- **根因与最小改动**：iOS `LegadoRSSScraper.resolveSortEntries`把整个分类JS送入`ModernRuleEngine.getString`，正文规则的`makeUpRule`抢先执行字符串内的模板，分类阶段没有`page`而产生脚本错误。现在在原`withRuleContext`中直接调用已绑定的JS evaluator，并复用原字符串转换；源鉴权、取消、交互要求、脚本超时和错误检查不变。不改通用正文模板规则、不引入新JSContext／解析器、不按源名或域名分支。
+- **默认列表闭环**：预审后按空的隔离源变量、page=1只读默认列表API一次，200／JSON／6125字节／15项；512KiB预算，无Cookie、改UA重试、重定向或实际媒体资源。私有重放覆盖同一原分类脚本→29分类→默认列表15条，并验证`pic`文章变量与两个固定请求。真实首入口使用`{{source.getVariable()}}`而非`{{key}}`，公开自建回归同时验证未来页码和源变量在请求阶段求值。
+- **实际结果**：动态Xcode／模拟器、iPhoneSimulator27.2 SDK、`Reader-Fork-Dev`，串行`scripts/xctest.sh`选择下面4个suite，最终退出0：`Test run with 29 tests in 4 suites passed after 12.250 seconds`、`** TEST SUCCEEDED **`。原脚本固定输入错误消失，已有电影首次页面／凭据与取消回归仍通过。中间私有测试误将首入口当作无页码模板、又误认其取key，依据源配置修正了本轮新断言；新增列表变量断言的可选访问编译错误亦已修正，不把这些中间运行算作通过。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export TEST_RUNNER_RSS_CATEGORY_REPLAY_INPUT="<隔离分类重放JSON路径>"
+export TEST_RUNNER_RSS_MOVIE_REPLAY_INPUT="<隔离电影重放JSON路径>"
+bash scripts/xctest.sh -- -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/RSSRuntimeIntegrationTests' \
+  -only-testing:'yuedu appTests/RSSCategorySourceReplayTests' \
+  -only-testing:'yuedu appTests/RSSWebInvalidationTests' \
+  -only-testing:'yuedu appTests/RSSMoviePageReplayTests'
+python3 -I scripts/legado-compat/lc.py oracle "<自建纯JS字面量case JSON路径>"
+```
+
+分类重放JSON包含`source`（必要字段的RSSSource Codable）、`body`和`listBody`（两份已捕获JSON的base64）。运行时只把源origin换成合成host，复用既有固定响应工具，不加载封面、网页、媒体或个人登录。原始响应与源规则留在隔离暂存目录，不作为公开测试资源。未提供相应环境变量时私有suite禁用，不能把它计为通过。
+
+本轮是RSS单源修复；旧YCK批跑的1330／1331／1329包缺失，未下载旧源包、启动全包审计或报告LC可用率／GATE PASS。视频播放和seek、MuiPlayer外部资源、真实页面人工操作、真机／iPad／最低iOS17仍未验证。回滚只撤回本轮分类求值改动和对应新增回归，不撤销先前电影会话／UA／CF修复，不删除用户数据或源包。未提交、push、发布或安装到手机，S8仍不标完成。
+
+### 隔离模拟器人工复测准备
+
+按用户选择继续模拟器：串行测试清理后目标模拟器处于Shutdown，`simctl bootstatus <动态目标> -b`实际完成启动。复用已安装的最新Debug App，动态`get_app_container`取得App数据路径，新建独立`rss-manual-*`目录，仅写入「电影（单页测试）」与「葫芦视频」两条配置。原包、原RSS数据和其他目录没有改动；电影临时副本的分类脚本只保留使用原sourceComment求值的“最近更新”入口，不执行原分类的ajaxAll／重试，因此不是电影完整分类验收。葫芦规则保持原样，图标仅指向本机拒绝端口，未播媒体或操作验证。
+
+`simctl launch --terminate-running-process ... -rss-store-dir <新目录>`返回Debug Bundle ID与PID；进程检查确认存活，截图确认App显示中文探索根页。SDK27.2／iPhone 18 Pro Max，模拟器窗口已打开；尚未自动点击订阅源，未把启动／截图记为实源或播放通过。后续由用户点击订阅验证两条源并给出实际可播条目／seek时间。正常启动时不带`-rss-store-dir`即可恢复原数据入口，不删除测试目录或既有数据。
+
+用户随后在上述新模拟器中手动点击订阅并打开葫芦视频，确认“现在能进列表”。这是用户的实源首列表反馈，原打开时报脚本失败的症状已恢复；不冒充助手自动UI测试，也不扩展为视频播放、快进或电影源完整分类通过。
+
+## 3.0.1（build 6）提交与本地Debug交付准备
+
+用户随后反馈视频仍不能播放，并要求先提交push、再编译到下载目录；本轮不再扩大播放器排查，不把首列表恢复写成媒体通过。用户确认版本从3.0（5）递增为3.0.1（6），只改统一版本xcconfig。提交范围为RSS会话／分类／原生网页UA与CF提示修复、相关测试和本记录；私有源包、响应、暂存目录及无关用户文件不提交。
+
+既有已交付Debug IPA使用`dev.denis.readerfork.dev`及其两个扩展身份，当前脚本默认只允许Release。新增明确的`--configuration Debug`打包模式，不改写Bundle ID；默认Release和拒绝混合身份、缺扩展、模拟器、覆盖旧IPA等检查保留。新模式先复现不支持configuration参数；修复后`python3 -B -m unittest discover -s scripts/tests -p 'test_*ipa*.py' -v`实际24项／OK，版号解析及`git diff --check`均退出0。App行为沿用本轮已执行的29项／4 suites结果，不把包装测试当作播放或真机验证。归档和下载文件结果在实际完成后另补，不提前宣称成功。

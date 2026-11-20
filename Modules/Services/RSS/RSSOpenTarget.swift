@@ -236,9 +236,13 @@ enum RSSOpenTarget: Equatable, Sendable {
 
     private static func webRequest(_ prepared: SourcePreparedWebRequest, runtime: RSSRuntime,
                                    article: RequestContext.Article? = nil) -> Self {
-        // 先解析源头和 URL options、完成导航继承，再补缺省值并记录最终请求头。
-        var prepared = prepared
-        prepared.request = RSSRequestFactory.withDefaultWebPageUserAgent(prepared.request)
-        return .request(prepared.request, context: .init(prepared, runtime: runtime, article: article))
+        var context = RequestContext(prepared, runtime: runtime, article: article)
+        // 真正由 WebKit 发起的导航让系统选择缺省 UA，不把 URLSession 的默认值写进浏览器身份。
+        if RSSNativeBrowserPolicy.allows(prepared.request, source: runtime.source, context: context) {
+            return .request(prepared.request, context: context)
+        }
+        let request = RSSRequestFactory.withDefaultWebPageUserAgent(prepared.request)
+        context.headers = request.allHTTPHeaderFields ?? [:]
+        return .request(request, context: context)
     }
 }

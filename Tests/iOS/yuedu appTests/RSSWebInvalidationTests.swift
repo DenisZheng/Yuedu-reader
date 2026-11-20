@@ -22,6 +22,89 @@ struct RSSWebInvalidationTests {
                                  error: $error, loading: $loading, owner: state.owner)
         }
     }
+    @Test("旧会话的访问版本过期后，首次打开新文章必须重绑，不能误报用户改了登录")
+    func firstArticleRebindsStaleCachedAccess() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = RSSStore(storageDirectory: directory)
+        var source = RSSSource(name: "Movie runtime fixture", url: "movie-runtime-\(UUID().uuidString)")
+        source.importedFromLegado = true
+        source.ruleArticles = "$.list"
+        source.header = #"{"User-Agent":"MoviePageFixture/1"}"#
+        store.addSource(source)
+        let old = try await RSSRuntime.make(source: source, owner: store)
+        let key = RSSRuntime.authenticationKey(for: source)
+        let ticket = try #require(store.requestTicket(for: source.id))
+        let version = LoginManager.shared.loginInfoRevision(sourceUrl: key)
+        // 会话终止只推进访问版本，不写登录头或用户凭据；模拟在首次进文章前已有旧缓存。
+        LoginManager.shared.invalidateRuntimeAccess(sourceUrl: key, expectedRevision: version)
+        try #require(old.state.isActive && !old.state.isCurrent && store.accepts(ticket))
+        var error: String?
+        var loading = true
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIHostingController(rootView: RSSSourcePageWebView(source: source,
+            target: .articleHTML("<p id='movie'>Movie initial page</p>", baseURL: "about:blank"),
+            error: Binding(get: { error }, set: { error = $0 }),
+            loading: Binding(get: { loading }, set: { loading = $0 }), owner: store))
+        window.isHidden = false
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let deadline = ContinuousClock.now + .seconds(8)
+        while loading, ContinuousClock.now < deadline { await Task.yield() }
+        #expect(error == nil, "用户没有改源或登录，新页面不应复用过期会话后误报撤销")
+        let web = try #require(findWeb(in: window))
+        #expect(try await web.evaluateJavaScript("document.getElementById('movie')?.textContent") as? String == "Movie initial page")
+        #expect(!old.state.isCurrent, "旧页面仍不得恢复访问权限")
+        window.isHidden = true; window.rootViewController = nil
+        try await store.flushPersistence()
+        do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) }
+    }
+
+    @Test("非网址 sourceKey 的规则列表首次打开生成网页，不应误报来源或登录已变更")
+    func firstMovieStyleArticleKeepsRuntime() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = RSSStore(storageDirectory: directory)
+        let server = try VideoStillFixtureServer(directory: directory, routes: [
+            "/list": .init(body: Data(#"{"list":[{"title":"Movie fixture","link":"/article"}]}"#.utf8), type: "application/json"),
+            "/frame": .init(body: Data("<p id='frame'>Paused media fixture</p>".utf8))
+        ])
+        let base = try await server.start()
+        defer { server.stop() }
+        var source = RSSSource(name: "Movie fixture", url: "movie-fixture-\(UUID().uuidString)")
+        source.importedFromLegado = true; source.enabledCookieJar = false
+        source.ruleArticles = "$.list"; source.ruleTitle = "$.title"; source.ruleLink = "$.link"
+        source.loginUrl = "function login() {}"; source.loginUi = "[{name:'Interface',type:'text'}]"
+        source.header = #"{"User-Agent":"MoviePageFixture/1"}"#
+        source.homepageURL = "https://127.0.0.1:9/"
+        source.ruleDescription = "<p id='movie'>{{$.title}}</p><iframe src='\(base.appendingPathComponent("frame").absoluteString)'></iframe>"
+        store.addSource(source)
+        let page = try await LegadoRSSScraper.fetchListPage(source: source,
+            entry: .init(name: "Recent", url: base.appendingPathComponent("list").absoluteString), owner: store)
+        store.mergeFetchedItems(page.items, for: source.id, scope: page.scope)
+        let article = try #require(store.articles(for: source.id, scope: page.scope).first)
+        let key = RSSRuntime.authenticationKey(for: source)
+        let revision = LoginManager.shared.loginInfoRevision(sourceUrl: key)
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIHostingController(rootView: NavigationStack {
+            RSSArticleReaderView(articleID: article.id, store: store)
+        })
+        window.isHidden = false
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let deadline = ContinuousClock.now + .seconds(8)
+        while findWeb(in: window) == nil, ContinuousClock.now < deadline { await Task.yield() }
+        let web = try #require(findWeb(in: window))
+        while (web.isLoading || server.requests.filter { $0.path == "/frame" }.isEmpty), ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        #expect(try await web.evaluateJavaScript("document.getElementById('movie')?.textContent") as? String == "Movie fixture")
+        #expect(web.configuration.defaultWebpagePreferences.allowsContentJavaScript, "未改配置或登录，不能撤销首次文档")
+        #expect(LoginManager.shared.loginInfoRevision(sourceUrl: key) == revision)
+        #expect(server.requests.filter { $0.path == "/frame" }.count == 1)
+        window.isHidden = true; window.rootViewController = nil
+        try await store.flushPersistence()
+        do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) }
+    }
+
     @Test("已打开的网页在登录、配置、外部变量或删除后撤销，旧JS文档不能继续运行")
     func openedDocumentIsRevoked() async throws {
         for change in 0..<5 {

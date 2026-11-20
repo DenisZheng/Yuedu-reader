@@ -134,7 +134,7 @@ enum RSSRequestFactory {
         "Mozilla/5.0 (iPhone; CPU iPhone OS \(osVersion.majorVersion)_\(osVersion.minorVersion) like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)"
     private static let userAgent = "\(phoneWebKitUserAgentPrefix) yuedu/1.0"
 
-    /// RSS 网页请求和 WKWebView 共用当前系统版本的手机 Safari UA，标准 Feed 保持原 UA。
+    /// 共享执行器及生成 HTML 的缺省网页 UA；原生 WebKit 导航与标准 Feed 不使用它。
     static let webPageUserAgent =
         "\(phoneWebKitUserAgentPrefix) Version/\(osVersion.majorVersion).\(osVersion.minorVersion) Mobile/15E148 Safari/604.1"
 

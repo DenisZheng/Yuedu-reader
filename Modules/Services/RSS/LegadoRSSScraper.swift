@@ -11,8 +11,9 @@ enum LegadoRSSScraper {
         let runtime = try await RSSRuntime.make(source: source, owner: owner, requestSession: requestSession)
         return try await runtime.run { host in
             try await host.run { bridge in
-                let value = try bridge.withRuleContext(content: "", baseURL: source.sourceKey, scope: nil, stage: "rss.categories") {
-                    $0.getString(ruleStr: "@js:" + (LegadoSortURLParser.jsBody(raw) ?? ""))
+                // 分类是完整JS程序，不是正文规则；字符串中的{{page}}留给后续AnalyzeUrl求值。
+                let value = try bridge.withRuleContext(content: "", baseURL: source.sourceKey, scope: nil, stage: "rss.categories") { engine in
+                    ModernRuleEngine.toString(engine.jsEvaluator?(LegadoSortURLParser.jsBody(raw) ?? "", nil))
                 }
                 return LegadoSortURLParser.entries(from: value, fallbackURL: source.sourceKey)
             }

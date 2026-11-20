@@ -83,6 +83,36 @@ class UnsignedIPAPackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Fork Bundle ID"):
             PACKER.package(self.archive, self.output)
 
+    def test_explicit_debug_mode_keeps_debug_bundle_family(self):
+        debug_id = "dev.denis.readerfork.dev"
+        self.change_info(self.app, CFBundleIdentifier=debug_id)
+        for suffix in ("widget", "shareextension"):
+            self.change_info(self.app / "PlugIns" / (suffix + ".appex"),
+                             CFBundleIdentifier=debug_id + "." + suffix)
+        ipa = PACKER.package(self.archive, self.output, configuration="Debug")
+        with zipfile.ZipFile(ipa) as zipped:
+            prefix = "Payload/YueduReader.app/"
+            self.assertEqual(plistlib.loads(zipped.read(prefix + "Info.plist"))["CFBundleIdentifier"], debug_id)
+            for suffix in ("widget", "shareextension"):
+                info = plistlib.loads(zipped.read(prefix + "PlugIns/" + suffix + ".appex/Info.plist"))
+                self.assertEqual(info["CFBundleIdentifier"], debug_id + "." + suffix)
+
+    def test_debug_mode_still_rejects_release_or_mixed_bundles(self):
+        with self.assertRaisesRegex(ValueError, "Fork Bundle ID"):
+            PACKER.package(self.archive, self.output, configuration="Debug")
+        self.change_info(self.app, CFBundleIdentifier="dev.denis.readerfork.dev")
+        with self.assertRaisesRegex(ValueError, "其他扩展"):
+            PACKER.package(self.archive, self.output, configuration="Debug")
+
+    def test_debug_mode_checks_main_display_name(self):
+        self.change_info(self.app, CFBundleIdentifier="dev.denis.readerfork.dev", CFBundleDisplayName="Other app")
+        with self.assertRaisesRegex(ValueError, "显示名"):
+            PACKER.package(self.archive, self.output, configuration="Debug")
+
+    def test_unknown_packaging_configuration_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "配置"):
+            PACKER.package(self.archive, self.output, configuration="Unknown")
+
     def test_missing_executable_is_rejected(self):
         (self.app / "Executable").unlink()
         with self.assertRaisesRegex(ValueError, "可执行文件"):

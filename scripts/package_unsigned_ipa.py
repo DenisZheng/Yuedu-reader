@@ -10,6 +10,7 @@ import tempfile
 import zipfile
 
 BUNDLE_ID = "com.deniszheng.legadopro"
+DEBUG_BUNDLE_ID = "dev.denis.readerfork.dev"
 APP_NAME = "LegadoPro"
 IPA_NAME = "LegadoPro-unsigned.ipa"
 EXTENSIONS = {BUNDLE_ID + ".widget", BUNDLE_ID + ".shareextension"}
@@ -21,7 +22,7 @@ def validate_bundle(bundle, expected_id=None):
     bundle_id = info.get("CFBundleIdentifier")
     if expected_id is not None and bundle_id != expected_id:
         raise ValueError(f"不是预期的Fork Bundle ID：{bundle.name}")
-    if bundle_id == BUNDLE_ID and info.get("CFBundleDisplayName") != APP_NAME:
+    if bundle_id in {BUNDLE_ID, DEBUG_BUNDLE_ID} and info.get("CFBundleDisplayName") != APP_NAME:
         raise ValueError("主App显示名不是LegadoPro")
     if info.get("CFBundleSupportedPlatforms") != ["iPhoneOS"]:
         raise ValueError(f"只接受真机iPhoneOS产物，不接受模拟器：{bundle.name}")
@@ -31,15 +32,21 @@ def validate_bundle(bundle, expected_id=None):
     return bundle_id
 
 
-def package(archive, output):
+def package(archive, output, configuration="Release"):
+    if configuration not in {"Release", "Debug"}:
+        raise ValueError("打包配置只允许Release或Debug")
+    expected_id = DEBUG_BUNDLE_ID if configuration == "Debug" else BUNDLE_ID
+    expected_extensions = EXTENSIONS if configuration == "Release" else {
+        expected_id + ".widget", expected_id + ".shareextension"
+    }
     archive, output = Path(archive).resolve(), Path(output).resolve()
     apps = list((archive / "Products/Applications").glob("*.app"))
     if len(apps) != 1:
         raise ValueError("archive必须恰好包含一个主App")
     app = apps[0]
-    validate_bundle(app, BUNDLE_ID)
+    validate_bundle(app, expected_id)
     extensions = [validate_bundle(path) for path in (app / "PlugIns").glob("*.appex")]
-    if len(extensions) != len(EXTENSIONS) or set(extensions) != EXTENSIONS:
+    if len(extensions) != len(expected_extensions) or set(extensions) != expected_extensions:
         raise ValueError("archive缺少Fork的Widget/ShareExtension，或混入了其他扩展")
     output.mkdir(parents=True, exist_ok=True)
     ipa = output / IPA_NAME
@@ -70,8 +77,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--configuration", choices=["Release", "Debug"], default="Release",
+                        help="默认Release；Debug仅接受既有Debug Fork Bundle ID，不改写身份")
     args = parser.parse_args()
-    print(package(args.archive, args.output))
+    print(package(args.archive, args.output, configuration=args.configuration))
 
 
 if __name__ == "__main__":

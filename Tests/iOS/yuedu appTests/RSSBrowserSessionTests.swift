@@ -13,13 +13,91 @@ struct RSSBrowserSessionTests {
         var error: String?
     }
 
-    @Test("普通singleUrl从浏览器发起并在原会话完成表单，保留来源、UA、Cookie与DOM存储",
-          arguments: [(false, "ReaderBrowserSessionFixture/1" as String?), (true, "ReaderBrowserSessionFixture/1"),
-                      (false, nil), (false, BookSource.legadoDefaultUserAgent)])
-    func documentAndPostShareBrowserSession(directWebKitControl: Bool, userAgent: String?) async throws {
+    @Test("明确的 CF 验证响应不显示普通 403 重试条；普通拒绝仍报错",
+          arguments: [("challenge" as String?, true), (nil, false), ("guardrails", false)])
+    func separatesChallengeFromHTTPFailure(marker: String?, isChallenge: Bool) async throws {
+        var headers = ["Server": "cloudflare"]
+        if let marker { headers["CF-Mitigated"] = marker }
+        let server = try VideoStillFixtureServer(directory: .temporaryDirectory, routes: [
+            "/start": .init(body: Data("<p id='page'>Local interaction page</p><a id='next' href='/next'>Continue</a>".utf8),
+                            status: "403 Forbidden", headers: headers),
+            "/next": .init(body: Data("<p id='page'>Ordinary page</p>".utf8))
+        ])
+        let base = try await server.start()
+        defer { server.stop() }
+        var source = RSSSource(name: "HTTP response fixture", url: base.appendingPathComponent("start").absoluteString)
+        source.importedFromLegado = true; source.singleUrl = true; source.enabledCookieJar = true
+        source.cacheFirst = false; source.header = "{}"
+        let target = try #require(try await RSSOpenTarget.resolve(source: source))
+        let state = State()
+        let window = try host(RSSSourcePageWebView(source: source, target: target,
+            error: Binding(get: { state.error }, set: { state.error = $0 }),
+            loading: Binding(get: { state.loading }, set: { state.loading = $0 })))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let deadline = ContinuousClock.now + .seconds(8)
+        while state.loading, ContinuousClock.now < deadline { await Task.yield() }
+        try #require(!state.loading)
+        let web = try #require(findWeb(window))
+        let expectedError = isChallenge ? nil : String(format: localized("RSS 請求失敗：HTTP %d"), 403)
+        #expect(state.error == expectedError, "只有明确验证页才能不触发重试遮罩，不能按 Server 或所有 403 隐藏错误")
+        #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Local interaction page")
+        #expect(server.requests.filter { $0.path == "/start" }.count == 1, "等待操作不能自动重试")
+
+        // 仅点自建普通链接，不运行或自动完成任何真人验证。
+        _ = try await web.evaluateJavaScript("document.getElementById('next').click(); void 0")
+        let nextDeadline = ContinuousClock.now + .seconds(8)
+        while (web.url?.path != "/next" || web.isLoading || state.loading), ContinuousClock.now < nextDeadline { await Task.yield() }
+        try #require(web.url?.path == "/next" && !web.isLoading && !state.loading)
+        #expect(state.error == nil)
+        #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Ordinary page")
+        #expect(server.requests.filter { $0.path == "/next" }.count == 1)
+    }
+
+    @Test("未声明 UA 的 singleUrl 首请求、网页与后续导航使用系统 WebKit UA", arguments: [nil as String?, "{}"])
+    func nativeBrowserKeepsSystemUserAgent(header: String?) async throws {
+        let html = Data("<a id='next' href='/next'>Next</a>".utf8)
+        let server = try VideoStillFixtureServer(directory: .temporaryDirectory, routes: [
+            "/control": .init(body: html), "/start": .init(body: html), "/next": .init(body: Data("<p>Next page</p>".utf8))
+        ])
+        let base = try await server.start()
+        defer { server.stop() }
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let control = try RSSPoCWebPage(configuration: configuration)
+        defer { control.close() }
+        try await control.waiter.load { control.view.load(URLRequest(url: base.appendingPathComponent("control"))) }
+        let systemUA = try #require(server.requests.first { $0.path == "/control" }?.headers["user-agent"])
+        #expect(try await control.view.evaluateJavaScript("navigator.userAgent") as? String == systemUA)
+
+        var source = RSSSource(name: "Native web UA fixture", url: base.appendingPathComponent("start").absoluteString)
+        source.importedFromLegado = true; source.singleUrl = true; source.enabledCookieJar = true
+        source.cacheFirst = false; source.header = header
+        let target = try #require(try await RSSOpenTarget.resolve(source: source))
+        let state = State()
+        let window = try host(RSSSourcePageWebView(source: source, target: target,
+            error: Binding(get: { state.error }, set: { state.error = $0 }),
+            loading: Binding(get: { state.loading }, set: { state.loading = $0 })))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let firstDeadline = ContinuousClock.now + .seconds(8)
+        while state.loading, ContinuousClock.now < firstDeadline { await Task.yield() }
+        try #require(!state.loading && state.error == nil)
+        let web = try #require(findWeb(window))
+        #expect(server.requests.first { $0.path == "/start" }?.headers["user-agent"] == systemUA)
+        #expect(try await web.evaluateJavaScript("navigator.userAgent") as? String == systemUA)
+        _ = try await web.evaluateJavaScript("document.getElementById('next').click(); void 0")
+        let nextDeadline = ContinuousClock.now + .seconds(8)
+        while (web.url?.path != "/next" || web.isLoading || state.loading), ContinuousClock.now < nextDeadline { await Task.yield() }
+        try #require(web.url?.path == "/next" && !web.isLoading && !state.loading && state.error == nil)
+        #expect(server.requests.first { $0.path == "/next" }?.headers["user-agent"] == systemUA)
+        #expect(try await web.evaluateJavaScript("navigator.userAgent") as? String == systemUA)
+    }
+
+    @Test("普通singleUrl从浏览器发起并在原会话完成表单，保留来源、显式UA、Cookie与DOM存储",
+          arguments: [(false, "ReaderBrowserSessionFixture/1"), (true, "ReaderBrowserSessionFixture/1"),
+                      (false, BookSource.legadoDefaultUserAgent), (false, RSSRequestFactory.webPageUserAgent)])
+    func documentAndPostShareBrowserSession(directWebKitControl: Bool, userAgent: String) async throws {
         let cookie = "fixture" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        var requiredHeaders = ["cookie": cookie + "=scoped"]
-        if let userAgent { requiredHeaders["user-agent"] = userAgent }
+        let requiredHeaders = ["cookie": cookie + "=scoped", "user-agent": userAgent]
         let firstHTML = """
         <!doctype html><html><body><p id="ready">ready</p>
         <script>
@@ -49,13 +127,12 @@ struct RSSBrowserSessionTests {
         source.singleUrl = true
         source.cacheFirst = false
         source.enabledCookieJar = true
-        source.header = userAgent.map { "{\"uSeR-aGeNt\":\"" + $0 + "\"}" } ?? "{}"
+        source.header = "{\"uSeR-aGeNt\":\"" + userAgent + "\"}"
         source.enableJs = true
         let target = try #require(try await RSSOpenTarget.resolve(source: source))
-        let expectedUserAgent = userAgent ?? defaultPhoneUserAgent
         if case .request(let request, let context) = target {
-            #expect(request.value(forHTTPHeaderField: "User-Agent") == expectedUserAgent)
-            #expect(context?.headers.first { $0.key.lowercased() == "user-agent" }?.value == expectedUserAgent)
+            #expect(request.value(forHTTPHeaderField: "User-Agent") == userAgent)
+            #expect(context?.headers.first { $0.key.lowercased() == "user-agent" }?.value == userAgent)
         } else { Issue.record("未生成网页请求") }
         let state = State()
         let window: UIWindow?
@@ -85,7 +162,7 @@ struct RSSBrowserSessionTests {
         #expect(try await web.evaluateJavaScript("location.href") as? String == source.url)
         #expect(try await web.evaluateJavaScript("window.storageReady") as? Bool == true)
         let effectiveUserAgent = try #require(try await web.evaluateJavaScript("navigator.userAgent") as? String)
-        #expect(effectiveUserAgent == expectedUserAgent)
+        #expect(effectiveUserAgent == userAgent)
         #expect(server.requests.first?.headers["user-agent"] == effectiveUserAgent)
         #expect(server.requests.filter { $0.path == "/start" }.count == 1)
         #expect(server.requests.first?.headers["sec-fetch-mode"] == "navigate", "首文档必须真实浏览器导航，不能仅将原生取得的HTML灌入浏览器")
@@ -147,8 +224,8 @@ struct RSSBrowserSessionTests {
         #expect(!webNavigation.canGoBack)
         #expect(server.requests.count == 1)
         #expect((server.requests[0].headers["sec-fetch-mode"] == "navigate") == !sharedExecutor)
-        let browserUserAgent = try await web.evaluateJavaScript("navigator.userAgent") as? String
-        #expect(browserUserAgent == defaultPhoneUserAgent)
+        let browserUserAgent = try #require(try await web.evaluateJavaScript("navigator.userAgent") as? String)
+        if sharedExecutor { #expect(browserUserAgent == defaultPhoneUserAgent) }
 
         _ = try await web.evaluateJavaScript("document.getElementById('child').click(); void 0")
         let childDeadline = ContinuousClock.now + .seconds(8)
@@ -175,7 +252,7 @@ struct RSSBrowserSessionTests {
         #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Home")
         #expect(server.requests.filter { $0.path == "/child" }.count == 2)
         let userAgents = Set(server.requests.map { $0.headers["user-agent"] })
-        #expect(userAgents == [defaultPhoneUserAgent])
+        #expect(userAgents == [browserUserAgent])
         if sharedExecutor {
             #expect(server.requests.allSatisfy { $0.headers["x-history"] == "fixture" && $0.headers["sec-fetch-mode"] == nil })
             #expect(try await web.evaluateJavaScript("window.readHistoryFixture()") as? String == "", "返回后原页面桥必须绑定到恢复后的请求上下文")
