@@ -449,14 +449,15 @@ extension ReaderView {
     private func refetchChapter(at idx: Int) {
         guard let currentBook = book else { return }
         pendingChapterContentReplacements.insert(idx)
-        dependencies.bookSourceFetcher.clearChapterCache(
-            bookId: currentBook.id,
-            chapterIndex: idx
-        )
-        store.clearCachedChapter(bookId: currentBook.id, chapterIndex: idx)
-        readerViewModel.resetChapterState(for: idx)
-        // .jump = user-initiated highest priority; preempts any stale in-flight.
-        ensureChapterReady(chapterIndex: idx, priority: .jump)
+        let fetcher = dependencies.bookSourceFetcher
+        Task { @MainActor in
+            await fetcher.clearChapterCacheAsync(bookId: currentBook.id, chapterIndex: idx)
+            guard !Task.isCancelled, book?.id == currentBook.id, book?.bookSourceId == currentBook.bookSourceId else { return }
+            store.clearCachedChapter(bookId: currentBook.id, chapterIndex: idx)
+            readerViewModel.resetChapterState(for: idx)
+            // 清理真实完成后才启动新请求，不以延时等待；旧批量票据已失效。
+            ensureChapterReady(chapterIndex: idx, priority: .jump)
+        }
     }
 
     func prefetchAdjacentChapters(around chapterIndex: Int) {

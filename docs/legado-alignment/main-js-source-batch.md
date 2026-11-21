@@ -40,7 +40,7 @@
 1. 主脚本预算8 MiB，元数据归一化1 MiB／2秒，运行返回归一化16 MiB；主函数沿原宿主30秒预算。取消拒绝返回与落盘，不保证立刻终止已经同步运行的JS或系统请求。
 2. 复用现有LegadoRuleScope与RhinoNormalizer；原scope对strict、动态eval／Function、全局属性与jsLib可变闭包的已知差异没有被本批消除。不新建JSContext或备用规则引擎。
 3. 单文件元数据是仅JS语言环境；没有注册请求、Cookie、cache或任意文件桥，也不自动下载jsLib。依赖原生能力或Android默认CryptoJS来计算顶层配置的脚本会明确失败，不假报完整兼容。
-4. getContentBatch／maxBatchSize、通用段评及LoginUiV2仍后置。成对声明的批量字段只保留，不自动批量回存；动态loginUi函数明确拒绝。旧loginUi数据校验login配对，但本批不新增主脚本登录函数调用入口。
+4. 本mainJs交付当时getContentBatch／maxBatchSize只保留，不执行批量回存；后续独立[批量正文批次](content-batch-source-batch.md)已接通并通过自动固定输入、两站实站适配和用户人工确认，尚未合入，不能混作本页原验收范围。通用段评及LoginUiV2仍后置；动态loginUi函数明确拒绝。旧loginUi数据校验login配对，但本批不新增主脚本登录函数调用入口。
 5. 单一合法书籍位标记按自身域映射到现有阅读／媒体路径；混合多媒体标记、非文件型源临时返回文件类型、全部媒体格式／DRM未增加独立验收。不以字段推导当作播放通过。
 6. JSON中mainJs仍按Android由非空判断模式，不在解码／保存时执行脚本；语法错、缺函数和非法返回在执行时明确报错。主脚本不再fallback到声明式网页抓取。
 7. 实源公网、私人登录、iPad、最低iOS17、VoiceOver专项及真机尚未新增验证。主脚本配置变更／删除／用户源变量修改使已登记宿主失效；已被调用方复制的旧配置不是重新授权，不承诺任意离线快照都能代表当前store。

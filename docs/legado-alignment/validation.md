@@ -1439,3 +1439,106 @@ git diff --check
 本批mainJs的约定实现、自动门槛和用户人工确认已经通过，已按独立授权合入并正常push。原文件夹导航仍未修复，用户批准的系统Files根层文件选择仅是验收入口绕行；仍不扩展为全源／全部媒体／真机／iPad／最低iOS17／VoiceOver专项通过。批量正文／副文、通用段评与LoginUiV2仍后置，不把保存这些字段写成已完成。
 
 原main、5份已有未提交修复、私有源包、模拟器数据和Release IPA保持。下载目录的3.0.1（6）8bc Release IPA仍不含mainJs，本次没有重新打包、自动发布或清理服务。回退需用户确认后用正常后续提交撤销这批合入，不force push、不删数据、不覆写root未提交文件。
+
+## 批量正文独立批次：自动门槛通过，待人工确认（2026-11-21）
+
+用户先明确要求本地主线reset到远端，备份5份旧修复及6份已在远端的同名文件后，main已与fe4d28be同步；23份原未跟踪文件内容／私有包／旧IPA指纹保持，没有git clean。随后用户批准按建议开展批量正文。当前独立分支feature/legado-batch-content，base fe4d28be，main ref保留同步点；本批未提交、合入或push。
+
+合同见[批量正文](content-batch-source-batch.md)。固定Android330e基准只读，围绕BookContent／JsSourceBook／BatchContentContext与下载／预读调用方。原YCK工具status为1330/1331/1329 MISSING，旧r20指纹不匹配，不下载旧包、执行原包或引用旧可用率。本轮完全使用自建脚本、隔离cache/store与有限本机请求。
+
+### 真实RED与诊断
+
+- 初始`.artifacts/content-batch/red.log`：2项／1 suite／3 issues／TEST FAILED，已知ContentRule未承载执行字段、生产主脚本宿主缺cacheContent。这是既有API的行为复现，不是编译缺成员替代RED。
+- 新增替换上下文固定输入：1项／3 issues，章节index／变量不是当前章；切换章节scope和恢复原读者后同一测试通过。
+- 后续直接JS的java.getString固定输入仍失败，先区分未挂规则读者和数组当解析文档两层原因；纯ModernRuleEngine空文档＋显式mContent控制通过，批量仍空。将批量数组留作JS result而不设为解析文档，沿makeEngine原读者绑定后单项通过；没有更改期望或以fallback伪装成功。
+- 编译过程的unsafe static诊断、显式self、测试不可发送ReadingBook捕获及类型名／路径不匹配均记录在本地日志，是编译／导航问题，不计功能RED或通过。没有改变Swift模式、工程依赖或用新DerivedData绕过。
+
+### 实际GREEN与命令
+
+动态Xcode／iPhone 18 Pro Max／iOS27.2、Reader-Fork-Dev、串行、原DerivedData。实际执行：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+bash scripts/xctest.sh -l .artifacts/content-batch/final-regressions.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/SourceContentBatchTests' \
+  -only-testing:'yuedu appTests/MainJsSourceTests' \
+  -only-testing:'yuedu appTests/ChapterCacheRepositoryWriteTests' \
+  -only-testing:'yuedu appTests/ChapterFetchManagerSharedTests' \
+  -only-testing:'yuedu appTests/OfflineDownloadManagerTests' \
+  -only-testing:'yuedu appTests/BookSourceSessionQueueTests' \
+  -only-testing:'yuedu appTests/RSSRuntimeIntegrationTests' \
+  -only-testing:'yuedu appTests/FirstParityContractTests'
+bash scripts/xctest.sh -l .artifacts/content-batch/fixture.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/SourceContentBatchTests/offlineFixture()'
+ruby scripts/check_localizations.rb
+python3 -B -m unittest scripts.tests.test_source_debug_logging_privacy -v
+git diff --check
+```
+
+主回归退出0：Test run with 79 tests in 8 suites passed after 9.318 seconds／TEST SUCCEEDED。新增交付fixture另1项，0.171秒／TEST SUCCEEDED；两个非重叠批次共80项，15个本批测试已真实执行。不重跑全量、不重复build/clean。五语言Localization OK、6新增key覆盖全部5语言；源日志隐私gate3项／OK。单个RBS清理日志不覆盖最终测试结论，未因之重装或清理设备。
+
+已验证两种源回存、对象／同URL／纯数字／非法标识、章节变量与替换上下文、裸JS／@js／连续纯js包装、缺函数、部分异常保留与单章回退、空值、配置数量、16 MiB回传预算、不变不写、旧票据被单章新写／清缓存失效、有限请求取消／源失效，以及共享下载取消保护。后者使用最大3请求的既有127.0.0.1测试服务器，等到真实2个批量等待者登记后取消预读者；下载仍成功且请求数1，不sleep等竞态。
+
+缓存正文仍归ChapterCacheRepository；新增票据只登记在途写入，结束释放，不构造第二份持久缓存。批量脚本通过同一宿主和请求能力执行，java桥仅当前批量可用，预算／失效检查保留。SourcePerfTrace回存输出main=false。阅读器刷新／详情清理两条原主线程入口改为后台实际完成后再更新UI，避免在主线程等待新增写入互斥；没有改UI布局或标题。结果SourceContentBatchTests和已有缓存／下载回归提供行为证据，不把源码字段当功能完成。
+
+### 人工环境与未验证项
+
+新建专用模拟器Legado 批量正文验收 1121-2035-da64，UDID A780DBD1-9AB4-4681-8B89-05CFB5B2B15E。安装的是当前Debug，不是旧8bc IPA。只在新容器预置1个自建源，0份旧书籍／账号；3份样本在系统Files“我的iPhone”根层。源ID／文件／路径指针存在.artifacts/content-batch/manual/environment.json，原设备和数据保留。
+
+本机system Files group不登记为DocumentsApp的直接group，get_app_container对应group返回usage／117而不是权限拒绝；核对后沿既有Kindle fixture的MCMMetadataIdentifier识别唯一LocalStorage group，再独占复制。不是权限绕过，不修改系统权限、iCloud或目录权限。三个副本SHA一致，文件夹导航仍未修，继续根层直接选文件。
+
+下载目录批量正文人工验收-1121-2045-40cd含指南、3样本、重开command；command实际运行，bootstatus确认已启动，App新PID启动，脚本解析与复制校验通过。指南要求先检查正常单章路径，再选择下载三章并检查各章变量／批量标记与重开；已有单章／预读缓存不为演示强行删除，允许标记并存。部分异常源保留已完成章、剩余单章回退。准备与自动固定输入不等于用户UI验收通过。
+
+当前待用户人工确认；原文件夹问题、真实站点／私人登录／全部媒体与DRM／iPad／真机／最低iOS17／VoiceOver专项未新增验收。副文、段评、LoginUiV2和高级工具仍后置，没有新播放器／SDK／权限／发布／打包。原本地文件、源包、旧IPA、模拟器和备份保持。回滚仅撤回本批代码及文档，保留main基线和用户数据，不自动reset、git clean或force push。
+
+## 批量正文实站适配门槛通过（2026-11-21）
+
+用户追加授权“先用实书源自己验证下，验证OK再让我人工验收”。原包静态只读统计253项，无mainJs、contentBatch或maxBatchSize；原哈希不变。GitHub定向检索只发现框架测试例子，不把这些fixture当实源，也不声称没有任何公开原生源。说明差别后，用户明确选择“实站适配验证”：原样回归普通书源，再在隔离副本加批量包装，不改原包。
+
+原样候选仅选文本、GET、无header/login/jsLib/mainJs、规则不含JS／java副作用、无正文分页/payAction/webJs。初筛曾错误将空login字段名算作副作用，已按请求／规则值修正；18候选中12满足进一步限制。只读4站GET预审均200，这仅用于选择，不计正文通过。之后临时Swift探针实际选4候选，达到2个完整成功即结束。
+
+### 实际结果
+
+| 原包稳定标识 | 原样路径 | 隔离批量副本 | Swift请求数 |
+| --- | --- | --- | --- |
+| B236／index235（quduwx.net） | 搜索／详情／目录和前3个非付费可读章成功 | 原content提取／replaceRegex规则不变，新增contentBatch回存3章，逐章内容去空白后与原单章一致 | 9 |
+| B250／index249（yetianlian.la，重定向xyetianlian.com） | 同上，3章成功 | 同上，3章回存／身份与正文一致 | 10 |
+| index36、163 | 固定词搜索返回空，未进入详情／正文 | 未执行适配 | 各1 |
+
+两个空结果没有细分站点、配置或词不匹配原因，不计通过，也不拿preflight 200当修复证据。共21个Swift受控请求，原样三章与适配三章各经过生产SourceScriptHost／BookSourceSession／ModernParserBridge；批量调用生产fetchContentBatch及唯一ChapterCacheRepository，不伪造网络或缓存。源规则副本只在测试内存，不写源store或用户书架。
+
+### 命令与边界
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+bash scripts/xctest.sh -l .artifacts/content-batch/real/live-3.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/RealSourceBatchValidationTests'
+```
+
+最终退出0，真实1项／20.412秒／TEST SUCCEEDED：
+
+```text
+REAL_BATCH index=235 original=PASS adapted=PASS chapters=3 requests=9
+REAL_BATCH index=249 original=PASS adapted=PASS chapters=3 requests=10
+```
+
+临时URLProtocol仅配置本验证URLSession，转发真实网络，固定6个公共域名白名单；拒绝私人IP／localhost／URL凭据及GET/HEAD以外请求，剥离Cookie/Authorization/Proxy-Authorization，ephemeral无凭据／Cookie storage；每源最多16请求、每响应2 MiB流式限制及传输超时，保留TLS验证，未增加App系统权限或代理路径。沿现有runtimeOverrides使用随机authenticationKey和独立state suite，不读取个人登录；SourceDiagnosticContext限制诊断。原3章正文只存在隔离cache，结束删除本次目录，不复制正文到文档或公开提交。
+
+最初URLProtocol兼任delegate触发当前SDK unavailable Sendable诊断，按既有NSDelegate分离后编译；路径层级错误修正前没有实站执行，不算行为失败。最终探针验证通过后已归档到.artifacts/content-batch/real/diagnostic-source，未留在普通测试目标。原JSON两包SHA保持；无购买、登录、发帖、WebKit权限或文件型源副作用。原代码未因实站验证改变，先前80项固定输入结论保留，不重复全量。
+
+用户选择的实站适配门槛已经通过，现在可以交离线专用模拟器进行实际界面人工确认。仍不把这写成作者原生批量源原样通过／全包可用，原文件夹导航、真实账户、完整媒体／DRM、iPad／真机／最低iOS17／VoiceOver专项限制保留。本批仍未提交、合入或push，原main ref和个人数据保留。
+
+## 批量正文用户人工确认（2026-11-21）
+
+两代表实站的原样单章与隔离适配批量验证通过后，用户明确反馈“验证OK”。据此记录本批提供流程的人工门槛通过，独立于80项固定输入和1项实站探针，不将助手的测试、截图或启动当作用户人工操作。
+
+确认环境为Legado 批量正文验收 1121-2035-da64／iPhone 18 Pro Max／iOS27.2，当前Debug，指南提供正常三章下载／章节变量／部分异常后的单章回退／重开恢复。反馈按此次流程作批次确认，没有逐项新截图或特殊平台报告，不扩大为作者原生批量源、全包、全部格式／DRM、真实账号、真机／iPad／最低iOS17／VoiceOver专项通过。系统文件夹限制及根层文件绕行继续保留。
+
+当前分支feature/legado-batch-content，base fe4d28be，main ref仍保留已同步点。只更新本轮验收记录，业务实现和原始源包不变，不因确认重复联网、测试或打包。本批尚未commit、合入或push；用户验收反馈不自动授权这些操作、正式发布或清理环境，后续须另行明确指示。原数据、备份和旧IPA保留。

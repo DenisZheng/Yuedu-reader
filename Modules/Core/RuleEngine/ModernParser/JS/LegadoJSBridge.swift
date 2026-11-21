@@ -482,6 +482,7 @@ struct LegadoHTTPResult: Sendable {
     // Logging
     func log(_ msg: String) -> String
     func logType(_ msg: String)
+    func cacheContent(_ chapter: JSValue, _ content: String) -> Bool
 
     // Response processing (TTS)
     func setResponseBase64(_ data: String, _ mimeType: String)
@@ -815,6 +816,8 @@ struct LegadoHTTPResult: Sendable {
 
     /// Called when JS invokes `java.toast(msg)` / `java.longToast(msg)`.
     var toastHandler: (@Sendable (String) -> Void)?
+    /// 只在当前批量脚本期间安装；普通规则不能凭这个桥任意写入章节。
+    var cacheContentHandler: ((JSValue, String) throws -> Bool)?
 
     /// Called when JS invokes `java.reLoginView()` — the source asks the host to re-render its
     /// custom login menu (e.g. after `changeMenu(tag)` switches `menuTag`). Lets multi-page
@@ -2123,6 +2126,19 @@ struct LegadoHTTPResult: Sendable {
 
     /// 保留接口，不再把任意源值复制到未经处理的控制台；源诊断由java.log负责。
     func logType(_ msg: String) {}
+
+    func cacheContent(_ chapter: JSValue, _ content: String) -> Bool {
+        do {
+            guard let handler = cacheContentHandler else { throw SourceContentBatch.Failure.missingRule }
+            return try handler(chapter, content)
+        } catch {
+            // 只给网页／脚本稳定错误，不复制外部值、URL或原文异常到控制台。
+            if let context = JSContext.current() {
+                context.exception = JSValue(newErrorFromMessage: localized("批量正文回存失敗，請查看來源診斷。"), in: context)
+            }
+            return false
+        }
+    }
 
     func setResponseBase64(_ data: String, _ mimeType: String) {
         guard let decoded = Data(base64Encoded: data, options: .ignoreUnknownCharacters) else {

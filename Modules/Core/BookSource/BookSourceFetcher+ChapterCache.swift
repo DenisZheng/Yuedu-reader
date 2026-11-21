@@ -45,6 +45,11 @@ extension BookSourceFetcher {
         Self.chapterCacheRepository.clearAllChapterCache(bookId: bookId)
     }
 
+    /// 主线程入口等待实际清理完成，但文件IO和写入互斥不占用主线程。
+    nonisolated func clearAllChapterCacheAsync(bookId: UUID) async {
+        Self.chapterCacheRepository.clearAllChapterCache(bookId: bookId)
+    }
+
     @discardableResult
     nonisolated func saveToCache(
         content: String,
@@ -100,5 +105,12 @@ extension BookSourceFetcher {
             expectedSourceURL: expectedSourceURL,
             expectedTOCTitle: expectedTOCTitle
         )
+    }
+}
+
+extension BookSourceFetching {
+    /// Swift 5非isolated async在后台执行；返回后调用方才重启章节请求。
+    func clearChapterCacheAsync(bookId: UUID, chapterIndex: Int) async {
+        clearChapterCache(bookId: bookId, chapterIndex: chapterIndex)
     }
 }

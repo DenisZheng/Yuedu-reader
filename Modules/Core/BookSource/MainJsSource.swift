@@ -96,7 +96,7 @@ enum MainJsSource {
             guard let number = size as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
                   number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue, number.doubleValue > 1,
                   functions["getContentBatch"] == true else { throw Failure.invalidConfiguration }
-            source.preservedConfiguration["ruleContent"] = .object(["maxBatchSize": .number(min(number.doubleValue, 50))])
+            source.ruleContent.maxBatchSize = min(number.intValue, 50)
         } else if functions["getContentBatch"] == true { throw Failure.invalidConfiguration }
         return source
     }
