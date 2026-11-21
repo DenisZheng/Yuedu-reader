@@ -290,6 +290,7 @@ enum ChangeSourceKindLabel {
         case .audio: localized("有聲書")
         case .manga: localized("漫畫")
         case .video: localized("影片")
+        case .file: localized("文件型書源")
         }
     }
 }

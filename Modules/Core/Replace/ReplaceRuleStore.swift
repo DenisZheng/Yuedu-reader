@@ -18,7 +18,7 @@ final class ReplaceRuleStore: @MainActor ObservableObject {
     @Published private(set) var rules: [ReplaceRule] {
         didSet {
             let rules = self.rules
-            Self.snapshot.withLock { $0 = rules }
+            if storageURL == Self.fileURL { Self.snapshot.withLock { $0 = rules } }
             revision &+= 1
         }
     }
@@ -41,8 +41,16 @@ final class ReplaceRuleStore: @MainActor ObservableObject {
     /// reinstall still seeds them.
     private nonisolated static let presetsInstalledKey = "yd_replace_presets_installed"
 
+    private let storageURL: URL
     private init() {
+        storageURL = Self.fileURL
         rules = Self.snapshot.withLock { $0 }
+    }
+
+    /// 隔离验收使用指定文件，不读写生产单例及其后台快照。
+    init(file: URL, rules: [ReplaceRule] = []) {
+        storageURL = file
+        self.rules = rules
     }
 
     private nonisolated static func initialRules() -> [ReplaceRule] {
@@ -137,28 +145,41 @@ final class ReplaceRuleStore: @MainActor ObservableObject {
             throw ReplaceRuleImportError.noRules
         }
 
-        var nextOrder = (rules.map(\.sortOrder).max() ?? -1) + 1
-        var importedCount = 0
-        for importedRule in importedRules {
-            var rule = importedRule
-            if let existingIndex = rules.firstIndex(where: {
-                $0.pattern == rule.pattern
-                    && $0.replacement == rule.replacement
-                    && $0.scope == rule.scope
-            }) {
-                rule.id = rules[existingIndex].id
-                rule.sortOrder = rules[existingIndex].sortOrder
-                rules[existingIndex] = rule
+        let merged = Self.merging(importedRules, into: rules)
+        if merged != rules { rules = merged; save() }
+        return importedRules.count
+    }
+
+    /// 导入和规则订阅共用身份合并；Android数字ID映射后保持稳定，更新不插入第二条规则。
+    nonisolated static func merging(_ imported: [ReplaceRule], into existing: [ReplaceRule]) -> [ReplaceRule] {
+        var result = existing
+        var nextOrder = (existing.map(\.sortOrder).max() ?? -1) + 1
+        for var rule in imported {
+            let index = result.firstIndex { $0.id == rule.id }
+                ?? result.firstIndex { $0.pattern == rule.pattern && $0.replacement == rule.replacement && $0.scope == rule.scope }
+            if let index {
+                rule.id = result[index].id; rule.sortOrder = result[index].sortOrder; result[index] = rule
             } else {
-                rule.id = UUID().uuidString
-                rule.sortOrder = nextOrder
-                nextOrder += 1
-                rules.append(rule)
+                rule.sortOrder = nextOrder; nextOrder += 1; result.append(rule)
             }
-            importedCount += 1
         }
-        save()
-        return importedCount
+        return result
+    }
+
+    func commitSubscriptionRules(_ next: [ReplaceRule], expectedRevision: Int, changed: Bool) async throws {
+        try Task.checkCancellation()
+        guard revision == expectedRevision else { throw ReplaceRuleImportError.invalidData }
+        if changed { rules = next; save() }
+        try await persistPendingChanges()
+    }
+
+    func persistPendingChanges() async throws {
+        await withCheckedContinuation { continuation in Self.persistQueue.async { continuation.resume() } }
+        if Self.persistenceFailed.withLock({ $0[storageURL] == true }) {
+            save()
+            await withCheckedContinuation { continuation in Self.persistQueue.async { continuation.resume() } }
+        }
+        if Self.persistenceFailed.withLock({ $0[storageURL] == true }) { throw CocoaError(.fileWriteUnknown) }
     }
 
     /// Re-reads the on-disk store into memory. Used after an iCloud restore
@@ -178,7 +199,7 @@ final class ReplaceRuleStore: @MainActor ObservableObject {
     // MARK: - Persistence
 
     private func load() {
-        guard let loaded = Self.readRules(at: Self.fileURL) else { return }
+        guard let loaded = Self.readRules(at: storageURL) else { return }
         rules = loaded
     }
 
@@ -196,13 +217,37 @@ final class ReplaceRuleStore: @MainActor ObservableObject {
         return rules
     }
 
+    private nonisolated static let persistQueue = DispatchQueue(label: "readerfork.replace.persist", qos: .utility)
+    private nonisolated static let pendingWrite = OSAllocatedUnfairLock(initialState: [URL: [ReplaceRule]]())
+    private nonisolated static let persistenceFailed = OSAllocatedUnfairLock(initialState: [URL: Bool]())
+
     private func save() {
-        Self.write(rules, to: Self.fileURL)
+        let snapshot = rules
+        let file = storageURL
+        let enqueue = Self.pendingWrite.withLock { value in
+            let enqueue = value[file] == nil
+            value[file] = snapshot
+            return enqueue
+        }
+        guard enqueue else { return }
+        Self.persistQueue.async {
+            guard let snapshot = Self.pendingWrite.withLock({ $0.removeValue(forKey: file) }) else { return }
+            Self.write(snapshot, to: file)
+        }
     }
 
-    private nonisolated static func write(_ rules: [ReplaceRule], to fileURL: URL) {
-        guard let data = try? JSONEncoder().encode(rules) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+    @discardableResult private nonisolated static func write(_ rules: [ReplaceRule], to fileURL: URL) -> Bool {
+        do {
+            try SourcePerfTrace.span("replace.persist", "main=\(Thread.isMainThread) rules=\(rules.count)") {
+                try JSONEncoder().encode(rules).write(to: fileURL, options: .atomic)
+            }
+            persistenceFailed.withLock { $0[fileURL] = nil }
+            return true
+        } catch {
+            persistenceFailed.withLock { $0[fileURL] = true }
+            AppLogger.cache("替换规则写入失败", context: ["code": String((error as NSError).code)])
+            return false
+        }
     }
 
     // MARK: - Presets
@@ -362,8 +407,10 @@ enum ReplaceRuleImportParser {
             defaultValue: 0
         )
 
+        let importedID = stringValue(dictionary["id"])
+        let id = importedID.isEmpty ? UUID().uuidString : (Int64(importedID) == nil ? importedID : "legado:" + importedID)
         return ReplaceRule(
-            id: UUID().uuidString,
+            id: id,
             name: displayName,
             pattern: pattern,
             replacement: replacement,

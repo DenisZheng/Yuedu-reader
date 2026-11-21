@@ -43,7 +43,8 @@ extension BookSourceFetcher {
         // Every transport below parses against this: the search result as the book.
         let runtimeVariables = knownBook?.detailStageRuntimeVariables(callerRuntimeVariables)
             ?? callerRuntimeVariables
-        if usesCache, let cached = loadBookInfoPackageSync(url: url, source: source) {
+        if usesCache, let cached = loadBookInfoPackageSync(url: url, source: source),
+           source.bookSourceType != 3 || cached.downloadUrls?.isEmpty == false {
             return cached.merging(searchResult: knownBook, canReName: canReName)
         }
         // #region agent log

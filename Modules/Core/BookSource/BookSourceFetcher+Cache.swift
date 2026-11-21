@@ -230,7 +230,8 @@ extension BookSourceFetcher {
             runtimeVariables: info.runtimeVariables,
             rawHTMLFilename: nil,
             savedAt: Date(),
-            tocHtml: info.tocHtml
+            tocHtml: info.tocHtml,
+            downloadUrls: info.downloadUrls
         )
     }
 

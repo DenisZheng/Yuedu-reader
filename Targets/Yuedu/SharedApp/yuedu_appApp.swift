@@ -326,6 +326,7 @@ struct yuedu_appApp: App {
                     // The phase is set here, now, and by every change below; never after the
                     // attach below, which awaits and would overwrite a newer phase with this one.
                     WebDAVIndexCoordinator.shared.setActive(scenePhase == .active)
+                    RuleSubscriptionStore.shared.setActive(scenePhase == .active)
                     Task { await WebDAVIndexCoordinator.shared.attach(store: bookStore.remoteRecords) }
                     // Unified library 3d: empty covers and descriptions fill in the foreground, on Wi-Fi.
                     bookStore.metadataFill.setActive(scenePhase == .active)
@@ -348,6 +349,7 @@ struct yuedu_appApp: App {
             // instrumented span" (MainThreadStall, 3.0.0 (129)).
             SourcePerfTrace.span("scene.phase.\(newPhase)", thresholdMs: 5) {
                 WebDAVIndexCoordinator.shared.setActive(newPhase == .active)
+                RuleSubscriptionStore.shared.setActive(newPhase == .active)
                 bookStore.metadataFill.setActive(newPhase == .active)
                 // Diagnostics session bookkeeping: reaching the background is
                 // this app's definition of "survived", and is also the last

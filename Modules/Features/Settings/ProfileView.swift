@@ -104,6 +104,10 @@ struct SettingsView: View {
                         )
                         .accessibilityIdentifier("settings_sources")
 
+                        DSSettingsRow(icon: "arrow.triangle.2.circlepath", title: localized("規則包訂閱"),
+                            action: { path.append(ExploreNavigationRoute.ruleSubscriptions) })
+                            .accessibilityIdentifier("settings_rule_subscriptions")
+
                         // 模組 (M6), here since the maintainer moved it from 資源庫's •••
                         // (2026-10-17: 「模組設定頁在設置好了」).
                         DSSettingsRow(

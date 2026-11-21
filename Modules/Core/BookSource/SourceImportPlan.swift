@@ -32,12 +32,18 @@ protocol ImportableSource {
     /// The author's note about the source (a book source's `bookSourceComment`).
     /// `nil` when the type has no such field.
     var importComment: String? { get }
+    /// 能力提示与作者说明分开；字段保留不代表对应功能已经执行。
+    var importCapabilityNote: String? { get }
     /// What the per-row editor shows: this item as the Legado-shaped JSON the user
     /// recognises from the pack they pasted, not our internal `Codable` spelling.
     var importEditableJSON: String { get }
     /// Parses the editor's text back into one item. `nil` when the text does not
     /// decode, in which case the edit is rejected and the original row is kept.
     static func importParse(editedJSON: String) -> Self?
+}
+
+extension ImportableSource {
+    var importCapabilityNote: String? { nil }
 }
 
 // MARK: - SourceImportPlan

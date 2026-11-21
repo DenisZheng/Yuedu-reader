@@ -12,6 +12,8 @@ struct SourcePreparedWebRequest: Equatable, Sendable {
     var request: URLRequest
     var responseOptions: SourceResponseOptions
     var variables: [String: String]
+    /// AnalyzeUrl 的文件后缀选项，不当作书源/RSS媒体类型。
+    var fileType: String? = nil
 }
 
 // MARK: - Error
@@ -1435,9 +1437,21 @@ class ModernParserBridge {
         if !coverUrl.isEmpty { book.coverUrl = coverUrl }
         // Same guard for tocUrl: an empty rule would otherwise resolve to baseUrl (site root) and
         // we'd scrape the homepage as a TOC. Empty rule → fall back to the book's own URL.
-        let tocRule = source.ruleBookInfo.tocUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        let tocUrlRaw = tocRule.isEmpty ? "" : engine.getString(ruleStr: tocRule, isUrl: true)
-        let tocUrl = tocUrlRaw.isEmpty ? bookUrl : tocUrlRaw
+        let tocUrl: String
+        let downloadUrls: [String]?
+        if source.bookSourceType == 3 {
+            let links = engine.getStringList(ruleStr: source.ruleBookInfo.downloadUrls, isUrl: true)
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            guard !links.isEmpty else { throw ModernParserBridgeError.parseError("文件源下载链接为空") }
+            guard links.count <= 256 else { throw ModernParserBridgeError.parseError("文件源下载候选超过上限") }
+            downloadUrls = links
+            tocUrl = ""
+        } else {
+            let tocRule = source.ruleBookInfo.tocUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            let tocUrlRaw = tocRule.isEmpty ? "" : engine.getString(ruleStr: tocRule, isUrl: true)
+            tocUrl = tocUrlRaw.isEmpty ? bookUrl : tocUrlRaw
+            downloadUrls = nil
+        }
         book.tocUrl = tocUrl
 
         return OnlineBook(
@@ -1457,7 +1471,8 @@ class ModernParserBridge {
             sourceName: source.bookSourceName,
             runtimeVariables: dumpRuntimeVariables(),
             // Legado `BookInfo.analyzeBookInfo`: `if (book.tocUrl == baseUrl) book.tocHtml = body`.
-            tocHtml: tocUrl == bookUrl ? html : nil
+            tocHtml: tocUrl == bookUrl ? html : nil,
+            downloadUrls: downloadUrls
         )
     }
 
@@ -3334,13 +3349,14 @@ class ModernParserBridge {
     /// `fetch`'s script half before the network: the rule URL resolved into a request.
     /// 只准备显式打开的网页请求；复用AnalyzeUrl/源认证，不发起网络或另一套URL解析。
     func prepareRuleWebRequest(_ ruleURL: String, scope: RuleData? = nil,
-                               includesLegadoDefaultUserAgent: Bool = true) throws -> SourcePreparedWebRequest {
+                               includesLegadoDefaultUserAgent: Bool = true,
+                               runtimeVariables: [String: String]? = nil) throws -> SourcePreparedWebRequest {
         let scope = scope ?? RuleData()
-        switch try prepareFetch(ruleUrl: ruleURL, key: nil, page: nil, runtimeVariables: nil,
+        switch try prepareFetch(ruleUrl: ruleURL, key: nil, page: nil, runtimeVariables: runtimeVariables,
                                 pageScope: scope, isPrimaryRequest: true, additionalHeaders: [:], allowsWebView: true,
                                 includesLegadoDefaultUserAgent: includesLegadoDefaultUserAgent) {
         case .network(let url, let request):
-            return .init(request: request, responseOptions: .init(charset: url.charset, bodyJs: url.bodyJs), variables: scope.variableMap)
+            return .init(request: request, responseOptions: .init(charset: url.charset, bodyJs: url.bodyJs), variables: scope.variableMap, fileType: url.type)
         case .dataURI: throw ModernParserBridgeError.invalidURL(ruleURL)
         }
     }

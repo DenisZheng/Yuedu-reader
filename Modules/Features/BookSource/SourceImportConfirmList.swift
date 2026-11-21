@@ -77,6 +77,7 @@ struct SourceImportConfirmList<Source: ImportableSource, ExtraOptions: View>: Vi
                             name: entry.source.importDisplayName,
                             state: entry.state,
                             comment: showsComments ? entry.source.importComment : nil,
+                            capabilityNote: entry.source.importCapabilityNote,
                             isSelected: plan.isSelected(entry.id),
                             isCommentExpanded: expandedComments.contains(entry.id),
                             onToggle: { plan.toggle(entry.id) },
@@ -250,6 +251,7 @@ private struct SourceImportRow: View {
     let name: String
     let state: SourceImportItemState
     let comment: String?
+    let capabilityNote: String?
     let isSelected: Bool
     let isCommentExpanded: Bool
     let onToggle: () -> Void
@@ -288,6 +290,9 @@ private struct SourceImportRow: View {
             }
             .frame(minHeight: DSLayout.minimumTapTarget)
 
+            if let capabilityNote {
+                Text(capabilityNote).font(DSFont.caption).foregroundStyle(DSColor.textSecondary)
+            }
             if let comment {
                 Button(action: onToggleComment) {
                     Text(comment)
