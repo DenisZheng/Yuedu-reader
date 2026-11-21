@@ -8,6 +8,7 @@ enum ChapterCacheWriteError: LocalizedError, Equatable, Sendable {
     case writeMetadata(String)
     case writeArtifact(String)
     case verificationFailed
+    case staleWrite
 
     var errorDescription: String? {
         switch self {
@@ -23,12 +24,45 @@ enum ChapterCacheWriteError: LocalizedError, Equatable, Sendable {
             return "Unable to write chapter artifact: \(message)"
         case .verificationFailed:
             return "Chapter cache verification failed"
+        case .staleWrite:
+            return localized("章節快取已更新，請重試。")
         }
     }
 }
 
 struct ChapterCacheRepository: Sendable {
     private let rootDirectory: URL
+    // 票据只保护当前在途写入；仍由这个repository拥有唯一正文文件。
+    private static let mutationLock = NSRecursiveLock()
+    nonisolated(unsafe) private static var writeTickets: [String: [WeakWriteTicket]] = [:]
+    private struct WeakWriteTicket { weak var value: WriteTicket? }
+    final class WriteTicket: @unchecked Sendable {
+        fileprivate let key: String
+        fileprivate var valid = true
+        fileprivate init(key: String) { self.key = key }
+    }
+
+    func beginWrite(bookId: UUID, chapterIndex: Int) -> WriteTicket {
+        Self.mutationLock.lock(); defer { Self.mutationLock.unlock() }
+        let key = cachePath(bookId: bookId, chapterIndex: chapterIndex).path
+        invalidateWrites(key: key)
+        let ticket = WriteTicket(key: key)
+        Self.writeTickets[key] = [WeakWriteTicket(value: ticket)]
+        return ticket
+    }
+
+    func finishWrite(_ ticket: WriteTicket) {
+        Self.mutationLock.lock(); defer { Self.mutationLock.unlock() }
+        ticket.valid = false
+        Self.writeTickets[ticket.key] = Self.writeTickets[ticket.key]?.filter { $0.value != nil && $0.value !== ticket }
+        if Self.writeTickets[ticket.key]?.isEmpty == true { Self.writeTickets.removeValue(forKey: ticket.key) }
+    }
+
+    private func invalidateWrites(key: String, except ticket: WriteTicket? = nil) {
+        for current in Self.writeTickets[key] ?? [] where current.value !== ticket { current.value?.valid = false }
+        Self.writeTickets[key] = Self.writeTickets[key]?.filter { $0.value != nil && $0.value === ticket }
+        if Self.writeTickets[key]?.isEmpty == true { Self.writeTickets.removeValue(forKey: key) }
+    }
 
     init(rootDirectory: URL? = nil) {
         self.rootDirectory = rootDirectory ?? StorageLocations.onlineCache
@@ -115,6 +149,8 @@ struct ChapterCacheRepository: Sendable {
     }
 
     func clearChapterCache(bookId: UUID, chapterIndex: Int) {
+        Self.mutationLock.lock(); defer { Self.mutationLock.unlock() }
+        invalidateWrites(key: cachePath(bookId: bookId, chapterIndex: chapterIndex).path)
         try? FileManager.default.removeItem(at: cachePath(bookId: bookId, chapterIndex: chapterIndex))
         try? FileManager.default.removeItem(at: cacheMetadataPath(bookId: bookId, chapterIndex: chapterIndex))
         try? FileManager.default.removeItem(at: chapterPackagePath(bookId: bookId, chapterIndex: chapterIndex))
@@ -125,6 +161,9 @@ struct ChapterCacheRepository: Sendable {
     }
 
     func clearAllChapterCache(bookId: UUID) {
+        Self.mutationLock.lock(); defer { Self.mutationLock.unlock() }
+        let prefix = cacheDir(for: bookId).path + "/"
+        for key in Array(Self.writeTickets.keys) where key.hasPrefix(prefix) { invalidateWrites(key: key) }
         try? FileManager.default.removeItem(at: cacheDir(for: bookId))
     }
 
@@ -137,7 +176,8 @@ struct ChapterCacheRepository: Sendable {
         tocTitle: String? = nil,
         extractedTitle: String? = nil,
         rawHTML: String? = nil,
-        storeNormalizedHTML: Bool = true
+        storeNormalizedHTML: Bool = true,
+        writeTicket: WriteTicket? = nil
     ) throws -> String {
         let canonicalTitle = extractedTitle.map {
             ReaderHTMLUtilities.displayText(fromHTMLFragment: $0)
@@ -172,7 +212,8 @@ struct ChapterCacheRepository: Sendable {
         return try saveChapterPackageToCache(
             package,
             rawHTML: rawHTML,
-            normalizedHTML: normalizedHTML
+            normalizedHTML: normalizedHTML,
+            writeTicket: writeTicket
         )
     }
 
@@ -180,8 +221,24 @@ struct ChapterCacheRepository: Sendable {
     func saveChapterPackageToCache(
         _ package: ChapterPackage,
         rawHTML: String?,
-        normalizedHTML: String?
+        normalizedHTML: String?,
+        writeTicket: WriteTicket? = nil
     ) throws -> String {
+        Self.mutationLock.lock(); defer { Self.mutationLock.unlock() }
+        let key = cachePath(bookId: package.bookId, chapterIndex: package.chapterIndex).path
+        if let writeTicket {
+            guard writeTicket.key == key, writeTicket.valid else { throw ChapterCacheWriteError.staleWrite }
+            // 批量重复回存仅内容／身份和资源都相同才不写，savedAt不是内容修订。
+            if let current = loadChapterPackageSync(bookId: package.bookId, chapterIndex: package.chapterIndex,
+                    expectedSourceURL: package.sourceURL, expectedTOCTitle: package.tocTitle),
+               current.content == package.content, current.canonicalTitle == package.canonicalTitle,
+               current.sourceURL == package.sourceURL, current.tocTitle == package.tocTitle,
+               try artifactMatches(rawHTML, at: chapterRawHTMLPath(bookId: package.bookId, chapterIndex: package.chapterIndex)),
+               try artifactMatches(normalizedHTML, at: chapterNormalizedHTMLPath(bookId: package.bookId, chapterIndex: package.chapterIndex)) {
+                return "\(package.chapterIndex).txt"
+            }
+        }
+        invalidateWrites(key: key, except: writeTicket)
         guard !package.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ChapterCacheWriteError.emptyContent
         }
@@ -451,6 +508,12 @@ struct ChapterCacheRepository: Sendable {
     /// drops a leading U+FEFF, so a chapter whose text starts with one never matched its own
     /// checksum and failed verification on every save: 笔趣阁 (apibi.cc, YCK1329／1330)
     /// decrypts to "\u{FEFF}<br><br>第1章…", saved at 1817 characters and read back at 1816.
+    private func artifactMatches(_ expected: String?, at url: URL) throws -> Bool {
+        let exists = FileManager.default.fileExists(atPath: url.path)
+        guard let expected else { return !exists }
+        return try exists && cachedText(at: url) == expected
+    }
+
     private func cachedText(at url: URL) throws -> String {
         String(decoding: try Data(contentsOf: url), as: UTF8.self)
     }

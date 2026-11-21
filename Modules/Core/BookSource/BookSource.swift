@@ -181,9 +181,12 @@ struct ContentRule: Codable {
     /// (`SourceCallBack`) when the source sets `eventListener`. Optional so a source without one
     /// encodes exactly as before.
     var callBackJs: String?
+    var contentBatch: String = ""
+    var maxBatchSize: Int?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case content, title, nextContentUrl, webJs, sourceRegex, replaceRegex, imageStyle, imageDecode, payAction, callBackJs
+        case contentBatch, maxBatchSize
     }
 
     init() {}
@@ -200,6 +203,8 @@ struct ContentRule: Codable {
         payAction      = c.safeString(forKey: .payAction)
         let callBack   = c.safeString(forKey: .callBackJs)
         callBackJs     = callBack.isEmpty ? nil : callBack
+        contentBatch   = c.safeString(forKey: .contentBatch)
+        maxBatchSize   = try c.decodeIfPresent(Int.self, forKey: .maxBatchSize)
     }
 }
 
@@ -409,7 +414,14 @@ struct BookSource: Identifiable, Codable {
         ruleExplore  = c.decodeRule(ExploreRule.self,  forKey: .ruleExplore)  ?? ExploreRule()
         ruleBookInfo = c.decodeRule(BookInfoRule.self, forKey: .ruleBookInfo) ?? BookInfoRule()
         ruleToc      = c.decodeRule(TOCRule.self,      forKey: .ruleToc)      ?? TOCRule()
-        ruleContent  = c.decodeRule(ContentRule.self,  forKey: .ruleContent)  ?? ContentRule()
+        if let raw = try c.decodeIfPresent(PreservedJSON.self, forKey: .ruleContent), raw != .null {
+            if case .string(let text) = raw {
+                ruleContent = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? ContentRule()
+                    : try JSONDecoder().decode(ContentRule.self, from: Data(text.utf8))
+            } else {
+                ruleContent = try JSONDecoder().decode(ContentRule.self, from: JSONEncoder().encode(raw))
+            }
+        } else { ruleContent = ContentRule() }
         ruleReview   = c.decodeRule(ReviewRule.self,   forKey: .ruleReview)   ?? ReviewRule()
         preservedConfiguration = try BookSourceConfiguration.capture(from: decoder)
     }

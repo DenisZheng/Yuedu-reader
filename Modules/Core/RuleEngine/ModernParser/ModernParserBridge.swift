@@ -2110,11 +2110,23 @@ class ModernParserBridge {
         }
         let scope = RuleData(); scope.variableMap = variables
         return try withRuleContext(content: "", baseURL: sourceRuleData.source.bookSourceUrl, scope: scope,
-                                   bindings: bindings, stage: "mainJs." + name) { _ in
+                                   bindings: bindings, stage: "mainJs." + name) { reader in
             setBookContext(runtimeVariables: variables)
             let engine = jsEngine
+            engine.ruleReaders = Self.ruleReaders(of: reader)
             var params = bindings
             var prefix = ""
+            if arguments.contains("chapters") {
+                prefix = """
+                var chapters=JSON.parse(__batchChaptersJSON);
+                chapters.forEach(function(c,i){
+                  Object.defineProperties(c,{
+                    getVariable:{value:function(k){return __batchNativeChapters[i].getVariable(k);}},
+                    putVariable:{value:function(k,v){return __batchNativeChapters[i].putVariable(k,v);}}
+                  });
+                });
+                """
+            }
             if arguments.contains("book") {
                 let book = engine.bookBridge
                 let object: [String: Any] = ["name": book.name, "author": book.author, "bookUrl": book.bookUrl,
@@ -2126,7 +2138,7 @@ class ModernParserBridge {
                     "variable": book.runtimeVariables()]
                 params["book"] = book
                 params["__mainJsBookJSON"] = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
-                prefix = """
+                prefix += """
                 var __mainJsNativeBook=book;
                 var book=JSON.parse(__mainJsBookJSON);
                 Object.defineProperties(book,{
@@ -2268,6 +2280,78 @@ class ModernParserBridge {
             throw MainJsSource.Failure.invalidResult("getContent")
         }
         return content
+    }
+
+    func runContentBatch(_ batch: SourceContentBatch) throws {
+        try batch.checkCurrent()
+        let native = batch.refs.map { ref -> LegadoChapterBridge in
+            let scope = RuleData(); scope.variableMap = ref.runtimeVariables ?? [:]
+            return LegadoChapterBridge(index: ref.index, title: ref.title, url: ref.url,
+                isVip: ref.isVip, chapterScope: { scope }, storedVariables: ref.runtimeVariables ?? [:])
+        }
+        let java = jsEngine.bridge
+        let previous = java.cacheContentHandler
+        java.cacheContentHandler = { [weak self] identifier, content in
+            guard let self else { throw CancellationError() }
+            do {
+                return try batch.save(identifier, content: content) { ref, text in
+                    let replacement = self.sourceRuleData.source.ruleContent.replaceRegex
+                    guard !replacement.isEmpty else { return text }
+                    let scope = RuleData(); scope.variableMap = batch.variables.merging(ref.runtimeVariables ?? [:]) { _, new in new }
+                    let readers = self.jsEngine.ruleReaders
+                    defer { self.jsEngine.ruleReaders = readers }
+                    return try self.withRuleContext(content: text, baseURL: ref.url, scope: scope, stage: "batch.replace") { engine in
+                        let previousChapter = self.jsEngine.chapterBridge
+                        let previousScope = self.runtimeChapterScope
+                        self.runtimeChapterScope = scope
+                        self.jsEngine.setChapterBridge(LegadoChapterBridge(index: ref.index, title: ref.title, url: ref.url,
+                            isVip: ref.isVip, chapterScope: { scope }, storedVariables: ref.runtimeVariables ?? [:]))
+                        defer { self.jsEngine.setChapterBridge(previousChapter); self.runtimeChapterScope = previousScope }
+                        let normalized = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
+                        let replaced = engine.getString(ruleStr: replacement, mContent: normalized)
+                        let isText = self.sourceRuleData.source.bookSourceType == 0
+                        return isText ? replaced.components(separatedBy: .newlines).map { "　　" + $0 }.joined(separator: "\n") : replaced
+                    }
+                }
+            } catch { batch.record(error); throw error }
+        }
+        defer { java.cacheContentHandler = previous; batch.close() }
+        if sourceRuleData.source.isJsSource {
+            let objects: [[String: Any]] = batch.refs.map { ref in
+                ["index": ref.index, "title": ref.title, "url": ref.url, "isVolume": ref.isVolume,
+                 "isVip": ref.isVip, "isPay": ref.isPay, "tag": ref.updateTime ?? ""]
+            }
+            _ = try mainJsCall("getContentBatch", arguments: ["chapters", "book"],
+                bindings: ["__batchNativeChapters": native,
+                           "__batchChaptersJSON": String(decoding: try JSONSerialization.data(withJSONObject: objects), as: UTF8.self)],
+                variables: batch.variables, optional: true)
+        } else {
+            let scope = RuleData(); scope.variableMap = batch.variables
+            try withRuleContext(content: "", baseURL: batch.variables["book.tocUrl"] ?? sourceRuleData.source.bookSourceUrl,
+                                scope: scope, bindings: ["chapters": native], stage: "contentBatch") { reader in
+                setBookContext(runtimeVariables: batch.variables)
+                jsEngine.ruleReaders = Self.ruleReaders(of: reader)
+                if let first = native.first { jsEngine.setChapterBridge(first) }
+                let generation = jsEngine.generation
+                let raw = sourceRuleData.source.ruleContent.contentBatch.trimmingCharacters(in: .whitespacesAndNewlines)
+                let scripts: [String]
+                if raw.lowercased().hasPrefix("@js:") { scripts = [String(raw.dropFirst(4))] }
+                else if raw.lowercased().hasPrefix("<js>") {
+                    let regex = try NSRegularExpression(pattern: "<js>([\\s\\S]*?)</js>", options: .caseInsensitive)
+                    let matches = regex.matches(in: raw, range: NSRange(raw.startIndex..., in: raw))
+                    let rest = regex.stringByReplacingMatches(in: raw, range: NSRange(raw.startIndex..., in: raw), withTemplate: "")
+                    guard !matches.isEmpty, rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw SourceContentBatch.Failure.missingRule }
+                    scripts = matches.map { (raw as NSString).substring(with: $0.range(at: 1)) }
+                } else { scripts = [raw] }
+                for script in scripts {
+                    _ = jsEngine.withExecutionStage("contentBatch") { self.jsEngine.evaluateIsolated(script, result: native, bindings: ["chapters": native]) }
+                    guard jsEngine.generation == generation else { throw ModernParserBridgeError.timeout }
+                    guard jsEngine.lastError == nil else { throw SourceContentBatch.Failure.javascript }
+                }
+            }
+        }
+        try batch.checkCurrent()
+        if let failure = batch.failure { throw failure }
     }
 
     // MARK: - Full pipeline methods (fetch + parse)

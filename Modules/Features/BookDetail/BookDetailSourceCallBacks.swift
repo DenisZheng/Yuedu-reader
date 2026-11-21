@@ -124,8 +124,10 @@ extension BookDetailSourceMenuActions {
                 let bookStore = callBacks.bookStore
                 callBacks.request(.clickClearCache, result: nil) {
                     guard let shelfBookId else { return }
-                    BookSourceFetcher.shared.clearAllChapterCache(bookId: shelfBookId)
-                    bookStore.clearAllCachedChapterFilenames(bookId: shelfBookId)
+                    Task { @MainActor in
+                        await BookSourceFetcher.shared.clearAllChapterCacheAsync(bookId: shelfBookId)
+                        bookStore.clearAllCachedChapterFilenames(bookId: shelfBookId)
+                    }
                 }
             }
         )

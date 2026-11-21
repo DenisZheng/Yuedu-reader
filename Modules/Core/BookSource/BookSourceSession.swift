@@ -67,7 +67,7 @@ final class BookSourceSession: Sendable {
             ),
             label: runtimeOverrides?.identity ?? source.bookSourceName
         )
-        if source.isJsSource {
+        if source.isJsSource || source.contentBatchSize > 1 {
             _ = Self.variableObserver
             Self.cacheLock.lock()
             Self.activeMainJsSessions = Self.activeMainJsSessions.filter { $0.value.session != nil }

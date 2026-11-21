@@ -89,6 +89,13 @@ actor ChapterFetchManager {
     private let moduleReader: ModuleBookReader
     private var tasks: [String: Task<ChapterPackage, Error>] = [:]
     private var priorities: [String: ChapterFetchPriority] = [:]
+    private var batchTasks: [String: (id: UUID, task: Task<[Int], Error>)] = [:]
+    private var batchFallback: [String: Set<Int>] = [:]
+    private var batchWaiters: [String: Set<UUID>] = [:]
+    private var batchWaiterObserver: (@Sendable (Int) -> Void)?
+    // 固定输入测试等到真实共享等待者登记，不靠sleep等状态稳定。
+    func observeBatchWaiters(_ observer: @escaping @Sendable (Int) -> Void) { batchWaiterObserver = observer }
+    private let sourceLookup: @MainActor @Sendable (UUID) -> BookSource?
 
     // MARK: - Generation Token
     // Each new fetchChapter call updates the token; results are validated before use
@@ -103,10 +110,12 @@ actor ChapterFetchManager {
 
     init(
         bookSourceFetcher: BookSourceFetcher = .shared,
-        moduleReader: ModuleBookReader = .live
+        moduleReader: ModuleBookReader = .live,
+        sourceLookup: @escaping @MainActor @Sendable (UUID) -> BookSource? = { BookSourceStore.shared.source(id: $0) }
     ) {
         self.bookSourceFetcher = bookSourceFetcher
         self.moduleReader = moduleReader
+        self.sourceLookup = sourceLookup
     }
 
     private func key(bookId: UUID, chapterIndex: Int) -> String {
@@ -466,6 +475,7 @@ actor ChapterFetchManager {
         )
 
         let moduleReader = moduleReader
+        let sourceLookup = sourceLookup
         let readAheadGate = Self.readAheadGateKey(bookId: bookId, priority: priority)
         let task = Task(priority: priority.taskPriority) { () throws -> ChapterPackage in
             // Read-ahead takes a slot of the book's gate before touching the network; the
@@ -496,12 +506,19 @@ actor ChapterFetchManager {
             if let sourceId = book.bookSourceId {
                 guard
                     let source = await MainActor.run(body: {
-                        BookSourceStore.shared.source(id: sourceId)
+                        sourceLookup(sourceId)
                     })
                 else {
                     throw NSError(
                         domain: "OnlineReadingPipeline", code: -2,
                         userInfo: [NSLocalizedDescriptionKey: "找不到來源配置"])
+                }
+                if priority == .download || priority == .prefetch || priority == .background {
+                    try await self.prepareContentBatch(book: book, requestedIndex: chapterIndex, source: source)
+                    try Task.checkCancellation()
+                    if let cached = bookSourceFetcher.loadChapterPackageSync(bookId: book.id, chapterIndex: chapterIndex,
+                            expectedSourceURL: ref.url, expectedTOCTitle: ref.title),
+                       OnlineChapterCacheWritePolicy.isReusableCachedPackage(cached, hasBookSource: true) { return cached }
                 }
                 return try await bookSourceFetcher.fetchChapterPackage(
                     ref: ref,
@@ -617,6 +634,10 @@ actor ChapterFetchManager {
                 }
                 // Success: reset failure counter
                 bookFailureCounts[bookId] = 0
+                for slot in Array(batchFallback.keys) where slot.hasPrefix(bookId.uuidString + "#batch#") {
+                    batchFallback[slot]?.remove(chapterIndex)
+                    if batchFallback[slot]?.isEmpty == true { batchFallback.removeValue(forKey: slot) }
+                }
                 ReaderTelemetry.shared.log(
                     "chapter_fetch_end",
                     attributes: [
@@ -660,6 +681,63 @@ actor ChapterFetchManager {
                 bookId: bookId, chapterIndex: chapterIndex, sourceURL: ref.url, tocTitle: ref.title, store: store, startedAt: startedAt,
                 reason: "error", pipelineKind: book.isOnline ? "online" : "txt")
             throw error
+        }
+    }
+
+    /// 同一书／配置／窗口仅有一个在途批量任务，不复制正文缓存。未回存只试一次批量。
+    private func prepareContentBatch(book: ReadingBook, requestedIndex: Int, source: BookSource) async throws {
+        let size = source.contentBatchSize
+        guard size > 1, let refs = book.onlineChapters else { return }
+        let start = requestedIndex / size * size
+        let slot = book.id.uuidString + "#batch#" + source.id.uuidString + "#" + String(source.lastUpdateTime) + "#" + String(start)
+        guard batchFallback[slot]?.contains(requestedIndex) != true else { return }
+        let request: (id: UUID, task: Task<[Int], Error>)
+        if let existing = batchTasks[slot] { request = existing }
+        else {
+            let candidates = refs.dropFirst(start).prefix(size).filter { ref in
+                !ref.shouldRenderAsVolumeSeparator &&
+                bookSourceFetcher.loadChapterPackageSync(bookId: book.id, chapterIndex: ref.index,
+                    expectedSourceURL: ref.url, expectedTOCTitle: ref.title) == nil
+            }.map { ref -> OnlineChapterRef in
+                var ref = ref; ref.url = RuleEngine.sanitizeExtractedURL(ref.url)
+                ref.runtimeVariables = (book.runtimeVariables ?? [:]).merging(ref.runtimeVariables ?? [:]) { _, new in new }
+                return ref
+            }
+            guard candidates.count >= 2 else { return }
+            let id = UUID(), fetcher = bookSourceFetcher
+            let task = Task { () throws -> [Int] in
+                do {
+                    return try await fetcher.fetchContentBatch(refs: candidates, bookId: book.id, source: source,
+                        variables: book.runtimeVariables ?? [:]).map(\.index)
+                } catch is CancellationError { throw CancellationError() }
+                catch is BookSourceSession.SessionFailure { throw CancellationError() }
+                catch {
+                    // 基准允许脚本先回存部分再失败；保留已写内容，只把未回存章交回单章用例。
+                    AppLogger.parse("Batch content failed; uncached chapters use single fetch", context: [
+                        "chapters": candidates.count, "code": (error as NSError).code
+                    ], level: .error)
+                    return candidates.filter { fetcher.loadChapterPackageSync(bookId: book.id, chapterIndex: $0.index,
+                        expectedSourceURL: $0.url, expectedTOCTitle: $0.title) == nil }.map(\.index)
+                }
+            }
+            request = (id, task); batchTasks[slot] = request
+        }
+        let waiter = UUID()
+        batchWaiters[slot, default: []].insert(waiter)
+        batchWaiterObserver?(batchWaiters[slot]?.count ?? 0)
+        defer { releaseBatchWaiter(slot: slot, waiter: waiter) }
+        let missing = try await withTaskCancellationHandler { try await request.task.value } onCancel: {
+            Task { await self.releaseBatchWaiter(slot: slot, waiter: waiter) }
+        }
+        try Task.checkCancellation()
+        if !missing.isEmpty { batchFallback[slot, default: []].formUnion(missing) }
+    }
+
+    private func releaseBatchWaiter(slot: String, waiter: UUID) {
+        guard batchWaiters[slot]?.remove(waiter) != nil else { return }
+        if batchWaiters[slot]?.isEmpty == true {
+            batchTasks.removeValue(forKey: slot)?.task.cancel()
+            batchWaiters.removeValue(forKey: slot)
         }
     }
 
@@ -727,6 +805,13 @@ actor ChapterFetchManager {
             task.cancel()
             tasks.removeValue(forKey: taskKey)
             priorities.removeValue(forKey: taskKey)
+        }
+        if includingDownloads || survivingKeys.isEmpty {
+            for slot in Array(batchTasks.keys) where slot.hasPrefix(bookId.uuidString + "#batch#") {
+                batchTasks.removeValue(forKey: slot)?.task.cancel()
+                batchWaiters.removeValue(forKey: slot)
+            }
+            batchFallback = batchFallback.filter { !$0.key.hasPrefix(bookId.uuidString + "#batch#") }
         }
         generationTokens = generationTokens.filter {
             !$0.key.hasPrefix(prefix) || survivingKeys.contains($0.key)

@@ -4750,5 +4750,11 @@
 "主腳本執行失敗，請查看來源診斷。" = "The main script failed. Check source diagnostics.";
 "主腳本超過 8 MiB，無法匯入。" = "The main script exceeds 8 MiB and cannot be imported.";
 "主腳本匯入必須在背景執行。" = "Main script imports must run in the background.";
+"章節快取已更新，請重試。" = "The chapter cache has changed. Please retry.";
+"批量正文未唯一匹配本批章節；同URL請傳章節物件。" = "Batch content could not uniquely match a chapter. For shared URLs, pass the chapter object.";
+"批量正文超過本批16 MiB預算。" = "Batch content exceeds the 16 MiB limit.";
+"批量正文腳本失敗，未完成章節將改用單章下載。" = "The batch script failed. Unfinished chapters will use single-chapter downloads.";
+"書源未配置有效的批量正文規則。" = "This source has no valid batch-content configuration.";
+"批量正文回存失敗，請查看來源診斷。" = "Batch content could not be saved. Check source diagnostics.";
 "主腳本書源" = "Main-script book source";
 "從文件選取 .json／.js" = "Choose a .json / .js file";
