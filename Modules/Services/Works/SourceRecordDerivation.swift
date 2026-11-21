@@ -267,7 +267,7 @@ extension ContentKind {
 
     init(_ kind: OnlineBookContentKind) {
         switch kind {
-        case .text: self = .text
+        case .text, .file: self = .text
         case .audio: self = .audio
         case .manga: self = .comic
         case .video: self = .video

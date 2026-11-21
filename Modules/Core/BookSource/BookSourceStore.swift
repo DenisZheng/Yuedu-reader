@@ -7,12 +7,12 @@ import os
 /// Where a user explicitly pinned a source (置頂／置底). Unlike a plain move, a pin is a
 /// deliberate claim on the head/tail region: the list shows a pin icon, and 取消置頂／取消置底
 /// drops the pin and puts the source back where it was.
-enum SourcePinPosition: String, Codable, Equatable {
+enum SourcePinPosition: String, Codable, Equatable, Sendable {
     case top
     case bottom
 }
 
-struct SourcePinRecord: Codable, Equatable {
+struct SourcePinRecord: Codable, Equatable, Sendable {
     var position: SourcePinPosition
     /// The source's array index when it was pinned, so unpinning can restore it
     /// (clamped to the current list size — later insertions/deletions shift everything).
@@ -876,57 +876,35 @@ class BookSourceStore: @MainActor ObservableObject {
         // `firstIndex(where:)` scan made importing a pack quadratic (a 3000-source pack over
         // 3000 existing sources spent ~86 ms just re-scanning), and mutating `sources`
         // in the loop republished the whole `@Published` array once per imported source.
-        var merged = sources
-        var indexByURL: [String: Int] = .init(minimumCapacity: merged.count)
-        for (index, source) in merged.enumerated() where !source.bookSourceUrl.isEmpty {
-            if indexByURL[source.bookSourceUrl] == nil { indexByURL[source.bookSourceUrl] = index }
-        }
-        // Genuinely new sources are collected and inserted in one go. Inserting them one at a
-        // time would shift every index behind the 置底 group per source — quadratic again.
-        var additions: [BookSource] = []
-        var additionIndexByURL: [String: Int] = [:]
-        for src in imported {
-            let localIndex = src.bookSourceUrl.isEmpty ? nil : indexByURL[src.bookSourceUrl]
-            // Apply the import options once, here, for both the overwrite and the insert
-            // path: the keep-switches need the local copy (absent for a genuine addition),
-            // while 匯入到分組 applies to every selected source either way. Doing it before
-            // the content comparison below means keeping the local name/group doesn't
-            // register as a change and needlessly bump the sync clock.
-            var candidate = options.merged(
-                incoming: src,
-                local: localIndex.map { merged[$0] }
-            )
-            if let idx = localIndex {
-                candidate.id = merged[idx].id
-                candidate.lastUpdateTime = candidate.hasSameContent(as: merged[idx])
-                    ? merged[idx].lastUpdateTime
-                    : nowMillis
-                merged[idx] = candidate
-            } else if !candidate.bookSourceUrl.isEmpty,
-                      let idx = additionIndexByURL[candidate.bookSourceUrl] {
-                // The same URL twice inside one imported pack: the later entry wins, exactly
-                // as it did when each addition was written into `sources` immediately.
-                candidate.id = additions[idx].id
-                candidate.lastUpdateTime = nowMillis
-                additions[idx] = candidate
-            } else {
-                candidate.lastUpdateTime = nowMillis
-                if !candidate.bookSourceUrl.isEmpty {
-                    additionIndexByURL[candidate.bookSourceUrl] = additions.count
-                }
-                additions.append(candidate)
-            }
-        }
-        if !additions.isEmpty {
-            // New imports append at the tail — but above the whole 置底 group,
-            // so the pin markers keep matching the tail region.
-            let insertionIndex = merged.firstIndex(
-                where: { pinRecords[$0.id]?.position == .bottom }) ?? merged.count
-            merged.insert(contentsOf: additions, at: insertionIndex)
-        }
-        replaceSources(merged)
+        let merged = BookSourceImportMerge.apply(imported, existing: sources, options: options, pins: pinRecords, now: nowMillis)
+        guard merged.changed else { return imported.count }
+        replaceSources(merged.sources)
         save(reason: "import")
         return imported.count
+    }
+
+    /// 规则包导入先在后台合并；提交前拒绝用户编辑/删除后过期的快照。
+    func commitSubscriptionSources(_ imported: [BookSource], expectedRevision: Int,
+                                   authorize: @MainActor @Sendable () throws -> Void = {}) async throws {
+        await waitUntilLoaded()
+        guard mutationRevision == expectedRevision else { throw ImportError.invalidData }
+        let merged = await BookSourceImportMerge.background(imported, existing: sources,
+            options: .init(keepName: true, keepGroup: true, keepEnable: true, keepCustomOrder: true), pins: pinRecords, now: Self.currentMillis())
+        try Task.checkCancellation()
+        try authorize()
+        guard mutationRevision == expectedRevision else { throw ImportError.invalidData }
+        if merged.changed { replaceSources(merged.sources); save(reason: "subscription") }
+        try await persistPendingChanges()
+    }
+
+    /// 成功返回代表实际写入完成；失败后可显式重试，不能把排队完成当作写入成功。
+    func persistPendingChanges() async throws {
+        await queuedWritesLanded()
+        if persistenceFailed.withLock({ $0 }) {
+            save(reason: "subscription.retry")
+            await queuedWritesLanded()
+        }
+        if persistenceFailed.withLock({ $0 }) { throw CocoaError(.fileWriteUnknown) }
     }
 
     /// Current wall-clock time in milliseconds — the unit `BookSource.lastUpdateTime` (and the
@@ -1175,16 +1153,19 @@ class BookSourceStore: @MainActor ObservableObject {
         guard pendingWrite.replace(with: sources, reason: reason) else { return }
         let url = fileURL
         let pendingWrite = self.pendingWrite
+        let failure = persistenceFailed
         Self.persistQueue.async {
             guard let (snapshot, reason) = pendingWrite.take() else { return }
             do {
                 let bytes = try Self.writeLibrary(snapshot, to: url)
+                failure.withLock { $0 = false }
                 DiskWriteTally.record(
                     Self.diskWriteTallyName,
                     reason: "\(reason) sources=\(snapshot.count)",
                     bytes: bytes
                 )
             } catch {
+                failure.withLock { $0 = true }
                 AppLogger.cache("BookSourceStore could not write book_sources.json", error: error)
             }
         }
@@ -1194,6 +1175,7 @@ class BookSourceStore: @MainActor ObservableObject {
     nonisolated static let diskWriteTallyName = "bookSources"
 
     private nonisolated let pendingWrite = PendingSourceWrite()
+    private nonisolated let persistenceFailed = OSAllocatedUnfairLock(initialState: false)
 
     /// How much encoded JSON is gathered before it goes to the file.
     private nonisolated static let libraryWriteChunkBytes = 1 << 20

@@ -13,6 +13,8 @@ enum ExploreNavigationRoute: Hashable {
     case search
     /// 書源管理, pushed on every version.
     case sourceManager
+    /// 配置包更新订阅，与RSS内容订阅入口分开。
+    case ruleSubscriptions
     /// 聚合設定, from 探索's ••• (中繼資料語言偏好推薦, 參與聚合的來源; Phase 5 plan, decision 36).
     case aggregationSettings
     /// RSS 訂閱, pushed: 資源庫's row and 訂閱的最新文章's 查看全部 (decision 30).
@@ -46,7 +48,7 @@ enum ExploreNavigationRoute: Hashable {
             return lhsReference == rhsReference
         case (.searchInSource(let lhsURL), .searchInSource(let rhsURL)):
             return lhsURL == rhsURL
-        case (.sourceManager, .sourceManager), (.aggregationSettings, .aggregationSettings),
+        case (.sourceManager, .sourceManager), (.ruleSubscriptions, .ruleSubscriptions), (.aggregationSettings, .aggregationSettings),
              (.subscriptions, .subscriptions), (.aiRecommendations, .aiRecommendations),
              (.moduleManager, .moduleManager), (.search, .search):
             return true
@@ -111,6 +113,8 @@ enum ExploreNavigationRoute: Hashable {
         case .moduleRepository(let url):
             hasher.combine(17)
             hasher.combine(url)
+        case .ruleSubscriptions:
+            hasher.combine(18)
         }
     }
 }

@@ -18,7 +18,8 @@ extension OnlineBookContentKind {
             return .manga
         case .video:
             return .video
-        case .text:
+        case .text, .file:
+            // 文件源不创建在线正文记录；实际导入后由本地格式决定渲染路径。
             return .html
         }
     }

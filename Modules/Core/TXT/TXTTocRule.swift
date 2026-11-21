@@ -84,7 +84,7 @@ extension TXTTocRule {
     /// `RegexSanitizer`), naming the field that failed.
     static func compile(_ pattern: String, field: TXTTocRuleError.Field) throws -> NSRegularExpression {
         do {
-            return try NSRegularExpression(pattern: RegexSanitizer.sanitize(pattern), options: regexOptions)
+            return try RegexSanitizer.compile(pattern, options: regexOptions)
         } catch {
             throw TXTTocRuleError.invalidRegex(field: field, message: error.localizedDescription)
         }

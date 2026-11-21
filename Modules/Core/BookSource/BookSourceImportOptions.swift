@@ -9,7 +9,7 @@ import Foundation
 /// A source's name, group and enabled flags are things the *user* sets locally; the
 /// pack author's JSON carries their own values for all three. Overwriting silently
 /// resets them, which is why upstream makes each one a switch rather than a policy.
-struct BookSourceImportOptions: Equatable {
+struct BookSourceImportOptions: Equatable, Sendable {
     /// Keep the local `bookSourceName` instead of the incoming one.
     var keepName: Bool = false
     /// Keep the local `bookSourceGroup`. Applied before `groupName`, so 附加分組
@@ -119,6 +119,15 @@ extension BookSource: ImportableSource {
 
     var importComment: String? {
         bookSourceComment.isEmpty ? nil : bookSourceComment
+    }
+
+    var importCapabilityNote: String? {
+        var count = preservedConfiguration.count
+        for key in BookSourceConfiguration.ruleFields.keys {
+            if case .object(let fields) = preservedConfiguration[key] { count += fields.count - 1 }
+        }
+        guard count > 0 else { return nil }
+        return String(format: localized("已保留 %d 個擴展欄位；保留不代表對應功能已執行。"), count)
     }
 
     /// The per-row editor shows the same Legado-shaped JSON that 複製書源 JSON produces —

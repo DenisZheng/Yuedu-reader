@@ -1,6 +1,6 @@
 import Foundation
 
-/// Converts Java `java.util.regex` patterns to ICU syntax (NSRegularExpression / ICU).
+/// 显式的 Java 正则近似转换。生产编译必须走 compile，不能先转换平台已支持的语法。
 ///
 /// Book source authors write regex on Android, targeting Java's `java.util.regex` engine.
 /// NSRegularExpression uses ICU, which differs in:
@@ -31,9 +31,18 @@ enum RegexSanitizer {
         return s
     }
 
-    /// Returns `true` if the sanitized pattern can be compiled by NSRegularExpression.
+    /// 优先保留平台支持的原语义；仅在原表达式无法编译时使用显式的近似转换。
+    static func compile(_ pattern: String, options: NSRegularExpression.Options = []) throws -> NSRegularExpression {
+        do { return try NSRegularExpression(pattern: pattern, options: options) }
+        catch {
+            let converted = sanitize(pattern)
+            guard converted != pattern else { throw error }
+            return try NSRegularExpression(pattern: converted, options: options)
+        }
+    }
+
     static func canCompile(_ pattern: String) -> Bool {
-        (try? NSRegularExpression(pattern: sanitize(pattern))) != nil
+        (try? compile(pattern)) != nil
     }
 
     // MARK: - Private Helpers

@@ -72,6 +72,10 @@ struct SearchRule: Codable {
     /// whether a next result page exists. Blank = fall back to heuristics.
     var hasMoreRule: String = ""
 
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case checkKeyWord, bookList, name, author, coverUrl, intro, bookUrl, wordCount, lastChapter, updateTime, kind, hasMoreRule
+    }
+
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -105,7 +109,7 @@ struct BookInfoRule: Codable {
     var downloadUrls: String = ""  // Legado: download URL rule
     var ttsDice: String = ""       // Legado: TTS random selector
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case initScript = "init"
         case name, author, coverUrl, intro, kind, wordCount, lastChapter, updateTime, tocUrl, canReName
         case downloadUrls, ttsDice
@@ -142,7 +146,7 @@ struct TOCRule: Codable {
     var updateTime: String = ""
     var nextTocUrl: String = ""
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case preUpdateJs, chapterList, chapterName, chapterUrl, formatJs
         case isVolume, isVip, isPay, updateTime, nextTocUrl
     }
@@ -178,6 +182,10 @@ struct ContentRule: Codable {
     /// encodes exactly as before.
     var callBackJs: String?
 
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case content, title, nextContentUrl, webJs, sourceRegex, replaceRegex, imageStyle, imageDecode, payAction, callBackJs
+    }
+
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -212,6 +220,10 @@ struct ExploreRule: Codable {
     /// whether a next discover page exists. Blank = fall back to heuristics.
     var hasMoreRule: String = ""
 
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case bookList, name, author, intro, kind, lastChapter, updateTime, bookUrl, coverUrl, wordCount, hasMoreRule
+    }
+
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -233,6 +245,10 @@ struct ExploreRule: Codable {
 
 struct ReviewRule: Codable {
     var review: String = ""
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case review
+    }
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -325,6 +341,8 @@ struct BookSource: Identifiable, Codable {
     var ruleToc: TOCRule = TOCRule()
     var ruleContent: ContentRule = ContentRule()
     var ruleReview: ReviewRule = ReviewRule()      // Legado: review rule
+    /// 仅保留本版本不认识的顶层/嵌套配置，不保存第二份已知字段。
+    var preservedConfiguration: [String: PreservedJSON] = [:]
 
     /// Whether this book source must be fetched through a real WebView.
     ///
@@ -335,7 +353,7 @@ struct BookSource: Identifiable, Codable {
     /// empty-result WebView retry in TOC/chapter fetch — none of which depend on this flag.
     var needsWebView: Bool { false }
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case id
         case bookSourceName, bookSourceUrl, bookSourceGroup, bookSourceComment
         case bookSourceType, bookUrlPattern, customOrder
@@ -389,6 +407,50 @@ struct BookSource: Identifiable, Codable {
         ruleToc      = c.decodeRule(TOCRule.self,      forKey: .ruleToc)      ?? TOCRule()
         ruleContent  = c.decodeRule(ContentRule.self,  forKey: .ruleContent)  ?? ContentRule()
         ruleReview   = c.decodeRule(ReviewRule.self,   forKey: .ruleReview)   ?? ReviewRule()
+        preservedConfiguration = try BookSourceConfiguration.capture(from: decoder)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var extra = encoder.container(keyedBy: BookSourceConfiguration.Key.self)
+        for (key, value) in preservedConfiguration where BookSourceConfiguration.ruleFields[key] == nil {
+            try extra.encode(value, forKey: .init(key))
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(bookSourceName, forKey: .bookSourceName)
+        try container.encode(bookSourceUrl, forKey: .bookSourceUrl)
+        try container.encode(bookSourceGroup, forKey: .bookSourceGroup)
+        try container.encode(bookSourceComment, forKey: .bookSourceComment)
+        try container.encode(bookSourceType, forKey: .bookSourceType)
+        try container.encode(bookUrlPattern, forKey: .bookUrlPattern)
+        try container.encode(customOrder, forKey: .customOrder)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(enabledExplore, forKey: .enabledExplore)
+        try container.encode(enabledCookieJar, forKey: .enabledCookieJar)
+        try container.encode(enabledReview, forKey: .enabledReview)
+        try container.encode(searchUrl, forKey: .searchUrl)
+        try container.encode(exploreUrl, forKey: .exploreUrl)
+        try container.encode(concurrentRate, forKey: .concurrentRate)
+        try container.encode(header, forKey: .header)
+        try container.encode(loginUrl, forKey: .loginUrl)
+        try container.encode(loginUi, forKey: .loginUi)
+        try container.encode(loginCheckJs, forKey: .loginCheckJs)
+        try container.encode(presentsAndroidIdentity, forKey: .presentsAndroidIdentity)
+        try container.encode(respondTime, forKey: .respondTime)
+        try container.encode(lastUpdateTime, forKey: .lastUpdateTime)
+        try container.encode(weight, forKey: .weight)
+        try container.encode(variableComment, forKey: .variableComment)
+        try container.encode(exploreScreen, forKey: .exploreScreen)
+        try container.encode(coverDecodeJs, forKey: .coverDecodeJs)
+        try container.encode(jsLib, forKey: .jsLib)
+        try container.encodeIfPresent(eventListener, forKey: .eventListener)
+        try container.encodeIfPresent(customButton, forKey: .customButton)
+        try container.encode(BookSourceConfiguration.Rule(value: ruleSearch, extra: preservedConfiguration["ruleSearch"]), forKey: .ruleSearch)
+        try container.encode(BookSourceConfiguration.Rule(value: ruleExplore, extra: preservedConfiguration["ruleExplore"]), forKey: .ruleExplore)
+        try container.encode(BookSourceConfiguration.Rule(value: ruleBookInfo, extra: preservedConfiguration["ruleBookInfo"]), forKey: .ruleBookInfo)
+        try container.encode(BookSourceConfiguration.Rule(value: ruleToc, extra: preservedConfiguration["ruleToc"]), forKey: .ruleToc)
+        try container.encode(BookSourceConfiguration.Rule(value: ruleContent, extra: preservedConfiguration["ruleContent"]), forKey: .ruleContent)
+        try container.encode(BookSourceConfiguration.Rule(value: ruleReview, extra: preservedConfiguration["ruleReview"]), forKey: .ruleReview)
     }
 
     init() {}
@@ -441,10 +503,12 @@ struct OnlineBook: Identifiable, Codable, Sendable {
     /// TOC stage reads the chapters from it instead of requesting the page again
     /// (`detailPage`). Never stored, as in Legado (`@Ignore`).
     var tocHtml: String? = nil
+    /// 文件型书源的下载候选；旧缓存没有该字段时仍可读取。
+    var downloadUrls: [String]? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, name, author, intro, coverUrl, bookUrl, tocUrl, wordCount, lastChapter, kind
-        case sourceId, sourceName, runtimeVariables
+        case sourceId, sourceName, runtimeVariables, downloadUrls
     }
 
     /// The detail page to hand this book's TOC stage (`fetchTOCPackage(…detailPage:)`).
@@ -476,6 +540,7 @@ enum OnlineBookContentKind: Equatable, Sendable {
     /// legado `bookSourceType` 4, the same value in legado-E, Sigma, MD3 and huajideshutiao:
     /// each chapter's content is the episode's stream link, and a volume row is a 線路.
     case video
+    case file
 }
 
 enum OnlineBookContentInference {
@@ -534,6 +599,7 @@ enum OnlineBookContentInference {
         switch sourceType {
         case 1: return .audio
         case 2: return .manga
+        case 3: return .file
         case 4: return .video
         default: return .text
         }

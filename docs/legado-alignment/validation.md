@@ -1065,3 +1065,89 @@ python3 -I scripts/legado-compat/lc.py oracle "<自建纯JS字面量case JSON路
 下载目录新增`LegadoPro-3.0.1-build6-local-Debug-unsigned.ipa`及同名`.sha256`，不覆盖旧包。主App和两个扩展均为3.0.1（6）、iPhoneOS、最低iOS17，Debug身份家族与上次包一致；ZIP CRC、可执行权限、三Bundle ID、复制SHA一致，三个Mach-O均无LC_CODE_SIGNATURE，未包含profile或签名资源目录。72,245,310字节，SHA-256为`a6eafa419b55a6a722650ca374eaa64a3be11bf856200b344facdb5491385406`。实际校验记录保存在本次`.git`暂存目录，无原始源包或私有响应进入IPA。
 
 这是本地Debug未签名真机产物，需要用户自行签名后安装；未安装本次包或重签，不承诺签名服务的权限配置。用户反馈的视频不能播放尚未修复，不能把归档、打包或首列表恢复当作媒体通过。回滚版本或代码使用普通后续提交，不force push；不删除旧IPA、用户App数据或源包。
+
+## 首批功能对齐：隔离分支自动验收（2026-11-21）
+
+本批按用户确认只做正则语义、书源配置保真、文件型书源与RuleSub配置包订阅更新。用户最新确认视频已可播放，偶发seek是后续小Bug；本轮未重新测试视频。方案和人工确认清单见[首批功能实施与验收](first-functional-parity-batch.md)。
+
+- 分支／目录：`feature/legado-functional-parity`／同级`Yuedu-reader-legado-parity`，基于`c3eec5e15297f28649ec70fdee2da1a1ceaf6358`。
+- Android本地HEAD实际核对为`330e606c4d57e08adc056ff8ab7a4132c784da9a`，没有修改或切换基准。
+- 环境：`uname -s`输出`Darwin`；`scripts/sim.sh doctor`选择SDK27.2和iPhone 18 Pro Max／iOS27.2。目标ID由脚本解析，使用`Reader-Fork-Dev`和原DerivedData，串行测试，不clean，不新建DerivedData绕过错误。
+- 原始合同RED：`contracts-red.log`显示6项／14个问题／`TEST FAILED`；文件生命周期补充RED显示7项／3个问题，复现取消列表加载后ready复活和本地解析时删源仍留新书。
+- 文件网络证据：现有本机有限服务器实际收到一次POST、正文`id=42`和声明头部。下载原始TXT字节完整保存、书架元数据重载一致。URLProtocol中`httpBody`为nil的仪器问题通过真实传输观察排除，不更改请求来满足断言。
+- 规则订阅证据：书源、RSS与替换规则的实际owner提交；手动确认、静默、同内容不写、作者版本、失败、取消、删除／改配置的晚到保护、写入失败恢复均有隔离测试。替换规则测试指定独立文件，不读写生产单例快照。
+- 重活证据：日志出现`source.file.download ... main=false`、`rule.subscription.load/persist ... main=false`和`replace.persist ... main=false`。这只证明被记录的工作不在主线程，不是全App性能认证。
+
+### 实际命令和结果
+
+工作目录为隔离工作区：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+bash scripts/xctest.sh -l .artifacts/first-parity/final-behavior-2.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/FirstParityContractTests' \
+  -only-testing:'yuedu appTests/BookSourceConfigurationPersistenceTests' \
+  -only-testing:'yuedu appTests/RuleSubscriptionTests' \
+  -only-testing:'yuedu appTests/SourceFileImportTests' \
+  -only-testing:'yuedu appTests/ParserRegressionTests' \
+  -only-testing:'yuedu appTests/RegexUnmatchedGroupTests' \
+  -only-testing:'yuedu appTests/RegexTimeoutCancellationTests' \
+  -only-testing:'yuedu appTests/BookInfoMergeTests' \
+  -only-testing:'yuedu appTests/SourceImportPlanTests' \
+  -only-testing:'yuedu appTests/LocalBookImportServiceTests' \
+  -only-testing:'yuedu appTests/RSSImportServiceTests' \
+  -only-testing:'yuedu appTests/ReplaceRuleDeduplicationTests'
+```
+
+实际退出0：`Test run with 81 tests in 11 suites passed after 13.341 seconds`、`TEST SUCCEEDED`。前面的XCTest框架0项结论不作为证据；后面的Swift Testing实际81项才是结果。
+
+`ParserRegressionTests.swift`不是同名suite，第一次该selector没有匹配。按文件中的6个真实suite额外执行，未修改旧测试期望：
+
+```bash
+bash scripts/xctest.sh -l .artifacts/first-parity/parser-regressions.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/CrossParserCompatibilityTests' \
+  -only-testing:'yuedu appTests/BrowserImportPlainTextRegressionTests' \
+  -only-testing:'yuedu appTests/BookSourceModelTests' \
+  -only-testing:'yuedu appTests/RegressionEdgeCaseTests' \
+  -only-testing:'yuedu appTests/RuleEngineAPITests' \
+  -only-testing:'yuedu appTests/RegexSanitizerTests'
+ruby scripts/check_localizations.rb
+git diff --check
+```
+
+解析器实际退出0：`Test run with 42 tests in 6 suites passed after 0.946 seconds`、`TEST SUCCEEDED`；两个最终批次合计123项／17 suites。
+
+文档和新增文本另运行`python3 -B .artifacts/first-parity/check-delivery.py`，实际输出`Document checks OK: 3 documents, 106 local links; 14 new text files UTF-8/LF/whitespace OK`；收尾`git diff --check`退出0。本地化实际输出`Localization OK: Modules, Targets use 3022 literal keys, all in Resources/zh-Hant.lproj/Localizable.strings`，五语言46个新增key、格式参数及权限资源检查通过。中间新增测试的字段名及Swift Testing抛错宏编译问题已修正，不算行为RED，也不改变生产行为或旧期望。
+
+### 边界与合入判断
+
+自动验收通过，但未进行新页面人工点击、阅读器打开、VoiceOver／大字、真实服务／登录、iPad、真机或最低iOS17测试；提供Preview不代表这些已经验证。只完成本地规则订阅存储，不扩展WebDAV清单或Android迁移。替换包的未支持作用域／超时明确拒绝，相关`js/showRule/sourceUrl`不猜测执行；不宣称全包可用率或替换规则完整兼容。
+
+未提交、合入、push、发布、安装手机、改正式签名或删除用户数据。main仍有原来的运行时／导入／日志及审计未提交修改，保持原处；合入前需用户人工确认并单独整合重叠修改，当前不能标记满足主线合入条件。`.artifacts/`日志与暂存输入不加入业务提交。回滚方式是保持隔离分支未合入，日后回退采用经用户确认的正常提交；不清理工作区、force push或直接覆盖有新格式数据的安装。
+
+
+### 专用模拟器人工验收环境（2026-11-21，用户授权准备）
+
+用户要求打开模拟器、预置验收条件，并允许使用目录中昨天提供的实源。只准备隔离环境，不把启动或fixture返回记为人工行为通过。
+
+- 动态读取当前可用iPhone 18 Pro Max／iOS27.2的device type和runtime，`simctl create`创建专用设备 **Legado 首批验收 1121-1158-940f**（`4746A8B1-A20F-4A64-B98F-F866A7DA2627`）。原设备、原容器与原数据保持不动。`bootstatus -b`实际Finished；复用最近通过测试的Debug App，`simctl install`和`launch`成功，中文探索页截图已捕获，App进程仍存活。
+- 当前Xcode没有常见的Simulator.app，已定位并打开`Contents/Applications/DeviceHub.app`；Info.plist与本地程序元数据确认其提供设备／模拟器界面，进程实际启动。用户需在DeviceHub选择上述专用设备打开画面；未自动授予屏幕、辅助功能、登录或系统权限。
+- 原包静态解析为253书源／307 RSS，其中type=3共3条：登录版Z-Library、优品文档、知轩藏书。预置原书源#104知轩与#55优品，保留原解析和请求规则，只在验收副本设分组、排序、关闭首页自动发现并加版本标记；不自动登录Z-Library。另预置RSS#180少数派（禁用，需用户主动启用才抓文章）和一条关闭的验收专用替换规则。
+- 只监听127.0.0.1的临时包服务提供手动知轩v2、静默知轩v3、RSS配置v2、替换规则v2、10秒慢响应、HTTP503和无效格式，共7项订阅。全部autoUpdate关闭，配置版本／远端名称分组是测试副本，不是作者正式更新；真实站点由用户点击后请求。正向四端点实际HTTP200／每包1项，失败fixture实际503，元数据数量和格式已检查。
+- 两个原包前后SHA-256一致，没有执行真实脚本、访问源站、购买、发布、外部导入或个人登录。旧YCK工作流仍报告三个pack缺失，本轮不是LC全包审计，不报告可用率或GATE PASS。
+- 私有暂存目录为`.artifacts/manual-parity-3f367c74dc/`，含环境记录、包副本、界面截图、人工步骤和「重新打开验收App.command」。重启脚本语法检查通过，仅操作专用App，不重置数据。本机服务保持运行供用户验收；私有副本不提交。
+
+验证入口：先「设置→规则包订阅」按①手动→②静默→⑤取消→⑥失败→⑦格式错误，再检查③RSS和④替换规则；文件流程从探索放大镜搜索书名进入知轩结果，优品搜索“旅行”用于格式受限检查。阅读器打开、实际实源可用性和用户人工结果仍待反馈，不能用这些准备结果代替。
+
+
+### 用户人工验收确认（2026-11-21）
+
+用户在上述专用模拟器条件准备后明确反馈：「我按你的验收步骤，都验收OK了」。据此将本批约定范围的人工关卡记为通过，结合此前实际执行的123项／17 suites自动结果，本批功能验收通过，可以进入合入准备。
+
+确认依据是用户实际操作汇报，不是助手自动点击或媒体验证。范围以临时目录人工指南为准：文件型源下载→书架→开始阅读，①手动／②静默／③RSS配置／④替换规则更新，⑤取消／⑥HTTP503／⑦格式错误，以及重启和显示检查。用户未提供独立的逐项截图、书名或请求明细，因此不追加全源可用率、全部格式兼容或辅助技术认证结论；真机、iPad、最低iOS17和VoiceOver专项验证没有新增独立证据。
+
+本条反馈记为验收确认，不擅自解读为commit、合入或push指示。当前分支仍为`feature/legado-functional-parity`，HEAD为起点`c3eec5e15297f28649ec70fdee2da1a1ceaf6358`，代码及文档尚未提交。main仍有原来的BookSourceStore、ModernParserBridge等重叠未提交改动；没有覆盖、挪动或清理。合入需用户明确指示，先保留／整合这些变更，再对整合结果执行最小相关回归。本轮只更新验收记录，不重复未变化代码的测试。

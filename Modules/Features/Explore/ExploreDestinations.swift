@@ -64,6 +64,8 @@ private struct ExploreRouteDestinations: ViewModifier {
             SearchView(usesUnifiedSearch: true).environmentObject(store)
         case .sourceManager:
             BookSourceListView()
+        case .ruleSubscriptions:
+            RuleSubscriptionListView()
         case .aggregationSettings:
             AggregationSettingsView()
         case .subscriptions:

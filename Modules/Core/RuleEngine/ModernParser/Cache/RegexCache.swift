@@ -12,17 +12,15 @@ final class RegexCache: Sendable {
     }
 
     /// Get or compile a regex pattern. Returns nil if the pattern is invalid.
-    /// The pattern is sanitized via RegexSanitizer to handle Java-specific syntax
-    /// (possessive quantifiers, atomic groups, \R, \e, (?d) flag, \p{javaXxx}).
-    /// The cache key incorporates the sanitized pattern + options so the same pattern
-    /// with different flags is cached separately.
+    /// 优先编译原表达式，只在原语法不能编译时使用 Java 特有语法的近似转换。
+    /// 缓存键为原表达式及选项，避免不同回溯语义互相覆盖。
     func regex(for pattern: String, options: NSRegularExpression.Options = []) -> NSRegularExpression? {
-        let sanitized = RegexSanitizer.sanitize(pattern)
-        let key = "\(sanitized)|\(options.rawValue)"
+        // 原表达式作为缓存身份；a++a 与 a+a 不能共享同一个改变语义的缓存结果。
+        let key = "\(pattern)|\(options.rawValue)"
         if let cached = cache.get(key) {
             return cached
         }
-        guard let compiled = try? NSRegularExpression(pattern: sanitized, options: options) else {
+        guard let compiled = try? RegexSanitizer.compile(pattern, options: options) else {
             return nil
         }
         cache.put(key, value: compiled)

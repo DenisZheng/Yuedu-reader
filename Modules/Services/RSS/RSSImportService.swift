@@ -223,11 +223,11 @@ enum RSSImportService {
     }
 
     /// 导入包不继承Cookie或认证；复用分块响应收集与现有重定向合同。
-    nonisolated static func download(_ url: URL, maximumBytes: Int) async throws -> Data {
-        try await download(url, maximumBytes: maximumBytes, nested: false)
+    nonisolated static func download(_ url: URL, maximumBytes: Int, withoutUserAgent: Bool = false) async throws -> Data {
+        try await download(url, maximumBytes: maximumBytes, nested: false, withoutUserAgent: withoutUserAgent)
     }
 
-    nonisolated private static func download(_ url: URL, maximumBytes: Int, nested: Bool) async throws -> Data {
+    nonisolated private static func download(_ url: URL, maximumBytes: Int, nested: Bool, withoutUserAgent: Bool = false) async throws -> Data {
         guard validURL(url, nested: nested) else { throw Issue.invalidURL }
         if nested { try await requirePublicAddress(url) }
         guard maximumBytes > 0 else { throw Issue.responseTooLarge }
@@ -242,6 +242,13 @@ enum RSSImportService {
         defer { session.invalidateAndCancel() }
         let policy = ImportRedirectPolicy(nested: nested)
         var request = URLRequest(url: url)
+        if withoutUserAgent {
+            // Android RuleUpdate 的 #requestWithoutUA 合同：片段仅是配置标记，UA为字符串null。
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { throw Issue.invalidURL }
+            components.fragment = nil
+            guard let address = components.url else { throw Issue.invalidURL }
+            request.url = address; request.setValue("null", forHTTPHeaderField: "User-Agent")
+        }
         request.cachePolicy = .reloadIgnoringLocalCacheData
         let data: Data, response: URLResponse
         do {

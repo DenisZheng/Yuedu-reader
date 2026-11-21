@@ -94,6 +94,10 @@ struct OnlineBookDetailDestination: View {
                     onSourceKindChange: switchPage,
                     workVersions: workVersions
                 )
+            case .file:
+                if let origin = switchedOrigin ?? searchBook.origins.first {
+                    SourceFileBookView(book: OnlineBook(detailOrigin: origin, in: searchBook))
+                }
             case .book:
                 OnlineBookView(
                     searchBook: searchBook,
@@ -126,6 +130,8 @@ struct OnlineBookDetailDestination: View {
                     onSourceKindChange: switchPage,
                     workVersions: workVersions
                 )
+            case .file:
+                SourceFileBookView(book: shown)
             case .book:
                 OnlineBookView(
                     book: shown,
@@ -182,11 +188,13 @@ enum DetailPageKind: Equatable {
     case book
     case audio
     case video
+    case file
 
     init(_ kind: OnlineBookContentKind) {
         switch kind {
         case .audio: self = .audio
         case .video: self = .video
+        case .file: self = .file
         case .text, .manga: self = .book
         }
     }

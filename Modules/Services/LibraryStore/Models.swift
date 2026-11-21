@@ -925,10 +925,11 @@ struct BookInfoPackage: Codable {
     /// TOC is on it. Never encoded (Legado `@Ignore`), so a stored package has none and its TOC
     /// is requested.
     var tocHtml: String? = nil
+    var downloadUrls: [String]? = nil
 
     private enum CodingKeys: String, CodingKey {
         case sourceId, sourceName, bookURL, name, author, intro, coverUrl, tocUrl, wordCount
-        case lastChapter, kind, runtimeVariables, rawHTMLFilename, savedAt
+        case lastChapter, kind, runtimeVariables, rawHTMLFilename, savedAt, downloadUrls
     }
 
     var onlineBook: OnlineBook {
@@ -945,7 +946,8 @@ struct BookInfoPackage: Codable {
             sourceId: sourceId,
             sourceName: sourceName,
             runtimeVariables: runtimeVariables,
-            tocHtml: tocHtml
+            tocHtml: tocHtml,
+            downloadUrls: downloadUrls
         )
     }
 
@@ -995,7 +997,8 @@ struct BookInfoPackage: Codable {
             runtimeVariables: runtimeVariables ?? known.runtimeVariables,
             rawHTMLFilename: rawHTMLFilename,
             savedAt: savedAt,
-            tocHtml: tocHtml
+            tocHtml: tocHtml,
+            downloadUrls: downloadUrls
         )
     }
 }
