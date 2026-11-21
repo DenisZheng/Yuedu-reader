@@ -1179,3 +1179,45 @@ git diff --check
 确认依据是用户实际操作汇报，不是助手自动点击或媒体验证。范围以临时目录人工指南为准：文件型源下载→书架→开始阅读，①手动／②静默／③RSS配置／④替换规则更新，⑤取消／⑥HTTP503／⑦格式错误，以及重启和显示检查。用户未提供独立的逐项截图、书名或请求明细，因此不追加全源可用率、全部格式兼容或辅助技术认证结论；真机、iPad、最低iOS17和VoiceOver专项验证没有新增独立证据。
 
 本条反馈记为验收确认，不擅自解读为commit、合入或push指示。当前分支仍为`feature/legado-functional-parity`，HEAD为起点`c3eec5e15297f28649ec70fdee2da1a1ceaf6358`，代码及文档尚未提交。main仍有原来的BookSourceStore、ModernParserBridge等重叠未提交改动；没有覆盖、挪动或清理。合入需用户明确指示，先保留／整合这些变更，再对整合结果执行最小相关回归。本轮只更新验收记录，不重复未变化代码的测试。
+
+
+## 用户授权提交与首批合入main（2026-11-21）
+
+用户在人工验收确认后明确指示「先提交现有的，再合新增的」。按此顺序保存并整合，没有push、发布、改版号／正式签名或重装真机：
+
+1. 现有main改动独立提交`6d4cb725`（13文件）：保留重复导入不写、不发布、不推进修订，以及共享脚本原文日志旁路清理；配套隔离测试、源码隐私gate和审计文档一并保存。提交前实际运行两新suite，`Test run with 6 tests in 2 suites passed after 0.137 seconds`／`TEST SUCCEEDED`；Python隐私gate实际3项／OK；6份文档152个本地链接检查通过。
+2. 已经用户验收的新增功能独立提交`d201eb85`（46文件）：正则、配置保真、文件型源、规则包订阅和配套测试／五语言／验收记录。只暂存业务与文档，未加入原始源包、验收副本、`.artifacts/`、个人备忘、工具内存或缓存。
+3. 在main执行`git merge --no-ff --no-commit feature/legado-functional-parity`，仅BookSourceStore和validation冲突。前者复用新增共享合并，并保留main的无变化提前返回、原ID／时钟／设置及新增排序语义；后者完整保留两边历史章节。ModernParserBridge的文件源接线与日志清理自动合并，隐私gate确认原文旁路未恢复。没有使用整文件ours/theirs、abort、reset或清理用户工作区。
+
+### 整合代码的实际回归
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+bash scripts/xctest.sh -l .artifacts/parity-integration/merged-behavior.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/BookSourceImportNoOpTests' \
+  -only-testing:'yuedu appTests/SourceDebugLoggingCompatibilityTests' \
+  -only-testing:'yuedu appTests/FirstParityContractTests' \
+  -only-testing:'yuedu appTests/BookSourceConfigurationPersistenceTests' \
+  -only-testing:'yuedu appTests/RuleSubscriptionTests' \
+  -only-testing:'yuedu appTests/SourceFileImportTests' \
+  -only-testing:'yuedu appTests/SourceImportPlanTests' \
+  -only-testing:'yuedu appTests/BookSourceImportOptionsTests' \
+  -only-testing:'yuedu appTests/BookInfoMergeTests' \
+  -only-testing:'yuedu appTests/RegexUnmatchedGroupTests' \
+  -only-testing:'yuedu appTests/RegexTimeoutCancellationTests' \
+  -only-testing:'yuedu appTests/RegexSanitizerTests' \
+  -only-testing:'yuedu appTests/RSSImportServiceTests' \
+  -only-testing:'yuedu appTests/RSSRuntimeIntegrationTests' \
+  -only-testing:'yuedu appTests/DiagnosticRedactorTests' \
+  -only-testing:'yuedu appTests/LocalBookImportServiceTests'
+python3 -B -m unittest scripts.tests.test_source_debug_logging_privacy -v
+ruby scripts/check_localizations.rb
+git diff --check
+```
+
+实际退出0，`Test run with 125 tests in 16 suites passed after 17.985 seconds`、`TEST SUCCEEDED`；Python隐私gate3项／OK；五语言literal keys／格式／权限资源均`Localization OK`。复用原DerivedData和动态iOS27.2目标、串行测试，不重复单独build／archive，不把XCTest框架的0项结论作为结果。
+
+通过回归后的合并提交实际为`a7570f0a`，父提交为`6d4cb725`与`d201eb85`。最后文档暂存曾遇瞬时index.lock；核对后锁已消失、合并已经生成、三份最终记录仍在工作区，因此不删除锁或改写已有提交，采用正常后续文档提交保存。旧章节的「未提交／待确认」保留为当时快照，不代表本节之后状态。原先用户的实源人工确认仍按其范围保留；本次不新增真机／iPad／最低iOS17／全源或发行签名的验收结论，亦不把合入等同Release批准。个人备忘、原始包、缓存和验收服务留在本地原处；回退用经用户确认的正常后续提交，不删除用户数据或force push。
