@@ -335,6 +335,9 @@ struct BookSource: Identifiable, Codable {
     var exploreScreen: String = ""    // Legado: discover page configuration
     var coverDecodeJs: String = ""    // Legado: cover decode JS
     var jsLib: String = ""            // Legado: shared JS library evaluated at source init
+    /// 单文件主脚本与共享库是不同协议；空白主脚本仍走声明式源。
+    var mainJs: String?
+    var isJsSource: Bool { mainJs?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
     var ruleSearch: SearchRule = SearchRule()
     var ruleExplore: ExploreRule = ExploreRule()  // Legado: discover page rule
     var ruleBookInfo: BookInfoRule = BookInfoRule()
@@ -363,7 +366,7 @@ struct BookSource: Identifiable, Codable {
         case header, loginUrl, loginUi, loginCheckJs
         case presentsAndroidIdentity
         case respondTime, lastUpdateTime, weight
-        case variableComment, exploreScreen, coverDecodeJs, jsLib
+        case variableComment, exploreScreen, coverDecodeJs, jsLib, mainJs
         case ruleSearch, ruleExplore, ruleBookInfo, ruleToc, ruleContent, ruleReview
     }
 
@@ -392,6 +395,7 @@ struct BookSource: Identifiable, Codable {
         exploreScreen   = c.safeString(forKey: .exploreScreen)
         coverDecodeJs   = c.safeString(forKey: .coverDecodeJs)
         jsLib           = c.safeString(forKey: .jsLib)
+        mainJs          = try c.decodeIfPresent(String.self, forKey: .mainJs)
         // Legado's enabled field may be Bool, Int 1/0, or String "true"/"false"
         enabled          = c.safeBool(forKey: .enabled, defaultValue: true)
         enabledExplore   = c.safeBool(forKey: .enabledExplore, defaultValue: true)
@@ -443,6 +447,7 @@ struct BookSource: Identifiable, Codable {
         try container.encode(exploreScreen, forKey: .exploreScreen)
         try container.encode(coverDecodeJs, forKey: .coverDecodeJs)
         try container.encode(jsLib, forKey: .jsLib)
+        try container.encodeIfPresent(mainJs, forKey: .mainJs)
         try container.encodeIfPresent(eventListener, forKey: .eventListener)
         try container.encodeIfPresent(customButton, forKey: .customButton)
         try container.encode(BookSourceConfiguration.Rule(value: ruleSearch, extra: preservedConfiguration["ruleSearch"]), forKey: .ruleSearch)
@@ -847,7 +852,18 @@ enum OnlineBookContentInference {
 
 extension OnlineBook {
     func inferredContentKind(source: BookSource?) -> OnlineBookContentKind {
-        OnlineBookContentInference.infer(
+        // 主脚本的book.type是Android书籍位标记，不按书源分类数字或URL选项猜测。
+        if source?.isJsSource == true, let type = runtimeVariables?["book.type"].flatMap(Int.init) {
+            switch type {
+            case 4: return .video
+            case 8: return .text
+            case 32: return .audio
+            case 64: return .manga
+            case 128: return .file
+            default: break
+            }
+        }
+        return OnlineBookContentInference.infer(
             sourceType: source?.bookSourceType,
             runtimeVariables: runtimeVariables,
             urls: [bookUrl, tocUrl],
@@ -934,7 +950,8 @@ extension OnlineChapterRef {
     }
 
     var shouldRenderAsVolumeSeparator: Bool {
-        isVolume || hasStrongVolumeSeparatorTitle || (!hasLoadableContentURL && hasVolumeSeparatorTitle)
+        if runtimeVariables?["mainJs.chapter"] == "true" { return isVolume && url.hasPrefix(title) }
+        return isVolume || hasStrongVolumeSeparatorTitle || (!hasLoadableContentURL && hasVolumeSeparatorTitle)
     }
 
     var hasVolumeSeparatorTitle: Bool { Self.isVolumeSeparatorTitle(title) }
@@ -1018,7 +1035,7 @@ extension BookSource {
         // path, which reads no options, and sent them to the site in the path of a GET. The
         // native detail and TOC fetches never ran a template at all. Only the legacy
         // `URL,POST,body` form, which AnalyzeUrl does not read, keeps its templates there.
-        return url.hasPrefix("data:")
+        return isJsSource || url.hasPrefix("data:")
             || AnalyzeUrl.hasOptions(url)
             || AnalyzeUrl.jsPattern.firstMatch(in: url, range: NSRange(url.startIndex..., in: url)) != nil
             || (urlContainsRuntimeTemplate(url) && !Self.isLegacyPostSearchURL(url))

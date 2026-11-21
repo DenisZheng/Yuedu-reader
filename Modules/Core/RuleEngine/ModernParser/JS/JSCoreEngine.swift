@@ -98,6 +98,8 @@ class JSCoreEngine {
     /// book-source rule JS that would otherwise permanently block the serial
     /// queue and freeze the calling Task (common on iOS 17).
     private let jsTimeout: TimeInterval
+    /// 元数据导入只提供JS语言环境，绝不注册App／文件／请求桥。
+    private let metadataOnly: Bool
 
     /// Last JavaScript error message (nil if no error on last evaluation).
     private(set) var lastError: String?
@@ -425,9 +427,10 @@ class JSCoreEngine {
 
     // MARK: - Initializer
 
-    init(executionTimeout: TimeInterval = 30) {
+    init(executionTimeout: TimeInterval = 30, metadataOnly: Bool = false) {
         precondition(executionTimeout.isFinite && executionTimeout > 0 && executionTimeout <= 30)
         self.jsTimeout = executionTimeout
+        self.metadataOnly = metadataOnly
         let ctx = JSContext()!
         self.context = ctx
         self.currentBridges = ContextBridges(
@@ -1094,6 +1097,13 @@ class JSCoreEngine {
                 "error": msg
             ])
             self.errorHandler?(msg, "js exception")
+        }
+
+        if metadataOnly {
+            ctx.evaluateScript(LegadoRuleScope.registry)
+            let evalSource: @convention(block) (String) -> String = { Self.ruleEvalSource($0) }
+            ctx.setObject(evalSource, forKeyedSubscript: LegadoRuleScope.evalWrapper as NSString)
+            return
         }
 
         // Inject the `java` bridge object

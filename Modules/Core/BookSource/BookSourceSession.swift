@@ -32,10 +32,14 @@ final class BookSourceSession: Sendable {
     let source: BookSource
     let host: SourceScriptHost<ModernParserBridge>
     let runtimeOverrides: SourceRuntimeOverrides?
+    private let localAccess: OSAllocatedUnfairLock<Bool>
     enum SessionFailure: Error { case invalidated }
     // 存活不代表仍有当前访问权；凭据/会话版本过期的缓存不能交给新页面。
-    var isActive: Bool { runtimeOverrides?.state.isCurrent ?? true }
-    func invalidate() { runtimeOverrides?.state.invalidate() }
+    var isActive: Bool { localAccess.withLock { $0 } && (runtimeOverrides?.state.isCurrent ?? true) }
+    func invalidate() {
+        localAccess.withLock { $0 = false }
+        runtimeOverrides?.state.invalidate()
+    }
     /// The source's `@js:` header rule as its engine last resolved it, readable without the
     /// host (`BookSource.parsedHeaders`, `resolvedHeaders()`).
     let headerSnapshot = SourceHeaderSnapshot()
@@ -47,19 +51,29 @@ final class BookSourceSession: Sendable {
     /// `requestSession` carries a test's URLProtocol; production sessions come from
     /// `session(for:)` with the bridge's default.
     init(source: BookSource, requestSession: URLSession = LegadoJSBridge.requestSession,
-         runtimeOverrides: SourceRuntimeOverrides? = nil) {
+         runtimeOverrides: SourceRuntimeOverrides? = nil, metadataOnly: Bool = false) {
         self.source = source
         self.runtimeOverrides = runtimeOverrides
+        let access = OSAllocatedUnfairLock(initialState: true)
+        self.localAccess = access
         // Cheap now: the bridge defers its JSContext until a rule actually runs JS,
         // so the `js.runtimeCreate` span lives on that lazy accessor instead. A
         // pure-CSS source should never emit one.
         self.host = SourceScriptHost(
             ModernParserBridge(
                 source: source, requestSession: requestSession, headerSnapshot: headerSnapshot,
-                runtimeOverrides: runtimeOverrides, userWaits: userWaits
+                runtimeOverrides: runtimeOverrides, userWaits: userWaits, metadataOnly: metadataOnly,
+                localAccessAllowed: { access.withLock { $0 } }
             ),
             label: runtimeOverrides?.identity ?? source.bookSourceName
         )
+        if source.isJsSource {
+            _ = Self.variableObserver
+            Self.cacheLock.lock()
+            Self.activeMainJsSessions = Self.activeMainJsSessions.filter { $0.value.session != nil }
+            Self.activeMainJsSessions[ObjectIdentifier(self)] = WeakSession(self)
+            Self.cacheLock.unlock()
+        }
     }
 
     // MARK: - The source's turn
@@ -84,7 +98,13 @@ final class BookSourceSession: Sendable {
     func parse<T: Sendable>(_ body: sending (ModernParserBridge) throws -> T) async throws -> T {
         try await gate.acquireUnlessCancelled(priority: Task.currentPriority)
         defer { gate.release() }
-        return try await host.run(body)
+        guard isActive else { throw SessionFailure.invalidated }
+        let result = try await host.run(body)
+        if source.isJsSource {
+            try Task.checkCancellation()
+            guard isActive else { throw SessionFailure.invalidated }
+        }
+        return result
     }
 
     /// 跨请求的完整源用例持有同一turn；其他源仍可并行，同源取消等待不执行旧脚本。
@@ -192,6 +212,12 @@ final class BookSourceSession: Sendable {
         let session: BookSourceSession
         var lastUsed: UInt64
     }
+    /// 仅登记仍在执行或被调用方持有的宿主，驱逐缓存不等于撤销失效保护。
+    private final class WeakSession {
+        weak var session: BookSourceSession?
+        init(_ session: BookSourceSession) { self.session = session }
+    }
+    private nonisolated(unsafe) static var activeMainJsSessions: [ObjectIdentifier: WeakSession] = [:]
 
     private enum CacheKey: Hashable {
         case book(String)
@@ -207,12 +233,38 @@ final class BookSourceSession: Sendable {
     /// capacity almost immediately.
     private static let cacheLimit = 32
 
+    /// 只检查仍存活的主脚本宿主，不全量扫描源包，不让被驱逐的在途请求逃过失效。
+    static func invalidateMainJsSessions(previous: [UUID: Int], current: [BookSource], positions: [UUID: Int]) {
+        cacheLock.lock()
+        let sessions = activeMainJsSessions.values.compactMap(\.session)
+        cacheLock.unlock()
+        for session in sessions where session.source.isJsSource && previous[session.source.id] != nil {
+            let source = positions[session.source.id].map { current[$0] }
+            if source?.lastUpdateTime != session.source.lastUpdateTime || source?.mainJs != session.source.mainJs {
+                session.invalidate()
+            }
+        }
+    }
+
+    // NotificationCenter的token只保留不变生命周期；回调内的宿主集合仍由cacheLock保护。
+    private nonisolated(unsafe) static let variableObserver = NotificationCenter.default.addObserver(
+        forName: .bookSourceUserVariableDidChange, object: nil, queue: nil
+    ) { notification in
+        guard let url = notification.userInfo?["sourceURL"] as? String else { return }
+        cacheLock.lock()
+        let sessions = activeMainJsSessions.values.compactMap(\.session)
+        cacheLock.unlock()
+        for session in sessions where session.source.isJsSource && session.source.bookSourceUrl == url { session.invalidate() }
+    }
+
     static func session(for source: BookSource, runtimeOverrides: SourceRuntimeOverrides? = nil,
                         requestSession: URLSession = LegadoJSBridge.requestSession) -> BookSourceSession {
+        _ = variableObserver
         let key: CacheKey = runtimeOverrides.map { .scoped($0.identity, ObjectIdentifier(requestSession)) }
             ?? .book("\(source.bookSourceUrl)#\(source.lastUpdateTime)")
         cacheLock.lock()
-        if let existing = cache[key], existing.session.isActive {
+        if let existing = cache[key], existing.session.isActive,
+           !source.isJsSource || (existing.session.source.mainJs == source.mainJs && existing.session.source.id == source.id) {
             accessClock += 1
             cache[key]?.lastUsed = accessClock
             cacheLock.unlock()
@@ -228,7 +280,8 @@ final class BookSourceSession: Sendable {
 
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        if let raced = cache[key], raced.session.isActive {
+        if let raced = cache[key], raced.session.isActive,
+           !source.isJsSource || (raced.session.source.mainJs == source.mainJs && raced.session.source.id == source.id) {
             // Another thread built the same source's session first; use theirs
             // so every caller converges on one bridge.
             return raced.session

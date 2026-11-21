@@ -69,6 +69,16 @@ struct BookSourceCheckEmptyRuleTests {
         #expect(stored.bookSourceComment == "// Error: 发现失效")
     }
 
+    @Test("主脚本没有声明式searchUrl也必须实际检查搜索轨道")
+    func mainJsSearchIsChecked() async throws {
+        var source = BookSource(bookSourceUrl: "https://main-js-check.yuedu.test", bookSourceName: "主脚本")
+        source.mainJs = "function search(){return [];}"
+        let (item, stored) = try await Self.check(source, fetcher: EmptyRuleFetcher(sections: []))
+        #expect(item.outcome(.search).status == .pass)
+        #expect(item.emptyRuleTracks.isEmpty)
+        #expect(!stored.bookSourceGroup.contains("搜索链接规则为空"))
+    }
+
     private static func check(
         _ source: BookSource,
         fetcher: EmptyRuleFetcher

@@ -68,6 +68,9 @@ extension BookSourceFetcher {
         ), cached.state == .cached, !cached.content.isEmpty {
             return cached
         }
+        if source.isJsSource {
+            return try await fetchMainJsChapterPackage(ref: ref, bookId: bookId, source: source)
+        }
         if source.readsChapterURLAsContent {
             return try saveChapterURLPackage(ref: ref, bookId: bookId)
         }
@@ -327,6 +330,34 @@ extension BookSourceFetcher {
             throw ChapterCacheWriteError.verificationFailed
         }
         return reloaded
+    }
+
+    private func fetchMainJsChapterPackage(ref: OnlineChapterRef, bookId: UUID, source: BookSource) async throws -> ChapterPackage {
+        let nextURL = ref.runtimeVariables?[Self.nextChapterRuntimeVariableKey]
+        let session = BookSourceSession.session(for: source)
+        let content = try await session.parse { bridge in
+            try SourcePerfTrace.span("mainJs.content", "bytes=\(source.mainJs?.utf8.count ?? 0) main=\(Thread.isMainThread)") {
+                try bridge.mainJsContent(chapter: ref, nextChapterURL: nextURL)
+            }
+        }
+        try Task.checkCancellation()
+        guard let url = URL(string: ref.url) else { throw MainJsSource.Failure.invalidResult("getContent") }
+        let result = try await ChapterFetcher.shared.buildChapterPackage(
+            bookId: bookId, chapterIndex: ref.index, sourceURL: ref.url, tocTitle: ref.title,
+            initialHTML: content, initialURL: url, initialBaseURL: ref.url,
+            reviewContext: source.legadoReviewContext.withRuntimeVariables(ref.runtimeVariables).withChapter(ref),
+            nextChapterURL: nextURL,
+            parsePage: { _, _, _ in ChapterParsePayload(content: content, title: ref.title, sourceMatched: false,
+                                                       isPay: ref.isPay, runtimeVariables: ref.runtimeVariables) },
+            extractNextURLs: { _, _, _ in [] },
+            fetchNextPageHTML: { _ in throw MainJsSource.Failure.invalidResult("getContent") }
+        )
+        try Task.checkCancellation()
+        guard session.isActive else { throw BookSourceSession.SessionFailure.invalidated }
+        try saveChapterPackageToCache(result.package, rawHTML: result.rawHTML, normalizedHTML: result.normalizedHTML)
+        guard let saved = loadChapterPackageSync(bookId: bookId, chapterIndex: ref.index,
+                expectedSourceURL: ref.url, expectedTOCTitle: ref.title) else { throw ChapterCacheWriteError.verificationFailed }
+        return saved
     }
 
     private func fetchLegadoRuntimeChapterPackage(

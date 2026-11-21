@@ -87,11 +87,11 @@ class ModernParserBridge {
     private var jsEngine: JSCoreEngine {
         if let existing = _jsEngine { return existing }
         let t0 = ProcessInfo.processInfo.systemUptime
-        let engine = JSCoreEngine(executionTimeout: runtimeOverrides?.scriptTimeout ?? 30)
+        let engine = JSCoreEngine(executionTimeout: runtimeOverrides?.scriptTimeout ?? (metadataOnly ? 2 : 30), metadataOnly: metadataOnly)
         _jsEngine = engine
         engine.headerSnapshot = headerSnapshot
         engine.userWaits = userWaits
-        wireJSEngine(engine)
+        if !metadataOnly { wireJSEngine(engine) }
         SourcePerfTrace.record(
             "js.runtimeCreate", sourceRuleData.source.bookSourceName, since: t0
         )
@@ -107,6 +107,8 @@ class ModernParserBridge {
     /// carries its URLProtocol, because only `URLSession.shared` consults
     /// `URLProtocol.registerClass`.
     private let requestSession: URLSession
+    private let metadataOnly: Bool
+    private let localAccessAllowed: @Sendable () -> Bool
     private let requestExecutor: SourceRequestExecutor
     /// The session's published header resolutions (`BookSourceSession.headerSnapshot`).
     private let headerSnapshot: SourceHeaderSnapshot?
@@ -127,7 +129,7 @@ class ModernParserBridge {
     /// 每个同步规则段拥有自己的RuleData与bindings；不跨await保留当前文章上下文。
     func withRuleContext<T>(content: Any, baseURL: String, scope: RuleData?, redirectURL: String? = nil,
                             bindings: [String: Any] = [:], stage: String = "rule", _ body: (ModernRuleEngine) throws -> T) throws -> T {
-        guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
+        guard localAccessAllowed(), runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
         interactionWasRequested = false
         let previousStage = runtimeStage
         runtimeStage = stage
@@ -161,7 +163,7 @@ class ModernParserBridge {
             engine.setContent(content, baseUrl: baseURL)
             if let redirectURL { engine.setRedirectUrl(redirectURL) }
             let result = try body(engine)
-            guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
+            guard localAccessAllowed(), runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
             if (_jsEngine?.generation ?? 0) != generation { throw ModernParserBridgeError.timeout }
             if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
             if scopedScriptFailure != nil { throw ModernParserBridgeError.parseError("Source JavaScript failed") }
@@ -186,8 +188,11 @@ class ModernParserBridge {
         requestSession: URLSession = LegadoJSBridge.requestSession,
         headerSnapshot: SourceHeaderSnapshot? = nil,
         runtimeOverrides: SourceRuntimeOverrides? = nil,
-        userWaits: LegadoUserWaitRegistry? = nil
+        userWaits: LegadoUserWaitRegistry? = nil, metadataOnly: Bool = false,
+        localAccessAllowed: @escaping @Sendable () -> Bool = { true }
     ) {
+        self.localAccessAllowed = localAccessAllowed
+        self.metadataOnly = metadataOnly
         self.userWaits = userWaits
         self.sourceRuleData = BookSourceRuleData(source: source)
         self.loginManager = LoginManager.shared
@@ -510,7 +515,9 @@ class ModernParserBridge {
     private func wireJSEngine(_ engine: JSCoreEngine) {
         engine.sourcePropertiesJSON = runtimeOverrides?.propertiesJSON
         engine.requestHeaderScope = runtimeOverrides?.headerScope
-        if let runtimeOverrides { engine.runtimeAccessAllowed = { runtimeOverrides.state.isCurrent } }
+        let localAccess = localAccessAllowed
+        let overrides = runtimeOverrides
+        engine.runtimeAccessAllowed = { localAccess() && (overrides?.state.isCurrent ?? true) }
         engine.authenticationKey = runtimeOverrides?.authenticationKey
         engine.bookSource = sourceRuleData.source
         engine.analyzeRuleFactory = { [weak self] in self?.makeScriptAnalyzer() }
@@ -2080,6 +2087,189 @@ class ModernParserBridge {
         )
     }
 
+    // MARK: - mainJs主函数（同一宿主与新scope）
+
+    func extractMainJsConfiguration(_ script: String) throws -> BookSource {
+        guard metadataOnly else { throw MainJsSource.Failure.invalidConfiguration }
+        let engine = jsEngine
+        let generation = engine.generation
+        let json = engine.withExecutionStage("mainJs.config") {
+            engine.evaluateIsolated(MainJsSource.configurationScript(script), bindings: [:])
+        }
+        guard engine.generation == generation else { throw ModernParserBridgeError.timeout }
+        guard let json, engine.lastError == nil else { throw MainJsSource.Failure.javascript }
+        return try MainJsSource.source(from: json, script: script)
+    }
+
+    private func mainJsCall(_ name: String, arguments: [String], bindings: [String: Any] = [:],
+                            variables: [String: String] = [:], chapter: OnlineChapterRef? = nil,
+                            optional: Bool = false) throws -> (MainJsSource.Call, [String: String]) {
+        try Task.checkCancellation()
+        guard let script = sourceRuleData.source.mainJs, sourceRuleData.source.isJsSource else {
+            throw MainJsSource.Failure.invalidConfiguration
+        }
+        let scope = RuleData(); scope.variableMap = variables
+        return try withRuleContext(content: "", baseURL: sourceRuleData.source.bookSourceUrl, scope: scope,
+                                   bindings: bindings, stage: "mainJs." + name) { _ in
+            setBookContext(runtimeVariables: variables)
+            let engine = jsEngine
+            var params = bindings
+            var prefix = ""
+            if arguments.contains("book") {
+                let book = engine.bookBridge
+                let object: [String: Any] = ["name": book.name, "author": book.author, "bookUrl": book.bookUrl,
+                    "tocUrl": book.tocUrl, "coverUrl": book.coverUrl, "intro": book.intro, "kind": book.kind,
+                    "wordCount": book.wordCount, "latestChapterTitle": book.latestChapterTitle,
+                    "origin": book.origin, "originName": book.originName, "type": book.type,
+                    "totalChapterNum": book.totalChapterNum, "durChapterIndex": book.durChapterIndex,
+                    "durChapterTitle": book.durChapterTitle, "order": book.order, "imageStyle": book.imageStyle,
+                    "variable": book.runtimeVariables()]
+                params["book"] = book
+                params["__mainJsBookJSON"] = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+                prefix = """
+                var __mainJsNativeBook=book;
+                var book=JSON.parse(__mainJsBookJSON);
+                Object.defineProperties(book,{
+                  putVariable:{value:function(k,v){__mainJsNativeBook.putVariable(k,v);
+                    if(v==null)delete book.variable[k];else book.variable[k]=String(v);}},
+                  setVariable:{value:function(k,v){book.putVariable(k,v);}},
+                  putCustomVariable:{value:function(v){book.putVariable('custom',v);}},
+                  getCustomVariable:{value:function(){return book.getVariable('custom');}},
+                  readConfig:{value:__mainJsNativeBook.readConfig},
+                  setUseReplaceRule:{value:function(v){__mainJsNativeBook.setUseReplaceRule(v);}},
+                  setReverseToc:{value:function(v){__mainJsNativeBook.setReverseToc(v);}},
+                  getReverseToc:{value:function(){return __mainJsNativeBook.getReverseToc();}},
+                  getVariable:{value:function(k){return __mainJsNativeBook.getVariable(k);}}
+                });
+                """
+            }
+            if let chapter {
+                let chapterScope = RuleData(); chapterScope.variableMap = chapter.runtimeVariables ?? [:]
+                runtimeChapterScope = chapterScope
+                let native = LegadoChapterBridge(index: chapter.index, title: chapter.title, url: chapter.url,
+                    isVip: chapter.isVip, chapterScope: currentChapterScope, storedVariables: chapter.runtimeVariables ?? [:])
+                engine.setChapterBridge(native)
+                params["chapter"] = native
+                let object: [String: Any] = ["index": chapter.index, "title": chapter.title, "url": chapter.url,
+                    "isVip": chapter.isVip, "isPay": chapter.isPay, "isVolume": chapter.isVolume,
+                    "tag": chapter.updateTime ?? ""]
+                params["__mainJsChapterJSON"] = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+                prefix += """
+                var __mainJsNativeChapter=chapter;
+                var chapter=JSON.parse(__mainJsChapterJSON);
+                Object.defineProperties(chapter,{
+                  putVariable:{value:function(k,v){return __mainJsNativeChapter.putVariable(k,v);}},
+                  getVariable:{value:function(k){return __mainJsNativeChapter.getVariable(k);}}
+                });
+                """
+            }
+            let generation = engine.generation
+            let json = engine.withExecutionStage("mainJs." + name) {
+                engine.evaluateIsolated(MainJsSource.functionScript(prefix + script, name: name, arguments: arguments), bindings: params)
+            }
+            guard engine.generation == generation else { throw ModernParserBridgeError.timeout }
+            guard let json, engine.lastError == nil else { throw MainJsSource.Failure.javascript }
+            guard json.utf8.count <= 16 * 1024 * 1024 else { throw MainJsSource.Failure.invalidResult(name) }
+            let call = try JSONDecoder().decode(MainJsSource.Call.self, from: Data(json.utf8))
+            if !call.exists && !optional { throw MainJsSource.Failure.missingFunction(name) }
+            var updated = scope.variableMap
+            updated.merge(engine.bookBridge.runtimeStateVariables()) { _, new in new }
+            for (key, value) in engine.bookBridge.runtimeVariables() { updated["book.variable." + key] = value }
+            if let json = call.book, let book = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] {
+                for field in ["name", "author", "bookUrl", "tocUrl", "coverUrl", "intro", "kind", "wordCount", "latestChapterTitle", "type"] {
+                    if let value = book[field], !(value is NSNull) { updated["book." + field] = MainJsSource.text(value) }
+                }
+                for (key, value) in try MainJsSource.variables(book["variable"]) { updated["book.variable." + key] = value }
+            }
+            if let chapterScope = runtimeChapterScope { updated.merge(chapterScope.variableMap) { _, new in new } }
+            try Task.checkCancellation()
+            return (call, updated)
+        }
+    }
+
+    private func mainJsBooks(name: String, bindings: [String: Any], arguments: [String]) throws -> [OnlineBook] {
+        let (call, variables) = try mainJsCall(name, arguments: arguments, bindings: bindings)
+        return try MainJsSource.objects(call.value, function: name).compactMap { object in
+            guard !MainJsSource.text(object["name"]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !MainJsSource.text(object["bookUrl"]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return try MainJsSource.book(object, source: sourceRuleData.source, variables: variables)
+        }
+    }
+
+    func mainJsBookInfo(book: OnlineBook, variables: [String: String] = [:], canReName: Bool) throws -> OnlineBook {
+        let combined = (book.runtimeVariables ?? [:]).merging(variables) { _, caller in caller }
+        var seed = book.detailStageRuntimeVariables(combined) ?? combined
+        seed["book.tocUrl"] = book.tocUrl
+        let (call, updated) = try mainJsCall("getBookInfo", arguments: ["book"], variables: seed, optional: true)
+        var result = book; result.runtimeVariables = updated
+        if let json = call.value ?? call.book {
+            guard let object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+                throw MainJsSource.Failure.invalidResult("getBookInfo")
+            }
+            let returned = try MainJsSource.book(object, source: sourceRuleData.source, variables: updated)
+            if object["name"] != nil, canReName || result.name.isEmpty { result.name = returned.name }
+            if object["author"] != nil, canReName || result.author.isEmpty { result.author = returned.author }
+            if object["intro"] != nil { result.intro = returned.intro }
+            if object["coverUrl"] != nil { result.coverUrl = returned.coverUrl }
+            if object["kind"] != nil { result.kind = returned.kind }
+            if object["wordCount"] != nil { result.wordCount = returned.wordCount }
+            if object["latestChapterTitle"] != nil { result.lastChapter = returned.lastChapter }
+            if object["tocUrl"] != nil { result.tocUrl = returned.tocUrl }
+            result.runtimeVariables = returned.runtimeVariables
+            if let values = object["downloadUrls"] as? [String] {
+                var seen: Set<String> = []
+                result.downloadUrls = values.map { RuleEngine.resolveURL($0, base: book.bookUrl) }
+                    .filter { !$0.isEmpty && !$0.lowercased().hasPrefix("javascript") && seen.insert($0).inserted }
+            }
+        }
+        if result.tocUrl.isEmpty { result.tocUrl = result.bookUrl }
+        if sourceRuleData.source.bookSourceType == 3, result.downloadUrls?.isEmpty != false {
+            throw MainJsSource.Failure.invalidResult("downloadUrls")
+        }
+        return result
+    }
+
+    func mainJsChapters(tocURL: String, variables: [String: String] = [:]) throws -> [OnlineChapterRef] {
+        var seed = variables; seed["book.tocUrl"] = tocURL
+        if seed["book.bookUrl"] == nil { seed["book.bookUrl"] = tocURL }
+        let (call, updated) = try mainJsCall("getChapters", arguments: ["book"], variables: seed)
+        var chapters: [OnlineChapterRef] = []
+        for object in try MainJsSource.objects(call.value, function: "getChapters") {
+            let title = MainJsSource.text(object["title"])
+            let raw = MainJsSource.text(object["url"])
+            guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let volume = object["isVolume"] as? Bool ?? false
+            let url = volume && raw == title ? raw : RuleEngine.resolveURL(raw, base: tocURL)
+            var runtime = updated
+            runtime["mainJs.chapter"] = "true"
+            for (key, value) in try MainJsSource.variables(object["variable"]) { runtime[key] = value }
+            chapters.append(OnlineChapterRef(index: chapters.count, title: title, url: url, isVolume: volume,
+                isVip: object["isVip"] as? Bool ?? false, isPay: object["isPay"] as? Bool ?? false,
+                updateTime: object["tag"].map { MainJsSource.text($0) }, runtimeVariables: runtime))
+        }
+        guard !chapters.isEmpty else { throw MainJsSource.Failure.invalidResult("getChapters") }
+        let latest = chapters.last?.title ?? ""
+        let count = String(chapters.count)
+        for index in chapters.indices {
+            chapters[index].runtimeVariables?["book.totalChapterNum"] = count
+            chapters[index].runtimeVariables?["book.latestChapterTitle"] = latest
+        }
+        return chapters
+    }
+
+    func mainJsContent(chapter: OnlineChapterRef, nextChapterURL: String?) throws -> String {
+        if chapter.shouldRenderAsVolumeSeparator { return "" }
+        let (call, _) = try mainJsCall("getContent", arguments: ["chapter", "book", "nextChapterUrl"],
+            bindings: ["nextChapterUrl": nextChapterURL as Any? ?? NSNull()],
+            variables: chapter.runtimeVariables ?? [:], chapter: chapter)
+        let content = call.value ?? ""
+        guard chapter.isVolume || !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw MainJsSource.Failure.invalidResult("getContent")
+        }
+        return content
+    }
+
     // MARK: - Full pipeline methods (fetch + parse)
 
     // These stages run on the host that owns this bridge (`SourceScriptHost`): their script
@@ -2089,6 +2279,9 @@ class ModernParserBridge {
         keyword: String, page: Int = 1, on host: isolated SourceScriptHost<ModernParserBridge>
     ) async throws -> [OnlineBook] {
         let source = sourceRuleData.source
+        if source.isJsSource {
+            return try mainJsBooks(name: "search", bindings: ["key": keyword, "page": page], arguments: ["key", "page"])
+        }
         guard !source.searchUrl.isEmpty else { return [] }
 
         let pageScope = RuleData()
@@ -2118,6 +2311,9 @@ class ModernParserBridge {
         on host: isolated SourceScriptHost<ModernParserBridge>
     ) async throws -> (books: [OnlineBook], streamed: Bool) {
         let source = sourceRuleData.source
+        if source.isJsSource {
+            return (try mainJsBooks(name: "search", bindings: ["key": keyword, "page": page], arguments: ["key", "page"]), false)
+        }
         guard !source.searchUrl.isEmpty else { return ([], false) }
 
         let pageScope = RuleData()
@@ -2388,6 +2584,9 @@ class ModernParserBridge {
 
     func getBookInfo(url: String, on host: isolated SourceScriptHost<ModernParserBridge>) async throws -> OnlineBook {
         let source = sourceRuleData.source
+        if source.isJsSource {
+            return try mainJsBookInfo(book: MainJsSource.book(["bookUrl": url], source: source), canReName: true)
+        }
         let (body, finalUrl) = try await fetch(ruleUrl: url, on: host)
         return try parseBookInfo(html: body, bookUrl: url, baseURL: finalUrl, source: source)
     }
@@ -2396,12 +2595,14 @@ class ModernParserBridge {
         url: String, on host: isolated SourceScriptHost<ModernParserBridge>
     ) async throws -> [OnlineChapterRef] {
         let source = sourceRuleData.source
+        if source.isJsSource { return try mainJsChapters(tocURL: url) }
         let (body, finalUrl) = try await fetch(ruleUrl: url, on: host)
         return try parseTOC(html: body, baseURL: finalUrl, ruleURL: url, source: source)
     }
 
     func getContent(url: String, on host: isolated SourceScriptHost<ModernParserBridge>) async throws -> String {
         let source = sourceRuleData.source
+        if source.isJsSource { return try mainJsContent(chapter: OnlineChapterRef(index: 0, title: "", url: url), nextChapterURL: nil) }
         let (body, finalUrl) = try await fetch(ruleUrl: url, contentStage: true, on: host)
         return try parseChapterResult(html: body, baseURL: finalUrl, ruleURL: url, source: source).content
     }
@@ -2694,6 +2895,9 @@ class ModernParserBridge {
     func exploreBooks(
         ruleUrl: String, page: Int, on host: isolated SourceScriptHost<ModernParserBridge>
     ) async throws -> [OnlineBook] {
+        if sourceRuleData.source.isJsSource {
+            return try mainJsBooks(name: "explore", bindings: ["url": ruleUrl, "page": page], arguments: ["url", "page"])
+        }
         let pageScope = RuleData()
         let (html, finalURL) = try await fetch(ruleUrl: ruleUrl, page: page, pageScope: pageScope, on: host)
         return parseExploreResults(
