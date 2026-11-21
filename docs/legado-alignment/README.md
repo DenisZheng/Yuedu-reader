@@ -32,7 +32,8 @@
 | 书源为何导入成功却解析失败；Java/JS、登录、Cookie、变量从哪里来 | [书源与共享规则运行时](book-source.md) |
 | 搜索→详情→目录→正文、纯 JS 源、批量正文、图片/音视频 | [书源与共享规则运行时](book-source.md) |
 | RSS 的网页、图片、视频、注入、启动页、分类与翻页 | [RSS 与规则网页执行契约](rss-source.md) |
-| 已确认哪些功能缺失、怎样安排阶段 | [总体功能差异审计](../../Technotes/LegadoFeatureParityAudit.md) |
+| 当前 Fork 仍缺哪些 RSS/书源/备份/工具能力，哪些只是尚未验收 | [当前功能差距复核](current-feature-parity-audit.md)（`c3eec5e1` + 当时工作区） |
+| 起点时哪些功能缺失、怎样安排阶段（历史审计） | [总体功能差异审计](../../Technotes/LegadoFeatureParityAudit.md) |
 | 用户实际提供的 253 个书源、307 个 RSS 暴露了什么 | [真实源包审计](../../Technotes/LegadoRealSourceAudit.md) |
 
 ## 必须先统一的概念

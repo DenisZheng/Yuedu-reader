@@ -885,6 +885,7 @@ class BookSourceStore: @MainActor ObservableObject {
         // time would shift every index behind the 置底 group per source — quadratic again.
         var additions: [BookSource] = []
         var additionIndexByURL: [String: Int] = [:]
+        var changed = false
         for src in imported {
             let localIndex = src.bookSourceUrl.isEmpty ? nil : indexByURL[src.bookSourceUrl]
             // Apply the import options once, here, for both the overwrite and the insert
@@ -898,9 +899,12 @@ class BookSourceStore: @MainActor ObservableObject {
             )
             if let idx = localIndex {
                 candidate.id = merged[idx].id
-                candidate.lastUpdateTime = candidate.hasSameContent(as: merged[idx])
-                    ? merged[idx].lastUpdateTime
-                    : nowMillis
+                if candidate.hasSameContent(as: merged[idx]) {
+                    candidate.lastUpdateTime = merged[idx].lastUpdateTime
+                } else {
+                    candidate.lastUpdateTime = nowMillis
+                    changed = true
+                }
                 merged[idx] = candidate
             } else if !candidate.bookSourceUrl.isEmpty,
                       let idx = additionIndexByURL[candidate.bookSourceUrl] {
@@ -917,6 +921,8 @@ class BookSourceStore: @MainActor ObservableObject {
                 additions.append(candidate)
             }
         }
+        // 没有新增或内容变化时，不发布整库、不推进修订，也不排队重写文件。
+        guard changed || !additions.isEmpty else { return imported.count }
         if !additions.isEmpty {
             // New imports append at the tail — but above the whole 置底 group,
             // so the pin markers keep matching the tail region.

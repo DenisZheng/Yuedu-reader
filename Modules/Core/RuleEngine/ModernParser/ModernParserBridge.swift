@@ -566,13 +566,6 @@ class ModernParserBridge {
                     key: key
                 ) ?? "")
                 : localValue
-            if self.sourceRuleData.source.bookSourceName.contains("书山聚合"),
-               key == "yunpara" {
-                NSLog(
-                    "❖SHUSHAN TRACE❖ stage=variable.get key=yunpara value=%@",
-                    value.isEmpty ? "<empty>" : value
-                )
-            }
             return value
         }
         engine.putData = { [weak self] key, value in
@@ -593,13 +586,6 @@ class ModernParserBridge {
                 for: self.sourceRuleData.source.bookSourceUrl,
                 key: key
             )
-            if self.sourceRuleData.source.bookSourceName.contains("书山聚合"),
-               key == "yunpara" {
-                NSLog(
-                    "❖SHUSHAN TRACE❖ stage=variable.put key=yunpara value=%@",
-                    value
-                )
-            }
         }
 
         // ── Source Bridge Wiring ──
@@ -868,16 +854,6 @@ class ModernParserBridge {
                 timedOut: timedOut,
                 body: result
             )
-            if self?.sourceRuleData.source.bookSourceName.contains("书山聚合") == true {
-                NSLog(
-                    "❖SHUSHAN TRACE❖ stage=js.network path=%@ status=%d timedOut=%@ bodyLen=%d bodyHead=%@",
-                    request.url?.path ?? "nil",
-                    statusCode ?? -1,
-                    timedOut ? "true" : "false",
-                    result?.count ?? -1,
-                    String((result ?? "nil").prefix(180)).replacingOccurrences(of: "\n", with: " ")
-                )
-            }
             // Every `java.*` request takes this path — a plain `java.ajax(url)` (书山聚合 fetches
             // chapter *content* here) and the AnalyzeUrl handler's `url,{…}` requests — and the
             // transport error used to be discarded outright, so a failed chapter left no trace
@@ -1736,17 +1712,6 @@ class ModernParserBridge {
         let paraState = BookSourceRuntimeStateStore.shared.sourceVariableJSON(
             for: source.bookSourceUrl
         )
-        if source.bookSourceName.contains("书山聚合") {
-            let yunpara = sourceRuleData.getVariable(key: "yunpara")
-            NSLog(
-                "❖SHUSHAN TRACE❖ stage=content.begin title=%@ yunpara=%@ runtimeKeys=%@ inputLen=%d baseHost=%@",
-                chapterRef?.title ?? "",
-                yunpara.isEmpty ? "<empty>" : yunpara,
-                sourceRuleData.variableMap.keys.sorted().joined(separator: ","),
-                html.count,
-                URL(string: baseURL)?.host ?? "nil"
-            )
-        }
         AppLogger.parse("⟐ contentJS start", context: [
             "title": chapterRef?.title ?? "",
             "vars": Self.sourceVariableLogSummary(paraState)
@@ -1954,17 +1919,6 @@ class ModernParserBridge {
                 "chapterIndex": chapterRef?.index ?? -1,
             ]
         )
-        if source.bookSourceName.contains("书山聚合") {
-            NSLog(
-                "❖SHUSHAN TRACE❖ stage=content.end len=%d bubbles=%d commentTags=%d showCmt=%d jsNetMs=%d jsError=%@",
-                content.count,
-                bubbleCount,
-                content.countMarkers("<comment", ignoringCase: true),
-                content.countMarkers("showcmt", ignoringCase: true),
-                Int(_jsNetMs),
-                contentRuleError ?? "none"
-            )
-        }
         // An empty chapter is almost always the source's own HTTP call coming back
         // with something its JS couldn't use. The exchange is recorded (not logged)
         // per request, and only dumped here — otherwise every 段評 `ajaxAll` call
@@ -2127,10 +2081,6 @@ class ModernParserBridge {
             ruleUrl: source.searchUrl, key: keyword, page: page, pageScope: pageScope, on: host
         )
         // #region agent log
-        if source.bookSourceName.contains("企点") {
-            NSLog("[企點診斷] searchBooks fetch URL → %@", finalUrl)
-            NSLog("[企點診斷] searchBooks response(前200字) → %@", String(body.prefix(200)))
-        }
         _dbgLog("聚合/JS 搜尋", data: [
             "source": source.bookSourceName,
             "变量": Self.sourceVariableLogSummary(
@@ -2534,29 +2484,6 @@ class ModernParserBridge {
         let source = sourceRuleData.source
         let rawExploreUrl = source.exploreUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawExploreUrl.isEmpty else { return [] }
-        let traceShushanDiscover = source.bookSourceName.contains("书山聚合")
-        if traceShushanDiscover {
-            let variable = runtimeStateStore.sourceVariableJSON(for: source.bookSourceUrl) ?? ""
-            NSLog(
-                "❖SHUSHAN TRACE❖ stage=explore.begin page=%d jsLibLen=%d sourceVariableLen=%d engineGen=%llu",
-                page,
-                source.jsLib.count,
-                variable.count,
-                jsEngine.generation
-            )
-        }
-        let traceQidianDiscover = rawExploreUrl.contains("_csrfToken")
-        if traceQidianDiscover {
-            let variable = runtimeStateStore.sourceVariableJSON(for: source.bookSourceUrl) ?? ""
-            NSLog(
-                "❖DISC TRACE❖ source=%@ stage=explore.begin page=%d jsLibLen=%d variableLen=%d engineGen=%llu",
-                source.bookSourceName,
-                page,
-                source.jsLib.count,
-                variable.count,
-                jsEngine.generation
-            )
-        }
 
         var ruleStr = rawExploreUrl
         let isJS = Self.isJSExploreRule(rawExploreUrl)
@@ -2573,23 +2500,6 @@ class ModernParserBridge {
             // Snapshot now: any later `jsEngine.evaluate` clears `lastError`, so
             // reading it at log time would report "none" for a rule that threw.
             exploreJSError = jsEngine.lastError
-        }
-        if traceShushanDiscover {
-            NSLog(
-                "❖SHUSHAN TRACE❖ stage=explore.evaluated payloadLen=%d jsError=%@ payloadHead=%@",
-                ruleStr.count,
-                exploreJSError ?? "none",
-                String(ruleStr.prefix(180)).replacingOccurrences(of: "\n", with: " ")
-            )
-        }
-        if traceQidianDiscover {
-            NSLog(
-                "❖DISC TRACE❖ source=%@ stage=explore.evaluated isJS=%@ payloadLen=%d jsError=%@",
-                source.bookSourceName,
-                isJS ? "true" : "false",
-                ruleStr.count,
-                exploreJSError ?? "none"
-            )
         }
 
         let result: [DiscoverItem]
@@ -2640,23 +2550,6 @@ class ModernParserBridge {
             "selects": result.filter { ($0.type ?? "") == "select" }.count,
             "head": String(ruleStr.prefix(240)).replacingOccurrences(of: "\n", with: " ")
         ])
-        if traceQidianDiscover {
-            NSLog(
-                "❖DISC TRACE❖ source=%@ stage=explore.decoded items=%d filters=%d navigable=%d",
-                source.bookSourceName,
-                result.count,
-                result.filter { ($0.type ?? "") == "select" }.count,
-                result.filter { !($0.url ?? "").isEmpty }.count
-            )
-        }
-        if traceShushanDiscover {
-            NSLog(
-                "❖SHUSHAN TRACE❖ stage=explore.decoded items=%d filters=%d navigable=%d",
-                result.count,
-                result.filter { ($0.type ?? "") == "select" }.count,
-                result.filter { !($0.url ?? "").isEmpty }.count
-            )
-        }
 
         // Only a rule that threw *and* produced nothing: a script that recovered from its own
         // error and still answered has a usable payload, already decoded above.
@@ -3113,13 +3006,6 @@ class ModernParserBridge {
         let searchUrl = source.searchUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !searchUrl.isEmpty else { return }
         let cookieHost = "https://qidian.com"
-        let before = CookieStore.shared.getKey(url: cookieHost, key: "_csrfToken")
-        NSLog(
-            "❖DISC TRACE❖ source=%@ stage=csrf.prime.begin tokenBefore=%d searchRuleLen=%d",
-            source.bookSourceName,
-            before.count,
-            searchUrl.count
-        )
         // 同人小說網 can mint a random `_csrfToken` for its review API. 起點's
         // ranking API instead requires a token issued by the current web session.
         // Merely loading the search page while the random token is present does not
@@ -3133,25 +3019,15 @@ class ModernParserBridge {
         )
         do {
             // A search request like any other: its URL's puts go to a page nothing reads.
-            let (body, finalURL) = try await fetch(
+            _ = try await fetch(
                 ruleUrl: searchUrl, key: "1", page: 1, pageScope: RuleData(), on: host
             )
-            let after = CookieStore.shared.getKey(url: cookieHost, key: "_csrfToken")
-            NSLog(
-                "❖DISC TRACE❖ source=%@ stage=csrf.prime.end tokenAfter=%d bodyLen=%d finalHost=%@",
-                source.bookSourceName,
-                after.count,
-                body.count,
-                URL(string: finalURL)?.host ?? "nil"
-            )
         } catch {
-            let after = CookieStore.shared.getKey(url: cookieHost, key: "_csrfToken")
-            NSLog(
-                "❖DISC TRACE❖ source=%@ stage=csrf.prime.error tokenAfter=%d error=%@",
-                source.bookSourceName,
-                after.count,
-                error.localizedDescription
-            )
+            // 仍报告失败，但不把可能包含请求URL或正文的异常描述写到控制台。
+            AppLogger.parse("Discover cookie priming failed", context: [
+                "code": (error as NSError).code,
+                "cancelled": error is CancellationError
+            ], level: error is CancellationError ? .trace : .error)
         }
     }
 
@@ -3585,12 +3461,6 @@ class ModernParserBridge {
             throw ModernParserBridgeError.invalidURL(ruleUrl)
         }
 
-        if sourceRuleData.source.bookSourceName.contains("企点") {
-            NSLog("[企點診斷] fetch 請求 URL → %@", request.url?.absoluteString ?? "nil")
-            NSLog("[企點診斷] fetch 請求 method → %@ body → %@",
-                  request.httpMethod ?? "GET",
-                  request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? "nil")
-        }
 
         for (key, value) in additionalHeaders where request.value(forHTTPHeaderField: key) == nil {
             request.setValue(value, forHTTPHeaderField: key)
@@ -3665,18 +3535,6 @@ class ModernParserBridge {
         if checkedResponse.code() == 304 { return ("", checkedResponse.url()) }
         let body = checkedResponse.body()
         let finalUrl = checkedResponse.url()
-        if sourceRuleData.source.exploreUrl.contains("_csrfToken"),
-           let path = request.url?.path,
-           path.contains("/majax/") {
-            NSLog(
-                "❖DISC TRACE❖ source=%@ stage=section.response path=%@ status=%d bodyLen=%d bodyHead=%@",
-                sourceRuleData.source.bookSourceName,
-                path,
-                (response as? HTTPURLResponse)?.statusCode ?? -1,
-                body.count,
-                String(body.prefix(160)).replacingOccurrences(of: "\n", with: " ")
-            )
-        }
 
         // The status is otherwise dropped here: a 403 error envelope reaches the rule
         // engine as an ordinary body, matches no rule, and search/TOC just come back
@@ -3960,15 +3818,6 @@ class ModernParserBridge {
         }
         _ = engine.withExecutionStage("jsLib") {
             for script in scripts { _ = engine.evaluate(script) }
-        }
-        if sourceRuleData.source.exploreUrl.contains("_csrfToken") {
-            NSLog(
-                "❖DISC TRACE❖ source=%@ stage=jsLib.evaluated jsLibLen=%d engineGen=%llu jsError=%@",
-                sourceRuleData.source.bookSourceName,
-                jsLib.count,
-                engine.generation,
-                engine.lastError ?? "none"
-            )
         }
         evaluatedJsLibHash = engine.lastError == nil ? newHash : nil
     }

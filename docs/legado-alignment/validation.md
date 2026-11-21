@@ -1065,3 +1065,31 @@ python3 -I scripts/legado-compat/lc.py oracle "<自建纯JS字面量case JSON路
 下载目录新增`LegadoPro-3.0.1-build6-local-Debug-unsigned.ipa`及同名`.sha256`，不覆盖旧包。主App和两个扩展均为3.0.1（6）、iPhoneOS、最低iOS17，Debug身份家族与上次包一致；ZIP CRC、可执行权限、三Bundle ID、复制SHA一致，三个Mach-O均无LC_CODE_SIGNATURE，未包含profile或签名资源目录。72,245,310字节，SHA-256为`a6eafa419b55a6a722650ca374eaa64a3be11bf856200b344facdb5491385406`。实际校验记录保存在本次`.git`暂存目录，无原始源包或私有响应进入IPA。
 
 这是本地Debug未签名真机产物，需要用户自行签名后安装；未安装本次包或重签，不承诺签名服务的权限配置。用户反馈的视频不能播放尚未修复，不能把归档、打包或首列表恢复当作媒体通过。回滚版本或代码使用普通后续提交，不force push；不删除旧IPA、用户App数据或源包。
+
+## 2026-11-21：上游导入不变不写与原文调试旁路清理
+
+用户批准按建议实施两项高优先级补丁，基于`c3eec5e1`只适配`0236a2da`的导入no-op和`50ccb769`中三个共享运行时文件的原文控制台输出；不整包合并、不改路由、持久格式、版本、依赖、权限或播放器。来源、必要适配、命令和回滚见[本批记录](upstream-noop-privacy-batch-2026-11-21.md)。
+
+- 有效RED：自建单源重复导入3次，写盘1→4、发布3、修订+3；保留本地字段后的无变化确认导入亦重写。3项中1控制通过、2失败／6issues，`** TEST FAILED **`。首轮误把生命周期flush当等待的文件未就绪不作为原问题证据，已改用现有`queuedWritesLanded()`。
+- 修复沿既有内容比较记录changed，无变化且无新增时提前返回，不发布／保存；真正修改、新增、身份／时钟／重复URL和导入选项保持。移除source级NSLog及JS异常／脚本print／toast／logType原文旁路，接口和UI提示仍保留，CSRF可选初始化失败通过既有AppLogger记录数值错误码及取消。没有照搬上游空异常handler或整批日志删除。
+- 实际GREEN：动态Xcode／iOS27.2 iPhone模拟器／Reader-Fork-Dev／串行`scripts/xctest.sh`，选择新隔离导入、脚本诊断兼容、SourceImportPlan、BookSourceImportOptions、RSSRuntimeIntegration、DiagnosticRedactor六个suite，退出0：`Test run with 48 tests in 6 suites passed after 4.556 seconds`、`** TEST SUCCEEDED **`；`python3 -B -m unittest scripts.tests.test_source_debug_logging_privacy -v`为3项／OK。旧共享书源库测试在首次GREEN的编译阶段主动排除，无测试执行，不计通过。
+- 保留现有AppLogger、源作者java.log、SourceAPIErrorLog、诊断与错误回调。本轮只清理已识别旁路，不声明全项目隐私审计或历史日志清理完成。没有运行实源、真机、iPad／最低iOS17或视频播放验收；视频不能播放仍未修复。
+
+本轮未提交／push／打包，下载目录此前3.0.1（6）IPA不含这些新改动。工作区与源包保留，只反向撤回本轮文件即可回滚，S8不标完成。
+
+## 当前 Fork 全功能差距复核（c3eec5e1 + 既有工作区）
+
+用户要求重新对照固定 Android 基准，范围不限于 RSS。本次只审计和补文档导航，不修改业务代码、原始包、配置或既有未提交改动；详细两端源码、差距类别、优先级与边界见[当前功能差距复核](current-feature-parity-audit.md)。
+
+- 实查 iOS HEAD `c3eec5e15297f28649ec70fdee2da1a1ceaf6358`，Android HEAD `330e606c4d57e08adc056ff8ab7a4132c784da9a`，未更新基准。当前四个生产文件的既有导入／日志改动计入阅读范围，不等同已交付 IPA。
+- 两包离线 JSON／类型／哈希统计：书源253项（208文本／3音频／32图片／3文件／7视频），RSS307项全部type=0；SHA-256与固定方案一致。未运行源脚本或公网请求。
+- `python3 -I scripts/legado-compat/lc.py status`：1330／1331／1329包均MISSING，历史r20 fingerprint不同，不报告当前可用率或GATE PASS。
+- `bash scripts/sim.sh doctor`：SDK27.2，runtime仅26.2／27.2，没有iOS17；仅检查环境，没有启动App。
+- 当前生产RegexSanitizer在macOS合成探针实际复现：`a++a`→`a+a`、`(?>a+)a`→`(?:a+)a`，原表达式不匹配`aa`、改写后匹配；输出`MACOS_REGEX_DIFFERENCE_CONFIRMED cases=2`，退出0。命令及本地`.git/parity-audit.zatJSUG3/`证据见报告。这是语义差距复现，不是修复／iOS17／完整规则引擎通过。
+- 结论（按用户后续反馈修正）：RSS旧入口／运行时／分页／网页／图片／管理缺口不能再原样报缺失；**真实视频已能播放，只有偶发快进异常，作为小Bug单列，不属于功能缺失**；S8具体人工／平台验收记录仍分别保留。非RSS确认保留mainJs、批量正文／副文、完整段评、type=3下载导入、规则语义、RuleSub、完整备份／跨端协议、导出编辑、分组／换源细项、有限Java/API、Web/MCP、UMD等差距；Dict/Cron／iCloud等遵守既有排除／暂停决策。
+
+未执行Android／iOS App测试、build／archive、安装、媒体／seek、真实登录／WebDAV、迁移、性能或无障碍验收；不把历史记录写成本次通过，S8仍不标完成。回滚只撤回新报告、导航和本节，不删除用户数据或既有工作区。
+
+本次用户纠正：真实视频已经可以播放，偶尔快进有问题属于小Bug，不是功能缺失。已据此修正[当前功能差距复核](current-feature-parity-audit.md)的结论、R1分类和后续安排；旧“不能播放”仅保留为当时观察，不再作为当前功能缺失的依据。确认来自用户实际使用反馈，助手未重测播放／快进或定位根因，没有修改播放器代码。
+
+文档收尾：`python3 -B .git/parity-audit.zatJSUG3/check_docs.py`退出0，`DOC_FORMAT_LINK_CHECK_OK files=3 localLinks=57`（UTF-8／LF／无尾空格／代码围栏及本次范围内相对链接）；首次`git diff --check`指出本节末尾新增空行，移除后复查退出0，`GIT_DIFF_CHECK_OK`。本次没有新增UI文案，不声称运行本地化或App测试。

@@ -2057,9 +2057,6 @@ struct LegadoHTTPResult: Sendable {
     /// evaluation (a detail page's 簡介 button) restores the previous one as soon as the
     /// script returns, usually before this delivery.
     func toast(_ msg: String) {
-        #if DEBUG
-        if !SourceDiagnosticContext.isRestricted { print("[JSBridge toast] \(msg)") }
-        #endif
         let handler = toastHandler
         DispatchQueue.main.async { handler?(msg) }
     }
@@ -2124,11 +2121,8 @@ struct LegadoHTTPResult: Sendable {
         return msg
     }
 
-    func logType(_ msg: String) {
-        #if DEBUG
-        if !SourceDiagnosticContext.isRestricted { print("[JSBridge logType] \(type(of: msg)): \(msg)") }
-        #endif
-    }
+    /// 保留接口，不再把任意源值复制到未经处理的控制台；源诊断由java.log负责。
+    func logType(_ msg: String) {}
 
     func setResponseBase64(_ data: String, _ mimeType: String) {
         guard let decoded = Data(base64Encoded: data, options: .ignoreUnknownCharacters) else {
