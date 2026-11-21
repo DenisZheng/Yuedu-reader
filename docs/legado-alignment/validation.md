@@ -1221,3 +1221,178 @@ git diff --check
 实际退出0，`Test run with 125 tests in 16 suites passed after 17.985 seconds`、`TEST SUCCEEDED`；Python隐私gate3项／OK；五语言literal keys／格式／权限资源均`Localization OK`。复用原DerivedData和动态iOS27.2目标、串行测试，不重复单独build／archive，不把XCTest框架的0项结论作为结果。
 
 通过回归后的合并提交实际为`a7570f0a`，父提交为`6d4cb725`与`d201eb85`。最后文档暂存曾遇瞬时index.lock；核对后锁已消失、合并已经生成、三份最终记录仍在工作区，因此不删除锁或改写已有提交，采用正常后续文档提交保存。旧章节的「未提交／待确认」保留为当时快照，不代表本节之后状态。原先用户的实源人工确认仍按其范围保留；本次不新增真机／iPad／最低iOS17／全源或发行签名的验收结论，亦不把合入等同Release批准。个人备忘、原始包、缓存和验收服务留在本地原处；回退用经用户确认的正常后续提交，不删除用户数据或force push。
+
+
+## push与本地Release IPA交付（2026-11-21）
+
+用户明确要求先push，然后本地编译Release未签名IPA放下载目录，之后新分支先做mainJs。本次本地Release是用户对先前GitHub Actions构建约定的明确覆盖，不申请签名证书、不发布应用。
+
+核对发现root main在13:07被reset回`c3eec5e1`并重新出现5个未提交文件；原`8bcad47b`及父提交仍完整保留。暂停操作集中询问后，用户选择直接交付已验收8bc、现版3.0.1（6）Release未签名、下一批mainJs。因此不把已回退工作区重新合入或擅自还原，而是正常执行：
+
+```bash
+git push origin 8bcad47b:refs/heads/main
+git ls-remote origin refs/heads/main
+```
+
+实际push为`c3eec5e1..8bcad47b  8bcad47b -> main`，ls-remote确认远端main为`8bcad47be1bfaf25126b36548525f990ccba5a24`。没有force push。root工作区HEAD与5个已修改文件的SHA-256在交付后再次确认未变；root此后相对origin/main落后4提交是用户确认的保留状态，不是push失败。
+
+归档使用基于8bc的干净工作区`../Yuedu-reader-release-73f771bb`及已有构建脚本参数：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+xcodebuild -showBuildSettings -project Yuedu-Reader.xcodeproj \
+  -scheme Reader-Fork-Dev -configuration Release -destination 'generic/platform=iOS' \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile
+xcodebuild archive -project Yuedu-Reader.xcodeproj -scheme Reader-Fork-Dev \
+  -configuration Release -destination 'generic/platform=iOS' -archivePath "$ARCHIVE" \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -hideShellScriptEnvironment CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM=
+python3 -B scripts/package_unsigned_ipa.py --archive "$ARCHIVE" --output "$OUTPUT" --configuration Release
+```
+
+ARCHIVE／OUTPUT为本次唯一新目录，未clean、重用旧产物或覆盖已有IPA。实际`ARCHIVE SUCCEEDED`；showBuildSettings确认Release、Swift6.0语言模式、SDK27.2、3.0.1（6）及最低17.0，没有改工程配置。归档与校验日志保存在root`.artifacts/release-delivery/`。
+
+下载目录产物：`LegadoPro-3.0.1-build6-8bcad47b-Release-unsigned.ipa`，同名`.sha256`和`.txt`说明。36,808,889字节，SHA-256 `4dbc2dab0604bcb7cc0c6a9369d9ed946930c335bba8a055d3b9784e7e359d58`。ZIP CRC、可执行权限、主App及Widget／ShareExtension的3.0.1（6）、iPhoneOS、arm64、最低17.0与com.deniszheng.legadopro身份家族、Mach-O无LC_CODE_SIGNATURE、无profile／签名资源目录均实际核对。复制到下载目录后再次SHA一致，没有私有源包或本地产物入App／Git。
+
+这是未签名真机IPA，需要用户自行签名安装，不是已验证的正式签名／发行包。Release身份与先前Debug身份不同，不迁移其数据；工程只在Debug注入GitCommitSHA，Release该键为空，文件名和交付说明记录真实8bc源码。没有安装真机或推断签名服务权限兼容。已push/已归档不代表后续mainJs已经合入该IPA。
+
+## 下一独立分支mainJs：自动门槛（2026-11-21）
+
+用户选择先mainJs，创建`feature/legado-mainjs-1022e1`／`../Yuedu-reader-mainjs-ad1f7376`，基于8bc，不写root回退后的文件。合同、范围与人工步骤见[mainJs主脚本验收](main-js-source-batch.md)。Android仍为固定330e606c，不pull、不改基准仓库；输入全部自建，无私人账号／源站副作用。
+
+有效RED：`.artifacts/main-js/red-behavior.log`为2项／1 suite、3 issues／TEST FAILED，复现单文件JS被当JSON与JSON主脚本静默空搜索。配置/解码保真、后台元数据、主函数新scope复用原JSContext／jsLib、生产五阶段、文件源、书籍类型域、卷节点、请求上下文、取消／超时／删除和既有缓存owner均有固定测试。仅登记活动宿主弱引用来传播失效，不增加重复脚本缓存或store。
+
+实际执行：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+bash scripts/xctest.sh -l .artifacts/main-js/final-regressions-3.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/MainJsSourceTests' \
+  -only-testing:'yuedu appTests/BookSourceAddFlowTests' \
+  -only-testing:'yuedu appTests/BookSourceSessionQueueTests' \
+  -only-testing:'yuedu appTests/JSEngineCreationReentryTests' \
+  -only-testing:'yuedu appTests/SourceVariableOverlayTests' \
+  -only-testing:'yuedu appTests/LegadoRuleScopeTests' \
+  -only-testing:'yuedu appTests/AggregateSearchStreamingTests' \
+  -only-testing:'yuedu appTests/BookInfoMergeTests' \
+  -only-testing:'yuedu appTests/BookSourceConfigurationPersistenceTests' \
+  -only-testing:'yuedu appTests/BookSourceImportNoOpTests' \
+  -only-testing:'yuedu appTests/RSSRuntimeIntegrationTests' \
+  -only-testing:'yuedu appTests/SourceFileImportTests' \
+  -only-testing:'yuedu appTests/SourceDebugLoggingCompatibilityTests' \
+  -only-testing:'yuedu appTests/VideoSourceTypeTests' \
+  -only-testing:'yuedu appTests/AudiobookDetectionTests'
+bash scripts/xctest.sh -l .artifacts/main-js/checker-and-demo.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/BookSourceCheckEmptyRuleTests' \
+  -only-testing:'yuedu appTests/MainJsSourceTests/offlineFixture()'
+ruby scripts/check_localizations.rb
+python3 -B -m unittest scripts.tests.test_source_debug_logging_privacy -v
+git diff --check
+```
+
+第一批退出0，`Test run with 124 tests in 15 suites passed after 5.872 seconds`、`TEST SUCCEEDED`。随后发现活性检查错误把无searchUrl的主脚本跳过，先用1项／3 issues的有效RED复现（checker-red.log）再修；补充4项旧／新检查合同与1项真实离线demo文件闭环，`Test run with 5 tests in 2 suites passed after 0.246 seconds`、`TEST SUCCEEDED`。第二批与第一批没有重复test，累计129项／16个不同suite，不把同一suite的两次记录重复相加。测试编译提供Debug代码证据，没有重复单独build／clean。
+
+五语言8个新增key、格式与权限表实际Localization OK；源码隐私gate3项／OK。首轮目录不存在、测试隔离和数组排他访问编译错误不作为行为RED；一个目录清理与异步保存相撞的测试问题通过等待既有persistPendingChanges修正，不用sleep掩盖。原scope已知差异、依赖原生／默认CryptoJS的元数据、混合类型、旧loginUI调用、批量回存／段评／LoginUiV2及取消立即终止限制写入合同，不假报全面兼容。
+
+本批未提交、合入或push，人工确认待用户操作；不将root回退状态当成新main、不改下载目录8bc IPA、不把本次固定测试写成全源可用率／真机／iPad／最低iOS17／VoiceOver专项通过。新页面状态提示沿原生入口和五语言，补主脚本Preview；回滚仅撤回这批独立工作区改动，保留root、源包、已有App数据和所有IPA。
+
+## mainJs人工验收环境准备（2026-11-21）
+
+用户要求“帮我准备人工验收环境”。仅准备新模拟器和本机自建输入，不扩大源包／私人账号范围，不改业务Swift、正式签名或main。
+
+### 环境与产物
+
+- 新设备：`Legado mainJs 验收 1121-1542-2f9b`，UDID `A27135D7-0275-4227-9405-D4F4E8794FA1`；从`scripts/sim.sh`当时选中的可构建iPhone解析deviceType/runtime，实际为iPhone 18 Pro Max／iOS27.2。不硬编码目标SDK，不擦除／克隆旧设备。
+- 工作区与代码：`feature/legado-mainjs-1022e1`／`../Yuedu-reader-mainjs-ad1f7376`，base8bc加本批未提交实现。只用该工作区最新测试编译的Debug App，不用下载的Release IPA；本次没有重复build／clean或重跑既有测试。
+- 通过`xcodebuild -showBuildSettings -json`解析产品，Debug／dev.denis.readerfork.dev／3.0.1（6）／Swift6.0。查阅前一轮实际日志确认同一DerivedData；`nm -gj`在debug.dylib发现35个MainJsSource符号，源文件时钟早于产物，1325份相关文件的SHA写入本地manifest。安装后App Info的8bc标记及debug.dylib SHA与准备前产物再次一致；8bc标记只代表base，不冒充本批已提交。
+- 命令先查各项simctl help，再运行`simctl create`、`bootstatus <UDID> -b`、`install`、`get_app_container`。bootstatus实际Finished，安装容器可查询，launch返回真实PID；截图确认中文五Tab主界面。未清理DerivedData或其他模拟器。
+
+### 自建输入与操作入口
+
+本地`.artifacts/main-js-manual/`保存environment、code-manifest、prepare／server／launch、截图与用户操作指南；这些临时产物不进业务提交。
+
+只在新模拟器未启动的App容器内以独占写方式预置1个`mainJs 离线验收`源，mainJs与`Tests/Fixtures/main-js/offline-demo.js`字节一致；不是已由用户完成导入的证据。没有预置书籍、私有请求头、Cookie、原始源包或账户。Documents的`mainJs验收样本`放5份自建文件：正常.js、同源JSON、缺getContent.js、错误返回JSON、legacy source.js。代码不请求公网或授予系统权限。
+
+下载目录新建`mainJs人工验收-1121-1550-58e3`，独占写入5个样本、`先看人工验收步骤.md`及两个可执行command：
+
+- `打开mainJs验收App.command`：只重启专用App／必要本机服务，使用已有-no-official-modules及-onboarding.completed测试启动参数，简体中文；把正常JS放进专用设备剪贴板，不写用户原设备。
+- `打开导入取消验收页.command`：打开专用Safari的本机页面，由用户主动确认导入、取消或503错误样本。JS文件从本地导入文件选择器使用，不能把系统Safari共享分类当本批入口。
+
+样本服务只监听127.0.0.1随机端口（准备时57720），只开放明确路径，累计256请求预算；固定503／有界8秒慢响应供用户取消。不代理任何外部域名，不记录headers／query／正文。启动等显式ready消息，15秒是启动诊断上限，不sleep等待App稳定；重开按钮重新读取当前端口而非依赖旧文档URL。
+
+实际检查`/health`、`/demo.json`、`/`均HTTP200，demo字节与源fixture一致；`/failure.json`实际HTTP503。专用Safari截图实际显示四个验收项和本地文件指引，没有替用户点击导入确认。初次launcher将Xcode UI目录错指到Developer/Applications，在确认服务和App已启动后，只修正临时helper为Contents/Applications并重开；没有重建、删数据或偷偷换工具。下载目录的App重开command也通过真实执行验证，返回PID和service ready，App数据保留。
+
+`bash -n`检查三个command，Python compile检查3脚本；两份记录及指南进行UTF-8／代码块／本地链接检查，`git diff --check`另实际执行。root main及其5份未提交文件、原始两源包与Release IPA的SHA再次核对未变。仅操作这个新设备，不申请自动发布／正式签名／真机安装。
+
+### 结论边界
+
+验收环境已经可操作，用户可直接从探索放大镜搜索“验收词”，并按下载目录指南完成阅读、单文件导入、配置保真、活性检查、取消、错误与显示检查。准备本身不代替人工结论，不额外声称全源／真机／iPad／最低iOS17／VoiceOver专项通过。本批仍未提交、合入或push；环境保留，关闭／清理需用户另行指示，不自动删除模拟器、用户数据或验收文件。
+
+## 验收文件夹导航受阻与用户批准的换位置方案（2026-11-21）
+
+用户反馈“我的iPhone→LegadoPro”无法进入，循环回父层。本轮目标是恢复同一文件导入验收链，不以粘贴／网络JSON替代单文件JS，也不修改尚未定位为App故障的业务代码。
+
+### 原症状和缩小范围
+
+- 实际文件存在，路径无symlink，App容器／Documents／样本文件夹权限755；安装Info的UIFileSharingEnabled和LSSupportsOpeningDocumentsInPlace均true。没有删除、改权限或添加UISupportsDocumentBrowser。
+- 临时原生UI测试实际激活当前App的文件选择器并点击LegadoPro：`MAINJS_FOLDER_RESULT entered=false appFolderStillVisible=true`，`TEST FAILED`。截图仍是“我的iPhone”，对应用户症状，不以文件在磁盘存在代替可选择。
+- 系统Files独立对照亦`SYSTEM_FILES_FOLDER_RESULT entered=false appFolderStillVisible=true`／TEST FAILED，截图也停在父层。排除了仅因App嵌套弹窗的解释；确切系统根因仍未查明，不能仅凭旧网页贴推断。
+- 只重启专用UDID，没有shutdown all、erase、卸载或重装。重启前对27份书籍／源／样本文件记录SHA，bootstatus Finished后均保留。原App点击仍失败（picker-after-reboot-2.log）；首个重启后测试找错简体按钮文本的失败仅是诊断导航问题，不作为原故障证据。
+- 日志与临时UI测试源码保存在`.artifacts/main-js-manual/`／diagnostic-source，未纳入业务提交，不把预期失败的模拟器诊断测试留在普通测试目标。
+
+### 已确认的恢复方式
+
+集中询问后，用户明确选择“换样本位置继续验收”。沿仓库既有Kindle UI样本放置方式，定位元数据标识为group.com.apple.FileProvider.LocalStorage的本机存储。不触碰个人iCloud／其他设备。
+
+普通本机子文件夹同样不能进入（local-files-import.log），因此保留原文件夹，另以独占写方式把5份自建文件直接复制到“我的iPhone”的根层。副本SHA与原fixture一致，不覆盖、挪动或删除原App Documents／用户书架。新步骤为：
+
+```text
+设置 → 来源配置管理 → ＋ → 本地导入 → 从文件选择
+浏览 → 我的 iPhone → 直接点01／05／03三个JS文件
+不要进入LegadoPro或其他文件夹
+```
+
+实际沿**同一原生UIDocumentPicker→复制读取→MainJsSource元数据→确认页／错误弹窗**执行，不经测试专用解析器或伪造导入结果：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="id=$(python3 -c 'import json;print(json.load(open(".artifacts/main-js-manual/environment.json"))["udid"])')"
+export YUEDU_SCHEME=Reader-Fork-Dev
+bash scripts/xctest.sh -l .artifacts/main-js-manual/local-root-files-import.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appUITests/MainJsManualFileImportUITests/testThreeMainJsFilesThroughSystemPicker'
+```
+
+此临时测试源码在执行时置于UI测试目标，完成后保留到diagnostic-source；不是无需准备环境的永久回归。实际1项UI test通过，42.629秒，TEST SUCCEEDED，三条决定性输出：
+
+```text
+MAINJS_FILE_IMPORT normal=review-shown
+MAINJS_FILE_IMPORT legacy=review-shown
+MAINJS_FILE_IMPORT missing-getContent=rejected-with-alert
+```
+
+两个有效源确认页由测试取消，没有代用户确认写库。安装源文件SHA与诊断前一致，App截图仍只有原来的1个离线源。正常源“已有”默认未勾选的行为保留，用户须勾选后确认，不是导入按钮坏了。
+
+下载目录／本地操作指南和mainJs合同已改成根层直接选文件；本机页面也更新，验证过的新服务绑定原57720端口，旧链接不失效，仅停止经PID／命令确认的本次样本服务，等待明确进程退出后重启，无sleep或乱杀进程。业务Swift／签名／权限配置不变，临时UI源码和截图不进入提交。
+
+### 结论与仍受限项
+
+三种单文件导入现在可继续验收；**原文件夹导航没有修复**。仅当前模拟器的目录访问受限，不能扩展为真机／全部iOS故障，也不将用户批准绕行说成系统根因已定位。用户人工确认仍待其实际操作。原main及未提交文件、源包、Release IPA保留；本批仍不自动commit、合入或push。
+
+## mainJs用户人工验收确认（2026-11-21）
+
+用户明确反馈“验收OK，通过”。据此记录本批约定范围的人工门槛通过；反馈来自用户实际操作确认，独立于此前129项自动行为测试及1项真实文件选择UI测试，不把自动安装／截图／启动冒充人工验收。
+
+- 验收分支：`feature/legado-mainjs-1022e1`，base`8bcad47b`加本批未提交实现。
+- 环境：`Legado mainJs 验收 1121-1542-2f9b`，UDID`A27135D7-0275-4227-9405-D4F4E8794FA1`，iPhone 18 Pro Max／iOS27.2，Debug。
+- 提供的人工流程：搜索／详情／目录／正文、重开恢复、正常单文件／legacy／缺getContent拒绝、主脚本源验证、取消和明确错误，以及基本显示检查。此次反馈按当前提供流程作本批确认；没有逐项独立截图或VoiceOver专项报告，不据此扩大未实测范围。
+- 文件夹受阻后，用户批准把样本放到系统Files“我的iPhone”根层，仍经同一原生文件选择器与JS解析。此入口下验收通过，**原文件夹导航未修复**的限制继续保留。
+- 全部源站、全部格式／DRM、真实账户登录、真机、iPad、最低iOS17与VoiceOver专项没有新增验收证据；批量正文／副文、通用段评和LoginUiV2仍是后置工作。
+- 当前没有提交、合入或push；验收反馈不自动授权这些操作或发布。root main仍保留回退后的c3eec5e1和原有未提交修复，未被覆盖。之前交付的8bc Release IPA仍不包含这批mainJs实现。
+
+本次只更新验收文档，不改业务代码、不重跑不变的自动测试、不重新编译或打包、不清理模拟器和服务。早先章节中的“待人工确认”保留为当时快照，本节覆盖当前验收状态；后续提交／合入仍需用户另行明确指示。本轮实际文档检查为`Acceptance documentation check: OK; 2 files; 91 local links`，`git diff --check`退出0；1325份应用／源码／fixture指纹与root main的5份已有未提交文件均未改变。

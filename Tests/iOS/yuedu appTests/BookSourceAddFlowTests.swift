@@ -59,20 +59,22 @@ struct BookSourceAddFlowTests {
     }
 
     @Test("text that is not a source is an error, and nothing is reviewed")
-    func badText() {
+    func badText() async {
         let flow = BookSourceAddFlow(store: BookSourceStore(directory: directory))
         flow.importText("not a source")
+        await flow.waitForFileImport()
         #expect(flow.message?.isError == true)
         #expect(flow.importCoordinator.pending == nil)
     }
 
     @Test("the review waits for the import sheet to dismiss, and writes nothing")
-    func reviewAfterTheSheet() {
+    func reviewAfterTheSheet() async {
         let store = BookSourceStore(directory: directory)
         let flow = BookSourceAddFlow(store: store)
         flow.showsImport = true
         flow.importJSON = oneSource
         flow.importText(flow.importJSON)
+        await flow.waitForFileImport()
         #expect(!flow.showsImport)
         #expect(flow.importJSON.isEmpty)
         #expect(flow.importCoordinator.pending == nil)

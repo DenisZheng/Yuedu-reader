@@ -65,11 +65,15 @@ struct BookSourceInfoSheet: View {
                 .interfaceSectionSurface()
 
                 Section {
-                    ruleRow(localized("搜索規則"), present: !source.searchUrl.isEmpty)
-                    ruleRow(localized("發現規則"), present: !source.exploreUrl.isEmpty)
-                    ruleRow(localized("詳情規則"), present: !source.ruleBookInfo.tocUrl.isEmpty)
-                    ruleRow(localized("目錄規則"), present: !source.ruleToc.chapterList.isEmpty)
-                    ruleRow(localized("正文規則"), present: !source.ruleContent.content.isEmpty)
+                    if source.isJsSource {
+                        ruleRow(localized("主腳本書源"), present: true)
+                    } else {
+                        ruleRow(localized("搜索規則"), present: !source.searchUrl.isEmpty)
+                        ruleRow(localized("發現規則"), present: !source.exploreUrl.isEmpty)
+                        ruleRow(localized("詳情規則"), present: !source.ruleBookInfo.tocUrl.isEmpty)
+                        ruleRow(localized("目錄規則"), present: !source.ruleToc.chapterList.isEmpty)
+                        ruleRow(localized("正文規則"), present: !source.ruleContent.content.isEmpty)
+                    }
                 } header: {
                     Text(localized("規則"))
                         .foregroundStyle(DSColor.textSecondary)
@@ -180,4 +184,10 @@ struct BookSourceInfoSheet: View {
         source: source,
         validation: SourceValidationSummary(health: .passed, responseMs: 320)
     )
+}
+
+#Preview("主脚本书源") {
+    var source = BookSource(bookSourceUrl: "https://mainjs-demo.invalid", bookSourceName: "mainJs 离线验收")
+    source.mainJs = "function search(){return [];}"
+    return BookSourceInfoSheet(source: source, validation: nil)
 }

@@ -25,6 +25,7 @@
 | 查看已确认产品决策和实施步骤 | [最终方案 v2.0](development-plan.md) · [分阶段执行计划](implementation-plan.md) |
 | 查看实际进度、测试结果与阻碍 | [验证记录](validation.md) · [项目代理指南](../../AGENTS.md) |
 | 独立分支的首批正则、配置保真、文件源与规则包订阅更新 | [首批功能实施与验收](first-functional-parity-batch.md) |
+| 下一批mainJs主脚本、固定输入回归及离线人工步骤 | [mainJs主脚本验收](main-js-source-batch.md)（独立分支、未合入） |
 | 当前基线的网页越界弹层、主动缩放、404重试与双设备复验 | [S6显示与复验](s6-web-display.md) |
 | 当前基线S7的WebDAV中断恢复、后台重载与聚焦验收 | [S7中断恢复](s7-restore-interruption.md) |
 | 当前基线S8的离线规模测量、真实源预审和代表请求 | [S8验收](s8-acceptance.md) |

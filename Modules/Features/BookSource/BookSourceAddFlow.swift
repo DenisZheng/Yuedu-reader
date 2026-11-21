@@ -83,6 +83,7 @@ final class BookSourceAddFlow: ObservableObject {
     static let importContentTypes: [UTType] = [
         .json,
         .plainText,
+        UTType(filenameExtension: "js") ?? .data,
         UTType(filenameExtension: "yds") ?? .data,
         UTType(filenameExtension: "mrs") ?? .data,
     ]
@@ -209,10 +210,25 @@ final class BookSourceAddFlow: ObservableObject {
     func importText(_ json: String) {
         let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        do {
-            queueImportReview(try store.parseForImport(json: trimmed))
-        } catch {
-            fail(error.localizedDescription)
+        fileImportTask?.cancel()
+        let request = UUID(); fileImportRequest = request
+        fileImportLoading = true
+        fileImportTask = Task {
+            defer {
+                if fileImportRequest == request { fileImportLoading = false; fileImportTask = nil }
+            }
+            do {
+                let sources = try await SourceScriptThread.run { [store] in
+                    try store.parseForImport(json: trimmed)
+                }
+                guard fileImportRequest == request, !Task.isCancelled else { return }
+                queueImportReview(sources)
+            } catch is CancellationError {
+                // 取消沿用文件导入语义，不重新打开确认页。
+            } catch {
+                guard fileImportRequest == request, !Task.isCancelled else { return }
+                fail(DiagnosticRedactor.redact(error.localizedDescription))
+            }
         }
     }
 
@@ -448,7 +464,7 @@ private struct BookSourceImportSheet: View {
                 Button {
                     flow.requestFileImport()
                 } label: {
-                    Label(localized("從文件選取 .json"), systemImage: "doc.badge.plus")
+                    Label(localized("從文件選取 .json／.js"), systemImage: "doc.badge.plus")
                         .frame(maxWidth: .infinity).padding()
                         .background(Color.secondary.opacity(0.15))
                         .clipShape(RoundedRectangle(cornerRadius: 12))

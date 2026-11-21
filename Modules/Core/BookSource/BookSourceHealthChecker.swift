@@ -1066,7 +1066,7 @@ final class BookSourceHealthChecker: ObservableObject {
         // search -> checkBook, then discovery -> checkBook. Besides matching its
         // observable order, this prevents an unnecessary discovery request when
         // detail / TOC / content already exposed a fatal transport/runtime error.
-        if policy.checkSearch,
+        if policy.checkSearch, !source.isJsSource,
            source.searchUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Legado tags such a source 搜索链接规则为空 and goes on to discovery. The tag is not
             // one of its invalid groups (`BookSource.getInvalidGroupNames` keeps groups holding

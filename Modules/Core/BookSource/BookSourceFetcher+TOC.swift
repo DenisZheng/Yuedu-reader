@@ -26,10 +26,10 @@ extension BookSourceFetcher {
         runtimeVariables: [String: String]?
     ) -> (chapters: [OnlineChapterRef], runtimeVariables: [String: String]?) {
         var ordered = pageChapters
-        if ModernParserBridge.tocListRule(source.ruleToc.chapterList).reverses {
+        if !source.isJsSource, ModernParserBridge.tocListRule(source.ruleToc.chapterList).reverses {
             ordered.reverse()
         }
-        if runtimeVariables?[LegadoBookBridge.reverseTocRuntimeKey] == "true" {
+        if !source.isJsSource, runtimeVariables?[LegadoBookBridge.reverseTocRuntimeKey] == "true" {
             ordered.reverse()
         }
         let chapters = normalizedChaptersWithNextURL(ordered)
@@ -122,6 +122,16 @@ extension BookSourceFetcher {
     ) async throws -> TOCPackage {
         if !forceRefresh, let cached = cachedTOCPackage(tocUrl: tocUrl, source: source) {
             return cached
+        }
+        if source.isJsSource {
+            let chapters = try await BookSourceSession.session(for: source).parse { bridge in
+                try SourcePerfTrace.span("mainJs.toc", "bytes=\(source.mainJs?.utf8.count ?? 0) main=\(Thread.isMainThread)") {
+                    try bridge.mainJsChapters(tocURL: tocUrl, variables: runtimeVariables ?? [:])
+                }
+            }
+            return try await completeTOCPackage(firstPage: (chapters, [], chapters.first?.runtimeVariables),
+                firstPageURL: tocUrl, tocUrl: tocUrl, source: source, runtimeVariables: runtimeVariables,
+                onFirstPageReady: onFirstPageReady, writesCache: writesCache)
         }
         // #region agent log
         _dbgLog(

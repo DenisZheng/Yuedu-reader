@@ -4742,3 +4742,13 @@
 "規則訂閱資料版本不支援，未覆寫原檔案" = "Unsupported subscription data version. The original file was not overwritten.";
 "規則訂閱或配置包超過大小上限" = "The subscription data or package exceeds the size limit.";
 "上次成功檢查" = "Last successful check";
+
+// 主脚本书源
+"主腳本缺少必要函式：%@" = "The main script is missing a required function: %@";
+"主腳本函式 %@ 傳回的資料格式不正確。" = "Main script function %@ returned an invalid data format.";
+"主腳本配置不完整或不符合支援的協定。" = "The main script configuration is incomplete or uses an unsupported protocol.";
+"主腳本執行失敗，請查看來源診斷。" = "The main script failed. Check source diagnostics.";
+"主腳本超過 8 MiB，無法匯入。" = "The main script exceeds 8 MiB and cannot be imported.";
+"主腳本匯入必須在背景執行。" = "Main script imports must run in the background.";
+"主腳本書源" = "Main-script book source";
+"從文件選取 .json／.js" = "Choose a .json / .js file";

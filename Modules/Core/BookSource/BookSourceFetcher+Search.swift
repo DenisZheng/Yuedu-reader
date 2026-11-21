@@ -157,7 +157,7 @@ extension BookSourceFetcher {
         failureMode: BookSourceSearchFailureMode = .emptyResult,
         usesCache: Bool = true
     ) async throws -> BookSourceSearchOutcome {
-        guard !source.searchUrl.isEmpty else { throw FetchError.noSearchURL }
+        guard source.isJsSource || !source.searchUrl.isEmpty else { throw FetchError.noSearchURL }
         let cacheDays = GlobalSettings.snapshot.searchCacheDays
         let cacheEligible = usesCache && page == 1 && earlyFilter == nil
         if usesCache, page == 1, let cached = SearchResultCache.shared.freshBooks(
@@ -329,7 +329,7 @@ extension BookSourceFetcher {
         in source: BookSource,
         onBatch: @escaping @Sendable ([OnlineBook]) async -> Void
     ) async throws -> SearchStreamingOutcome {
-        guard !source.searchUrl.isEmpty else { throw FetchError.noSearchURL }
+        guard source.isJsSource || !source.searchUrl.isEmpty else { throw FetchError.noSearchURL }
         let cacheDays = GlobalSettings.snapshot.searchCacheDays
         if let cached = SearchResultCache.shared.freshBooks(
             query: query,

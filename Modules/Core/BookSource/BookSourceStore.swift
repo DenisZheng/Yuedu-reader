@@ -78,6 +78,8 @@ class BookSourceStore: @MainActor ObservableObject {
         didSet {
             let library = self.library
             let positions = Self.positions(of: library)
+            let previous = snapshot.withLock { $0.positions ?? [:] }
+            BookSourceSession.invalidateMainJsSessions(previous: previous, current: library, positions: positions)
             snapshot.withLock {
                 $0.library = library
                 $0.positions = positions
@@ -764,6 +766,9 @@ class BookSourceStore: @MainActor ObservableObject {
             return try parseYDS(data)
         case "mrs":
             throw ImportError.encryptedFormat(lower.uppercased())
+        case "js":
+            guard let script = String(data: data, encoding: .utf8) else { throw ImportError.notUTF8 }
+            return [try MainJsSource.extract(script)]
         default:
             // .txt, .json, or unknown → try as Legado JSON, which is UTF-8 as Legado reads it.
             guard let text = String(data: data, encoding: .utf8) else {
@@ -774,6 +779,8 @@ class BookSourceStore: @MainActor ObservableObject {
     }
 
     nonisolated func parseForImport(json: String) throws -> [BookSource] {
+        let text = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.hasPrefix("[") && !text.hasPrefix("{") { return [try MainJsSource.extract(json)] }
         guard let data = json.data(using: .utf8) else {
             throw ImportError.invalidData
         }

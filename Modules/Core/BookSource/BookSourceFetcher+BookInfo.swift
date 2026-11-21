@@ -53,6 +53,16 @@ extension BookSourceFetcher {
             data: ["url": String(url.prefix(80)), "source": source.bookSourceName], hyp: "A")
         // #endregion
 
+        if source.isJsSource {
+            let known = try knownBook ?? MainJsSource.book(["bookUrl": url], source: source)
+            let info = try await BookSourceSession.session(for: source).parse { bridge in
+                try SourcePerfTrace.span("mainJs.detail", "bytes=\(source.mainJs?.utf8.count ?? 0) main=\(Thread.isMainThread)") {
+                    try bridge.mainJsBookInfo(book: known, variables: runtimeVariables ?? [:], canReName: canReName)
+                }
+            }
+            return finishBookInfoPackage(info: info, source: source, usesCache: usesCache)
+        }
+
         // Legado `WebBook.getBookInfoAwait`: a book whose search or discover page was its own
         // page carries that page (`infoHtml`), and the detail rules read it rather than a second
         // request — for a page a POST search answered, `bookUrl` is that search URL.
