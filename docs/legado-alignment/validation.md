@@ -1396,3 +1396,46 @@ MAINJS_FILE_IMPORT missing-getContent=rejected-with-alert
 - 当前没有提交、合入或push；验收反馈不自动授权这些操作或发布。root main仍保留回退后的c3eec5e1和原有未提交修复，未被覆盖。之前交付的8bc Release IPA仍不包含这批mainJs实现。
 
 本次只更新验收文档，不改业务代码、不重跑不变的自动测试、不重新编译或打包、不清理模拟器和服务。早先章节中的“待人工确认”保留为当时快照，本节覆盖当前验收状态；后续提交／合入仍需用户另行明确指示。本轮实际文档检查为`Acceptance documentation check: OK; 2 files; 91 local links`，`git diff --check`退出0；1325份应用／源码／fixture指纹与root main的5份已有未提交文件均未改变。
+
+## 用户授权mainJs提交、合入与Push（2026-11-21）
+
+人工验收通过后，用户另行明确指示“可以合入，并Push了”。本次只保存和合入已验收mainJs，不扩大为发布、打包、签名、真机安装或删除验收环境。
+
+### 提交与保留边界
+
+1. 远端main实际仍为`8bcad47b`，与mainJs开发base一致；root本地main仍为用户此前保留的`c3eec5e1`，5份未提交修复指纹与保存记录一致。没有把它们stash、覆盖、清理或重新提交，也不擅自移动本地main到新提交。
+2. 功能提交`d942f722`（25文件）保存了主脚本执行、五阶段接线、元数据隔离、配置保真、状态／错误与取消保护、五语言、自建offline-demo、行为测试及人工记录。暂存清单逐项核对，没有原始JSON包、.artifacts、个人备忘、缓存、临时失败UI诊断或签名资料。
+3. `git fetch origin main`后，以最新远端8bc建立干净工作区`../Yuedu-reader-mainjs-integrated-c50fb6c2`／`merge/legado-mainjs-9f30ab`。执行`git merge --no-ff --no-commit feature/legado-mainjs-1022e1`，无冲突；`git write-tree`与功能提交tree完全相同，不使用ours/theirs、reset或修改业务来迎合合入。
+4. 合并提交`c4a1d70388044fdb6f332a20ffa3d445bab2e6af`已保存，父提交分别为8bc与d942。正常`git push origin HEAD:refs/heads/main`实际输出`8bcad47b..c4a1d703  HEAD -> main`，随后`git ls-remote origin refs/heads/main`确认远端等于该合并提交，没有force push。
+5. 本节与状态导航作为正常后续文档提交保存，不改写上述功能／合并提交；最终文档push继续用正常快进并核对远端HEAD。root旧main及未提交文件仍原样保留，最新合入代码在上述干净工作区／远端main，不能把root的“落后”状态误读为push失败。
+
+### 相同整合代码的最小回归
+
+合并树与已验收功能提交完全一致，因此复用原功能工作区及其DerivedData测试**同一份代码**，而不是新建DerivedData或重复单独build；清洁整合工作区另核对tree、暂存25文件和无冲突。实际运行：
+
+```bash
+cd ../Yuedu-reader-mainjs-ad1f7376
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+bash scripts/xctest.sh -l .artifacts/main-js-manual/integration-behavior.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/MainJsSourceTests' \
+  -only-testing:'yuedu appTests/BookSourceAddFlowTests' \
+  -only-testing:'yuedu appTests/BookSourceCheckEmptyRuleTests' \
+  -only-testing:'yuedu appTests/BookSourceSessionQueueTests' \
+  -only-testing:'yuedu appTests/BookSourceImportNoOpTests' \
+  -only-testing:'yuedu appTests/SourceDebugLoggingCompatibilityTests' \
+  -only-testing:'yuedu appTests/RSSRuntimeIntegrationTests'
+ruby scripts/check_localizations.rb
+python3 -B -m unittest scripts.tests.test_source_debug_logging_privacy -v
+git diff --check
+```
+
+实际退出0，`Test run with 55 tests in 7 suites passed after 6.349 seconds`和`TEST SUCCEEDED`。五语言／格式参数／权限表实际Localization OK；源码隐私gate3项／OK。新增mainJs的17项全部纳入，包含真实offline-demo读取、生产五阶段、文件源、类型域、scope、取消、过期／删除／驱逐保护、序列化错误及超时。没有重跑全量测试或将框架0项、启动App、源码字段存在当作通过。日志在功能工作区`.artifacts/main-js-manual/integration-*.log`，Git合入／Push证据在root`.artifacts/main-js-integration/`，均不纳入业务提交。
+
+### 结果与仍受限范围
+
+本批mainJs的约定实现、自动门槛和用户人工确认已经通过，已按独立授权合入并正常push。原文件夹导航仍未修复，用户批准的系统Files根层文件选择仅是验收入口绕行；仍不扩展为全源／全部媒体／真机／iPad／最低iOS17／VoiceOver专项通过。批量正文／副文、通用段评与LoginUiV2仍后置，不把保存这些字段写成已完成。
+
+原main、5份已有未提交修复、私有源包、模拟器数据和Release IPA保持。下载目录的3.0.1（6）8bc Release IPA仍不含mainJs，本次没有重新打包、自动发布或清理服务。回退需用户确认后用正常后续提交撤销这批合入，不force push、不删数据、不覆写root未提交文件。
