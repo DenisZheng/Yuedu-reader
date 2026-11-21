@@ -25,7 +25,7 @@ Android固定`330e606c4d57e08adc056ff8ab7a4132c784da9a`。合同以`BatchContent
 
 自动通过后再准备自建离线源和直接人工步骤；用户确认前不标整批完成或合入。iPad、真机、最低iOS17、VoiceOver专项、原文件夹导航及真实公网源未验状态保留。旧8bc Release IPA不包含本批实现。
 
-本批自动门槛、用户批准的两站实站适配验证与用户人工验收均已通过。用户于2026-11-21明确反馈“验证OK”，按本次提供流程补齐人工确认；人工通过不自动授权提交／合入；用户随后另行明确指示“合入main并推送”，现进入保存功能提交和正常合入交付流程，最终结果以validation末节为准。结果写入[validation](validation.md)。回滚只撤回本批代码／文档，保留原私有源包、备份、App与模拟器数据，不reset main、不清理工作区或force push。
+本批自动门槛、用户批准的两站实站适配验证与用户人工验收均已通过。用户于2026-11-21明确反馈“验证OK”，按本次提供流程补齐人工确认；人工通过不自动授权提交／合入；用户随后另行明确指示“合入main并推送”，已保存功能提交faa3e25b、合入main为7715455b，并正常Push核对远端一致；最终记录见validation末节。结果写入[validation](validation.md)。回滚只撤回本批代码／文档，保留原私有源包、备份、App与模拟器数据，不reset main、不清理工作区或force push。
 
 ## 实施结果与证据
 
@@ -56,4 +56,4 @@ Android固定`330e606c4d57e08adc056ff8ab7a4132c784da9a`。合同以`BatchContent
 
 命令为scripts/xctest.sh选择临时RealSourceBatchValidationTests；真实1项／20.412秒／TEST SUCCEEDED，决定性输出REAL_BATCH index=235 original=PASS adapted=PASS chapters=3 requests=9和index=249同样PASS／requests=10。临时测试已移至.artifacts/content-batch/real/diagnostic-source，常规test target不留自动公网探针；报告validation.json和脱敏live-3.log保留在该目录，不公开原包、源规则／登录配置／正文。
 
-实站适配门槛通过后，用户在提供的人工环境中明确反馈“验证OK”，本批人工门槛据此通过；不是用助手的自动输出代替用户操作。此结论仅本次流程、两代表实站及隔离适配规则，不代表作者原生批量包或全部书源可用。没有逐项截图、真机／iPad／最低iOS17或VoiceOver专项的新结论。用户已在人工确认后另行明确授权保存功能提交、合入main并正常push；完成状态以validation末节实际Git结果为准，不把授权写作已完成发布。
+实站适配门槛通过后，用户在提供的人工环境中明确反馈“验证OK”，本批人工门槛据此通过；不是用助手的自动输出代替用户操作。此结论仅本次流程、两代表实站及隔离适配规则，不代表作者原生批量包或全部书源可用。没有逐项截图、真机／iPad／最低iOS17或VoiceOver专项的新结论。用户在人工确认后另行明确授权保存功能提交、合入main并正常push。功能faa3e25b、合并7715455b已推送并核对origin/main；合并内容树与已验收功能提交相同，没有再改业务代码。后续交付记录只更新文档，最终状态见validation末节。没有发布或重打IPA，原环境与未验证范围保留。

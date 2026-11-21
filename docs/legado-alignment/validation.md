@@ -1542,3 +1542,18 @@ REAL_BATCH index=249 original=PASS adapted=PASS chapters=3 requests=10
 确认环境为Legado 批量正文验收 1121-2035-da64／iPhone 18 Pro Max／iOS27.2，当前Debug，指南提供正常三章下载／章节变量／部分异常后的单章回退／重开恢复。反馈按此次流程作批次确认，没有逐项新截图或特殊平台报告，不扩大为作者原生批量源、全包、全部格式／DRM、真实账号、真机／iPad／最低iOS17／VoiceOver专项通过。系统文件夹限制及根层文件绕行继续保留。
 
 当前分支feature/legado-batch-content，base fe4d28be，main ref仍保留已同步点。只更新本轮验收记录，业务实现和原始源包不变，不因确认重复联网、测试或打包。本批尚未commit、合入或push；用户验收反馈不自动授权这些操作、正式发布或清理环境，后续须另行明确指示。原数据、备份和旧IPA保留。
+
+## 批量正文提交、合入和Push交付（2026-11-21）
+
+人工确认后用户另行要求“提交并Push”，随后明确选择“合入main并推送”。本次只交付已验收批量正文，未扩展到副文、段评、LoginUiV2、发布或重新打包。
+
+- 功能提交：faa3e25b40e5297d079a47f5d23c3d81c0dd64e3（Add validated batch chapter content fetching）。
+- main合并：7715455b507cd57473c83e2aeb740796e45df048（Merge validated batch chapter content into main）。两父顺序为fe4d28be与faa3e25b，保留独立功能历史。
+- git push origin main实际成功：fe4d28be..7715455b main -> main。git ls-remote origin refs/heads/main再次返回7715455b507cd57473c83e2aeb740796e45df048，核对与本地HEAD一致。本节记录已实际核对的业务合并SHA；后续仅文档记录提交一并正常Push，最终远端复核以交付回复和Git记录为准。
+- 合并索引／最终内容树严格等于功能提交：4f4e21f8e2837623c91478f053c9ea83944442c0。业务、测试、fixture和五语言逐文件SHA与提交前验收内容一致，没有解决冲突时改代码、clean或新DerivedData。
+
+准确范围23文件：生产源配置／批量宿主桥／唯一章节cache票据／下载预读合并、后台缓存清理入口、五语言6错误key、自建离线fixture、批量行为测试及4份说明。原253／307 JSON包、临时实站探针及.artifacts、个人资料和备份均不入提交；main切换后原数据保留，没有force push。
+
+本次会话实际验证证据仍有效：scripts/xctest.sh主相关选择79项／8 suites／9.318秒／TEST SUCCEEDED；另一次fixture测试1项／0.171秒／TEST SUCCEEDED；用户批准的实站适配探针1项／20.412秒／TEST SUCCEEDED，两真实站原样单章及批量三章一致，21个受控Swift请求。内容树与验收时相同，因此只核对决定性日志、SHA和合并树，不重复全量或额外公网执行。交付时ruby scripts/check_localizations.rb再次实际输出Localization OK；源码隐私单测3项、文档UTF-8/LF/代码围栏与119本地链接及git diff --check核对见本次输出。
+
+用户提供流程人工已通过，仍不宣称原生作者批量源、全部书源／DRM、真实账户、真机／iPad／最低iOS17／VoiceOver专项通过。系统Files文件夹导航原限制未修，根层选文件绕行继续如实记录。原8bc未签名Release IPA仍不含mainJs和本批内容，未自动重新打包或发布。回滚若后续批准，使用普通撤回提交保留共享历史与数据，不reset main、git clean或force push。
