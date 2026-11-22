@@ -69,6 +69,8 @@
 
 ### 2.2 Toolbar 動作位置與語意
 
+书架的封面阅读器由原生 `BookshelfNavigationHost` 拥有 push/pop，嵌入的 SwiftUI `NavigationStack` 只管理根内容、分组及搜索值路径。私有 `BookshelfContentView` 仍是 `HomeView` 的 Tab 根内容，不是新增根页或推入页；标题、Toolbar 和既有阅读器样式不变。不要把 UIKit 阅读器直接追加到管理搜索值路由的 SwiftUI 栈，也不要在内部探针重新接管封面阅读器的原生导航控制器；`3.0.2` 的开书后回退已用隔离 UI 对照验证，见 `docs/legado-alignment/bookshelf-reader-return-2026-11-23.md`。
+
 - 主要頁面動作放在 trailing（通常是 `.topBarTrailing`）；返回由導航容器提供，避免自行複製。
 - RSS 規則網頁另提供**網頁歷史返回**：僅在目前閱讀會話有前一頁時顯示，返回上一個網頁文件或頁內狀態並保留閱讀容器；沒有歷史時不顯示，模態頁的 Close 仍只負責關閉整個容器。
 - Sheet 的 **Cancel / Close** 放 leading：立即關閉且不儲存未確認的變更。

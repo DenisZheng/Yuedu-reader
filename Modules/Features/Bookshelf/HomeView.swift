@@ -235,6 +235,17 @@ private final class ShelfReaderNavigation: ObservableObject {
 }
 
 struct HomeView: View {
+    @StateObject private var readerNavigation = ShelfReaderNavigation()
+
+    var body: some View {
+        BookshelfNavigationHost(navigator: readerNavigation.coordinator) {
+            BookshelfContentView(readerCoordinator: readerNavigation.coordinator)
+        }
+    }
+}
+
+private struct BookshelfContentView: View {
+    let readerCoordinator: ReaderNavigationCoordinator
     @EnvironmentObject var store: BookStore
     @Environment(\.appDependencies) private var appDependencies
     @Environment(\.rootTabBarVisibility) private var rootTabBarVisibility
@@ -319,10 +330,6 @@ struct HomeView: View {
         return CGSize(width: width, height: width * 3 / 2)
     }
 
-    /// Not observed (`ShelfReaderNavigation`): its state is read in actions, never to decide
-    /// what `body` draws.
-    @StateObject private var readerNavigation = ShelfReaderNavigation()
-    private var readerCoordinator: ReaderNavigationCoordinator { readerNavigation.coordinator }
     @StateObject private var readerGeometryStore = BookshelfReaderGeometryStore()
     /// Bumped when the book just opened has moved to the front of 最近閱讀. The shelf then
     /// goes back to its top behind the reader: left scrolled down to where the book was,
@@ -778,19 +785,11 @@ struct HomeView: View {
             } message: {
                 Text(String(format: localized("確定要刪除 %d 本書嗎？"), selectedBookIds.count))
             }
-            // Keep the probe inside this NavigationStack's root destination.
-            // Its responder chain resolves this shelf's UIKit navigation
-            // controller before the coordinator directly pushes the reader,
-            // rather than guessing among sibling stacks owned by TabView.
-            .background {
-                ReaderEdgeSwipeEnabler(navigator: readerCoordinator)
-                    .frame(width: 0, height: 0)
-                    #if DEBUG
-                    .onAppear {
-                        handleDebugOpenBookIfNeeded()
-                    }
-                    #endif
+            #if DEBUG
+            .onAppear {
+                handleDebugOpenBookIfNeeded()
             }
+            #endif
         }
         // The iPad shell and videos retain their original modal presentation, and so does an
         // audiobook tapped while something covers the tabs (`NowPlayingHub.openIfAudiobook`).

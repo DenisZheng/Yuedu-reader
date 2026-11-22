@@ -37,6 +37,10 @@ Resolve conflicts in this order: **Apple platform behavior and accessibility > e
 14. **A footer earns its place or it does not exist.** Write one only for what the reader cannot work out from the control itself: a cost, a risk, a side effect, a non-obvious precondition, or where the data came from. If the label already says it, there is no footer — 「重新整理名單」 needs no paragraph explaining that it rebuilds the list. Aim for one sentence; two is the ceiling. Do not restate the button, narrate the implementation, or explain a feature's rationale. Before adding one, ask what the reader would get wrong without it; if the answer is "nothing", delete it.
 15. Settings rows use `SettingsRows` (`Modules/SharedUI/Components/SettingsRows.swift`): wrap native controls with `SettingsRowLabel` / `SettingsValueLabel` / `SettingsSliderRow` / `SettingsLockedRow` so every row on a page shares one icon size, colour and alignment. A pushed page's title matches its row's name. zh-Hant wording: 匯入/匯出, 自訂, 介面, 儲存, 重設, 閱讀背景, 頁首頁尾, 全域 — see `docs/design.md` §4.
 
+## 书架导航边界
+
+- 封面阅读器由 `BookshelfNavigationHost` 的 UIKit 栈持有；嵌入 SwiftUI 栈只管理书架内页和搜索值路径。不能把阅读器直接追加到 SwiftUI 值路径栈，也不能让内部探针覆盖原生导航 owner。保持同一阅读器、动画和状态 owner；改动须同时验证开书/返回及搜索。
+
 ## Sheet Rules
 
 - Put Cancel or Close leading; dismiss without saving unconfirmed changes.
