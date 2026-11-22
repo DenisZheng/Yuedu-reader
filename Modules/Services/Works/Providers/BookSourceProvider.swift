@@ -10,20 +10,28 @@ import Foundation
 final class BookSourceProvider: HomeSectionProviding {
     let source: BookSource
     private let firstPages: DiscoverFirstPages
+    typealias SourceModeMarkers = @Sendable (BookSource) -> [String]
+    private let modeMarkers: SourceModeMarkers
+    nonisolated static let storedModeMarkers: SourceModeMarkers = {
+        OnlineBookContentInference.sourceRuntimeModeMarkers(for: $0)
+    }
 
-    init(source: BookSource, firstPages: DiscoverFirstPages) {
+    init(source: BookSource, firstPages: DiscoverFirstPages,
+         modeMarkers: @escaping SourceModeMarkers = storedModeMarkers) {
         self.source = source
         self.firstPages = firstPages
+        self.modeMarkers = modeMarkers
     }
 
     /// A provider with a first-page fetcher and a queue of its own, for tests.
     convenience init(
         source: BookSource,
         pageLoader: SectionPageLoader,
-        primeCookies: @escaping DiscoverFirstPages.PrimeCookies
+        primeCookies: @escaping DiscoverFirstPages.PrimeCookies,
+        modeMarkers: @escaping SourceModeMarkers = storedModeMarkers
     ) {
         self.init(source: source, firstPages: DiscoverFirstPages(pageLoader: pageLoader, primeCookies: primeCookies,
-                                                                 lanes: DiscoverRequestLanes()))
+                                                                 lanes: DiscoverRequestLanes()), modeMarkers: modeMarkers)
     }
 
     var instance: SourceInstanceKey { SourceInstanceKey(type: .bookSource, id: source.bookSourceUrl) }
@@ -43,7 +51,7 @@ final class BookSourceProvider: HomeSectionProviding {
         guard let category = category(for: section), category.cardItem != nil else { return [] }
         do {
             let books = try await firstPages.firstPage(of: category, in: source).value
-            return books.prefix(HomeRow.limit).map { entry($0) }
+            return await Self.entries(books, source: source, modeMarkers: modeMarkers)
         } catch {
             throw try SourceFailure.classify(error)
         }
@@ -54,7 +62,7 @@ final class BookSourceProvider: HomeSectionProviding {
     func savedPage(_ section: HomeSection) async -> [CollectionEntry]? {
         guard let category = category(for: section), category.cardItem != nil,
               let books = await firstPages.savedPage(of: category, in: source), !books.isEmpty else { return nil }
-        return books.prefix(HomeRow.limit).map { entry($0) }
+        return await Self.entries(books, source: source, modeMarkers: modeMarkers)
     }
 
     /// The category a section shows from this source: its own, or the one picked for 「最新」.
@@ -69,8 +77,22 @@ final class BookSourceProvider: HomeSectionProviding {
         }
     }
 
-    private func entry(_ book: OnlineBook) -> CollectionEntry {
-        .onlineBook(book, source: source)
+    /// 当前 App 无默认 actor isolation；非隔离异步函数在后台构造整页条目。
+    /// 源脚本可能在加载期间改变模式，因此只在页面返回后读取一次。
+    private nonisolated static func entries(
+        _ books: [OnlineBook], source: BookSource, modeMarkers: SourceModeMarkers
+    ) async -> [CollectionEntry] {
+        let shown = books.prefix(HomeRow.limit)
+        guard !shown.isEmpty else { return [] }
+        return SourcePerfTrace.span("home.row.entries", "books=\(shown.count) main=\(Thread.isMainThread)",
+                                    thresholdMs: 4, measuresCPU: true) {
+            let markers = modeMarkers(source)
+            return shown.map { book in
+                .onlineBook(book, source: source, contentKind: book.inferredContentKind(
+                    source: source, sourceModeMarkers: markers
+                ))
+            }
+        }
     }
 }
 

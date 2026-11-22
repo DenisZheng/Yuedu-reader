@@ -8,6 +8,8 @@ import UIKit
 @MainActor
 final class ReaderAutoReadRevealHandle {
     var setProgress: ((Double) -> Void)?
+    /// 分页宿主在页面落地或拒绝翻页时回报。
+    var onPageTurnResolved: (() -> Void)?
 }
 
 /// The 自動閱讀 curtain: the next page, unmasked from the top down.
@@ -34,6 +36,8 @@ final class AutoReadRevealView: UIView {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         backgroundColor = .clear
+        // 仿真翻页会把新页面加入顶层；揭页不能依赖子视图插入顺序。
+        layer.zPosition = 1
 
         pageImageView.contentMode = .scaleToFill
         pageImageView.frame = bounds

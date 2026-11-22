@@ -36,6 +36,8 @@ struct ReaderPageTurnCommand: Equatable {
     let step: Step
     let animated: Bool
     let version: UInt
+    /// 自动阅读请求需要由分页宿主确认真实落地。
+    var isAutoRead = false
 }
 
 // MARK: - TransitionToken

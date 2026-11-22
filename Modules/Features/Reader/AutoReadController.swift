@@ -11,14 +11,9 @@ import SwiftUI
 /// three forks implement identically. Two things about it are easy to get wrong,
 /// and the previous version got both:
 ///
-/// 1. **It is not a page turn on a timer.** In 翻頁 mode the next page is laid over
-///    the current one and revealed top-to-bottom by a moving clip line; the page
-///    turn itself happens instantly, unanimated, when the reveal reaches the
-///    bottom. The reader's chosen 仿真／覆蓋／滑動 animation is deliberately
-///    bypassed. In 捲動 mode there is no reveal — the content scrolls
-///    continuously.
-/// 2. **Speed is seconds per page, not a multiplier.** `viewportHeight /
-///    secondsPerPage` is the velocity, and it is the same number in both modes.
+/// 自动阅读在翻页模式下逐步揭示下一页，等宿主确认页面落地后才重置揭页。
+/// 仿真／覆盖／滑动的普通转场动画不叠加到自动阅读；滚动模式只连续移动正文。
+/// 速度以每页秒数计算，两种模式使用相同的阅读速度。
 ///
 /// Driven by `CADisplayLink` rather than a `Timer`, because the reveal advances
 /// every frame rather than once per page.
@@ -65,14 +60,17 @@ final class AutoReadController: NSObject, ObservableObject {
     /// Pushed straight at the reveal layer, bypassing SwiftUI.
     var onProgressChanged: ((Double) -> Void)?
 
-    /// Advance one page, unanimated. `false` means there was no next page, which
-    /// ends the mode — legado's `fillPage(NEXT)` returning false.
+    /// 请求无动画翻页。false 表示书末并退出；true 要求宿主随后回报真实落地或拒绝。
     var onAdvancePage: (() -> Bool)?
     /// 捲動 mode: move the content down by this fraction of one viewport.
     /// `false` means the end of the book.
     var onScrollByFraction: ((Double) -> Bool)?
     /// Asked every frame, because the reader can switch modes underneath us.
     var usesContinuousScroll: () -> Bool = { false }
+
+    /// 宿主确认前保持揭页完整，避免显示刚读过的旧页。
+    private(set) var isAwaitingPageTurn = false
+    private var travelledWhileAwaiting: Double = 0
 
     private var displayLink: CADisplayLink?
     private var lastTimestamp: CFTimeInterval?
@@ -90,6 +88,7 @@ final class AutoReadController: NSObject, ObservableObject {
         guard !isActive else { return }
         isActive = true
         isPaused = false
+        endAwaitingPageTurn()
         setProgress(0)
         startDisplayLink()
     }
@@ -98,6 +97,7 @@ final class AutoReadController: NSObject, ObservableObject {
         guard isActive else { return }
         isActive = false
         isPaused = false
+        endAwaitingPageTurn()
         setProgress(0)
         stopDisplayLink()
     }
@@ -110,6 +110,7 @@ final class AutoReadController: NSObject, ObservableObject {
     func stopForReaderExit() {
         isActive = false
         isPaused = false
+        endAwaitingPageTurn()
         setProgress(0)
         stopDisplayLink()
     }
@@ -139,6 +140,7 @@ final class AutoReadController: NSObject, ObservableObject {
     /// subtracting. So this is for turns the mode did not ask for, only.
     func resetReveal() {
         guard isActive else { return }
+        endAwaitingPageTurn()
         setProgress(0)
         lastTimestamp = nil
     }
@@ -146,6 +148,11 @@ final class AutoReadController: NSObject, ObservableObject {
     private func setProgress(_ value: Double) {
         progress = value
         onProgressChanged?(value)
+    }
+
+    private func endAwaitingPageTurn() {
+        isAwaitingPageTurn = false
+        travelledWhileAwaiting = 0
     }
 
     // MARK: - Speed
@@ -217,29 +224,47 @@ final class AutoReadController: NSObject, ObservableObject {
             return
         }
         lastTimestamp = link.timestamp
+        step(elapsed: link.timestamp - previous)
+    }
 
-        let elapsed = link.timestamp - previous
+    /// 显示帧与隔离回归共用同一推进入口。
+    func step(elapsed: TimeInterval) {
+        guard isActive, !isPaused else { return }
         guard elapsed > 0, elapsed.isFinite else { return }
         let fraction = Self.fraction(ofPageIn: elapsed, secondsPerPage: secondsPerPage)
 
         if usesContinuousScroll() {
-            // No reveal here — the content itself moves, exactly as legado hands
-            // the pager to `ContentTextView` only in scroll mode.
+            // 切到滚动模式后没有揭页，结束之前分页模式遗留的等待。
+            endAwaitingPageTurn()
             if onScrollByFraction?(fraction) == false { exit() }
             return
         }
 
-        let advance = Self.advance(progress: progress, by: fraction)
-        setProgress(advance.progress)
-        for _ in 0..<advance.pageTurns {
-            let advanced = SourcePerfTrace.span("reader.autoRead.advance", thresholdMs: 5) {
-                onAdvancePage?() == true
-            }
-            guard advanced else {
-                exit()
-                return
-            }
+        if isAwaitingPageTurn {
+            travelledWhileAwaiting = min(1, travelledWhileAwaiting + fraction)
+            return
         }
+
+        let advance = Self.advance(progress: progress, by: fraction)
+        guard advance.pageTurns > 0 else {
+            setProgress(advance.progress)
+            return
+        }
+        setProgress(1)
+        isAwaitingPageTurn = true
+        travelledWhileAwaiting = min(1, advance.progress + Double(advance.pageTurns - 1))
+        let advanced = SourcePerfTrace.span("reader.autoRead.advance", thresholdMs: 5) {
+            onAdvancePage?() == true
+        }
+        if !advanced { exit() }
+    }
+
+    /// 页面真正落地或请求被拒绝后才重置揭页，并计入期间已看到的阅读时间。
+    func pageTurnResolved() {
+        guard isActive, isAwaitingPageTurn else { return }
+        let travelled = travelledWhileAwaiting
+        endAwaitingPageTurn()
+        setProgress(travelled)
     }
 
     // MARK: - Frame arithmetic (pure, so it can be tested without a display link)

@@ -929,7 +929,7 @@ enum OnlineBookContentInference {
 }
 
 extension OnlineBook {
-    func inferredContentKind(source: BookSource?) -> OnlineBookContentKind {
+    func inferredContentKind(source: BookSource?, sourceModeMarkers: [String]? = nil) -> OnlineBookContentKind {
         // 主脚本的book.type是Android书籍位标记，不按书源分类数字或URL选项猜测。
         if source?.isJsSource == true, let type = runtimeVariables?["book.type"].flatMap(Int.init) {
             switch type {
@@ -946,7 +946,7 @@ extension OnlineBook {
             runtimeVariables: runtimeVariables,
             urls: [bookUrl, tocUrl],
             metadataText: [kind, intro, lastChapter, sourceName]
-                + OnlineBookContentInference.sourceRuntimeModeMarkers(for: source)
+                + (sourceModeMarkers ?? OnlineBookContentInference.sourceRuntimeModeMarkers(for: source))
         )
     }
 }

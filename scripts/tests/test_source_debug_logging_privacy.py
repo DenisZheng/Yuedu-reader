@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BRIDGE = "Modules/Core/RuleEngine/ModernParser/ModernParserBridge.swift"
 ENGINE = "Modules/Core/RuleEngine/ModernParser/JS/JSCoreEngine.swift"
 JAVA = "Modules/Core/RuleEngine/ModernParser/JS/LegadoJSBridge.swift"
+LOGIN = "Modules/Features/BookSource/BookSourceFormLoginView.swift"
 
 
 class SourceDebugLoggingPrivacyTests(unittest.TestCase):
@@ -27,6 +28,24 @@ class SourceDebugLoggingPrivacyTests(unittest.TestCase):
                         "保留脚本print入口，避免兼容性回归")
         self.assertTrue("self.errorHandler?(msg," in source,
                         "真实异常仍必须进入已有错误回调")
+
+    def test_login_scripts_freeze_source_before_background_work(self):
+        source = (ROOT / LOGIN).read_text()
+        for name in ("runLoginJS", "runButtonJS"):
+            body = source.split(f"func {name}(", 1)[1].split("Task.detached", 1)[0]
+            self.assertTrue("let source = source" in body,
+                            f"{name}必须在离开主线程前读取源快照")
+
+    def test_login_menu_keeps_errors_without_raw_diagnostic_evaluations(self):
+        source = (ROOT / LOGIN).read_text()
+        self.assertFalse(re.search(r"\bNSLog\s*\(", source),
+                         "登录菜单仍存在原文控制台旁路")
+        self.assertFalse("❖SHUSHAN TRACE❖" in source)
+        self.assertFalse("java.get('yunpara')" in source,
+                         "菜单不能为诊断额外求值并覆盖真实脚本错误")
+        self.assertTrue("Self.evaluateDynamicLabels(" in source)
+        self.assertTrue("SourceAPIErrorLog.shared.last(" in source)
+        self.assertTrue("來源配置腳本錯誤" in source)
 
     def test_toast_and_log_type_no_longer_duplicate_raw_console_output(self):
         source = (ROOT / JAVA).read_text()

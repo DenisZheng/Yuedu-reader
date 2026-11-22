@@ -237,6 +237,8 @@ struct HomeView: View {
     @Bindable private var gs = GlobalSettings.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControlEnabled
 
     @State private var showAddSheet = false
     @State private var showCalibreWireless = false
@@ -1160,6 +1162,9 @@ struct HomeView: View {
 
     private func bookListContent(entries: [ShelfEntry], page: ShelfPage, isInView: Bool) -> some View {
         let isSelecting = editMode == .active
+        let offersSwipe = BookshelfRowSwipe.isOffered(
+            voiceOverEnabled: voiceOverEnabled, switchControlEnabled: switchControlEnabled
+        )
         // A group's page pushed over the shelf leaves 書架's title alone.
         let measuresTitleFade = isInView && page.isOnPager
         // Native multi-select: binding the selection Set drives the system selection circles in
@@ -1182,7 +1187,8 @@ struct HomeView: View {
                             onEdit: { editingBook = book },
                             onDelete: { bookToDelete = book },
                             onShowWork: { showWorkDetail(for: book) },
-                            onTogglePin: { togglePin(book) }
+                            onTogglePin: { togglePin(book) },
+                            swipeIsOffered: offersSwipe
                         )
                         .equatable()
                         .tag(book.id)
@@ -1190,10 +1196,9 @@ struct HomeView: View {
                         .background {
                             if page.isOnPager { ShelfPagerRowSwipeArbiter() }
                         }
-                        // 左滑 (feedback #17), as legado's shelf: 置頂 and 刪除, the delete going
-                        // through the same confirmation as the ••• menu's. The list only.
+                        // 无障碍模式由行自身提供动作，避免运行时重复添加原生滑动动作。
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if !isSelecting {
+                            if !isSelecting, offersSwipe {
                                 Button(role: .destructive) { bookToDelete = book } label: {
                                     Label(localized("刪除"), systemImage: "trash")
                                 }
@@ -1920,6 +1925,8 @@ struct BookRow: View {
     var onShowWork: (() -> Void)? = nil
     /// 置頂 / 取消置頂 (feedback #17).
     var onTogglePin: (() -> Void)? = nil
+    /// 行是否已通过原生滑动提供置顶和删除。
+    var swipeIsOffered: Bool = false
 
     /// A row's cover. A group's folder in the list takes the same frame.
     static let coverSize = CGSize(width: 45, height: 65)
@@ -1942,11 +1949,11 @@ struct BookRow: View {
                     if let onShowWork {
                         Button(localized("作品詳情")) { onShowWork() }
                     }
-                    if !BookshelfRowSwipe.reachesVoiceOver, let onTogglePin {
+                    if !swipeIsOffered, let onTogglePin {
                         Button(BookshelfPinLabel.title(isPinned: book.isPinned)) { onTogglePin() }
                     }
                     Button(localized("編輯書籍資訊")) { onEdit() }
-                    if !BookshelfRowSwipe.reachesVoiceOver {
+                    if !swipeIsOffered {
                         Button(localized("刪除書籍"), role: .destructive) { onDelete() }
                     }
                 }
@@ -2263,6 +2270,10 @@ struct BookGridCell: View {
             if !isEditing {
                 if let onShowWork {
                     Button(localized("作品詳情")) { onShowWork() }
+                }
+                // 方格没有滑动动作，置顶也由书籍元素提供。
+                if let onTogglePin {
+                    Button(BookshelfPinLabel.title(isPinned: book.isPinned)) { onTogglePin() }
                 }
                 Button(localized("編輯書籍資訊")) { onEdit() }
                 Button(localized("刪除書籍"), role: .destructive) { onDelete() }
@@ -2700,11 +2711,11 @@ private struct BookOverflowMenu: View {
     }
 }
 
-/// iOS27起List会把原生滑动动作加入VoiceOver，重复声明会出现多个删除／置顶。
-/// 旧系统仍由BookRow提供这些动作；最低系统升至iOS27后可移除此兼容判断。
+/// VoiceOver／Switch Control 下只由行提供动作，避免运行时将滑动动作加入两次。
+/// 普通触控保留原生滑动；删除继续交给书架已有确认流程。
 enum BookshelfRowSwipe {
-    static var reachesVoiceOver: Bool {
-        if #available(iOS 27.0, *) { true } else { false }
+    static func isOffered(voiceOverEnabled: Bool, switchControlEnabled: Bool) -> Bool {
+        !voiceOverEnabled && !switchControlEnabled
     }
 }
 
@@ -2891,6 +2902,7 @@ extension BookRow: @MainActor Equatable {
             && (lhs.onShowWork == nil) == (rhs.onShowWork == nil)
             && (lhs.onTogglePin == nil) == (rhs.onTogglePin == nil)
             && (lhs.onCoverFrameChange == nil) == (rhs.onCoverFrameChange == nil)
+            && lhs.swipeIsOffered == rhs.swipeIsOffered
     }
 }
 

@@ -16,6 +16,10 @@ struct BookSourceFormLoginView: View {
     /// version until the page was reopened. `adoptLatest(_:)` keeps it current.
     @State private var source: BookSource
     let onDismiss: () -> Void
+    #if DEBUG
+    /// 隔离测试取得已安装状态的 View，不读写共享书源库。
+    var onFormReady: ((BookSourceFormLoginView) -> Void)?
+    #endif
 
     init(source: BookSource, onDismiss: @escaping () -> Void) {
         _source = State(initialValue: source)
@@ -44,7 +48,7 @@ struct BookSourceFormLoginView: View {
     /// as dead even once it had something to say.
     @State private var menuAlert: MenuActionAlert? = nil
 
-    struct MenuActionAlert: Identifiable {
+    struct MenuActionAlert: Identifiable, Sendable {
         let id = UUID()
         let title: String
         let detail: String
@@ -152,7 +156,12 @@ struct BookSourceFormLoginView: View {
                 }
             }
         }
-        .onAppear { loadUI() }
+        .onAppear {
+            loadUI()
+            #if DEBUG
+            onFormReady?(self)
+            #endif
+        }
         .onReceive(BookSourceStore.shared.sourcesPublisher) { library in
             // The published value: the publisher sends before the store holds it.
             guard let latest = library.first(where: { $0.id == source.id }) else { return }
@@ -237,7 +246,7 @@ struct BookSourceFormLoginView: View {
     /// Takes the library's new copy of this source. The form is built again only when what
     /// builds it changed; what the user typed is stored first, so it survives the rebuild
     /// (`loadUI` reads the stored values back into the new fields).
-    private func adoptLatest(_ latest: BookSource) {
+    func adoptLatest(_ latest: BookSource) {
         guard !latest.hasSameContent(as: source) else { return }
         let rebuildsForm = Self.formDefinitionChanged(from: source, to: latest)
         if rebuildsForm { persistCurrentFormValues() }
@@ -617,6 +626,8 @@ struct BookSourceFormLoginView: View {
         }
 
         isLoading = true
+        // 在主线程取得源快照，后台脚本不再读取 SwiftUI 的 @State。
+        let source = source
         Task.detached(priority: .userInitiated) {
             // The login script runs on `SourceScriptThread`: a page it opens with
             // `java.startBrowserAwait` can stay up for minutes.
@@ -680,17 +691,21 @@ struct BookSourceFormLoginView: View {
         }
     }
 
-    private func runButtonJS(action: String, credentials: [String: String]) {
+    /// 返回原执行任务，便于隔离回归等待真实脚本结果；界面调用仍可忽略句柄。
+    @discardableResult
+    func runButtonJS(action: String, credentials: [String: String]) -> Task<MenuActionAlert?, Never> {
         let rawLogin = source.loginUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         let loginJS = LoginManager.shared.extractLoginJs(rawLogin) ?? ""
         let combined = "\(loginJS)\n\(action)"
         // Captured before leaving the main actor so a label refresh after the action can
         // run on the same engine; the source decides the display text, we only resolve it.
         let dynamicLabelFields = fields.filter(\.hasDynamicViewName)
+        // 按钮和动态标签刷新使用同一份点击时源配置。
+        let source = source
 
         // The menu action runs on `SourceScriptThread`: a page it opens with
         // `java.startBrowserAwait` can stay up for minutes.
-        Task.detached(priority: .userInitiated) {
+        return Task.detached(priority: .userInitiated) {
             await SourceScriptThread.run {
                 let engine = Self.makeLoginEngine(source: source)
                 let spoke = MenuActionSpokeFlag()
@@ -740,26 +755,7 @@ struct BookSourceFormLoginView: View {
                     "baseUrl": source.bookSourceUrl
                 ]
                 SourceAPIErrorLog.shared.clear(for: source.bookSourceUrl)
-                if source.bookSourceName.contains("书山聚合") {
-                    let before = engine.evaluate("java.get('yunpara')") ?? "<nil>"
-                    NSLog(
-                        "❖SHUSHAN TRACE❖ stage=menu.before action=%@ yunpara=%@ jsError=%@",
-                        action,
-                        before.isEmpty ? "<empty>" : before,
-                        engine.lastError ?? "none"
-                    )
-                }
                 _ = engine.evaluate(combined, bindings: bindings)
-                if source.bookSourceName.contains("书山聚合") {
-                    let actionError = engine.lastError
-                    let after = engine.evaluate("java.get('yunpara')") ?? "<nil>"
-                    NSLog(
-                        "❖SHUSHAN TRACE❖ stage=menu.after action=%@ yunpara=%@ actionError=%@",
-                        action,
-                        after.isEmpty ? "<empty>" : after,
-                        actionError ?? "none"
-                    )
-                }
 
                 // Legado refreshes the menu's labels after an action (`upUiData`); a source's
                 // dynamic viewNames (e.g. 起点's 段评 state) can change because of it. Resolve
@@ -783,7 +779,7 @@ struct BookSourceFormLoginView: View {
                 // answers `{"error":…}` (wrong/used 邀请码, rejected device id), so
                 // 「邀请码注册Token」 looked like a dead button. Only speak when the source
                 // itself stayed silent — its own toast is the better message when it has one.
-                guard !spoke.fired else { return }
+                guard !spoke.fired else { return nil }
                 let report: MenuActionAlert?
                 if let jsError = engine.lastError {
                     report = MenuActionAlert(title: localized("來源配置腳本錯誤"), detail: jsError)
@@ -793,11 +789,12 @@ struct BookSourceFormLoginView: View {
                 } else {
                     report = nil
                 }
-                guard let report else { return }
+                guard let report else { return nil }
                 AppLogger.parse("⟐ menuButton silent", context: [
                     "title": report.title, "detail": report.detail
                 ])
                 Task { @MainActor in self.menuAlert = report }
+                return report
             }
         }
     }
