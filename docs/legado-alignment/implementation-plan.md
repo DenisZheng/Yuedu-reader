@@ -2,6 +2,7 @@
 
 > 依据：[最终方案 v2.0](development-plan.md)。Q1–Q13 与整体执行已确认；根目录 AGENTS.md 已生成。按 [ADR-0004](../adr/0004-remove-google-and-billing.md) 移除 Google/Firebase 及收费体系，保留 iCloud/WebDAV。WebDAV 首期对齐备份机制，不做 Android 整包互通。
 > 本计划是工作依赖和验收合同，不是完成报告。只有执行过的测试可以登记为通过。
+> 当前状态以 [项目状态页](STATUS.md) 为入口：2026-11-22 副文、原生只读段评、LoginUiV2 与 Review 修复已合入并推送 main；它们不替代 S8／发布门槛，也不恢复本版暂停的 iCloud。
 
 ## 1. 执行规则
 

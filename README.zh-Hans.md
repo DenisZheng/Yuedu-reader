@@ -1,5 +1,7 @@
 # Yuedu
 
+> 当前仓库是独立 iOS Fork **LegadoPro**。副文、原生只读段评、LoginUiV2 和 Review 修复已于 2026-11-22 合入并推送 `main`。能力、验收边界与下一步以 [项目当前状态](docs/legado-alignment/STATUS.md) 为准；下文上游发行链接不是本 Fork 的发布产物，iCloud 在本版暂停。
+
 <p align="center">
   <img src="Resources/Assets.xcassets/AppIcon.appiconset/AppIcon_1024_white_no_alpha.png" width="112" alt="Yuedu">
 </p>

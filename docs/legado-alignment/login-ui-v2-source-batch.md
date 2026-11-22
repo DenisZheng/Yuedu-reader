@@ -1,5 +1,7 @@
 # LoginUiV2：书源和 RSS 动态登录
 
+> 当前交付：2026-11-22 已合入并推送 `main`（业务合并 `81e89c91`）。下文保留独立开发与自动验收的历史范围；总体状态和限制见 [项目状态页](STATUS.md)。
+
 以 Android `330e606c4d57e08adc056ff8ab7a4132c784da9a` 的 `LoginUiV2`、`BaseSource`、`SourceLoginV2Delegate`、`JsSourceConfig` 为准。既有旧表单和网页登录路径不改；本地阶段起点是已经自动验收的副文、只读段评工作区，未提交。不登录真实账号、不授予权限或运行私人源脚本。
 
 ## 可观察行为及边界

@@ -1,5 +1,7 @@
 # 原生只读段评
 
+> 当前交付：2026-11-22 已合入并推送 `main`（业务合并 `81e89c91`）。下文保留独立开发与自动验收的历史范围；总体状态和限制见 [项目状态页](STATUS.md)。
+
 本批在副文批次之后独立验收，本地基线为 `main` 的 `7be2c8c1`。Android 合同固定在 `330e606c4d57e08adc056ff8ab7a4132c784da9a`，对照 `ReviewRule`、`ReviewRuleParser`、`JsSourceReview`、`ReadBookActivity` 和 `ReviewDetailDialog`。本批只读取，不新增发帖、点赞、删除或登录行为。
 
 ## iOS 行为

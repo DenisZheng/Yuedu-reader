@@ -1655,4 +1655,19 @@ bash .artifacts/batch-review/run-regressions.sh .artifacts/batch-review/final-re
 
 脚本调用 `scripts/xctest.sh`，选 16 套回归，包含书源导入、批量与单章、缓存持久化／迁移、下载、阅读器刷新、副文、段评和 LoginUiV2。实际输出 `Test run with 164 tests in 16 suites passed after 48.314 seconds`，随后 `** TEST SUCCEEDED **`。不同书的清理／写入用受控事件验证独立进度，不把夹具耗时外推为整机提速。
 
-本轮是模拟器自动回归，未重复 UI 走查，也未验证真实站点／账号、真机、iPad、最低 iOS 17 或 VoiceOver。原始源包 SHA-256 与基准一致。回滚只反向应用本轮改动，保留既有副文、段评、LoginUiV2 和用户数据。上述各节的未提交、未推送为验收时状态。验收后用户授权将副文、只读段评、LoginUiV2 与 Review 修复一并提交推送到 `origin/feature/legado-sub-content`；不合入 `main`，不发布或重新打包。
+本轮是模拟器自动回归，未重复 UI 走查，也未验证真实站点／账号、真机、iPad、最低 iOS 17 或 VoiceOver。原始源包 SHA-256 与基准一致。回滚只反向应用本轮改动，保留既有副文、段评、LoginUiV2 和用户数据。上述各节的未提交、未推送为验收时状态。验收后先按授权提交并推送 `origin/feature/legado-sub-content`，随后用户明确要求合入主线；实际合入和推送见下一节。没有发布或重新打包。
+
+## 副文、只读段评、LoginUiV2 与 Review 修复主线交付（2026-11-22）
+
+用户明确要求合入主线后，核对远端 `main` 仍为 `7be2c8c1e1929f0d900f85cb6ddcda5e130151e3`，本地已跟踪工作区无改动。以非快进合并保留独立功能历史：
+
+- 功能提交：`8bc647ca4a1982fcd0e99ec4c1ba1ce4c9441505`，64 个文件；包含副文、原生只读段评、书源／RSS LoginUiV2 和 Review 修复，不含私人源包或本地产物。
+- 主线合并：`81e89c919d6f7492ca322ba10a7aec68dfd6f7ad`（`Merge validated Legado source features and review fixes into main`）。第一父为 `7be2c8c1`，第二父为 `8bc647ca`。
+- 合并树：`49fabed73d481815f2140ead1dc325026d2b813b`，与功能提交完全相同，无冲突及业务修改。
+- `git push --porcelain --no-force --no-follow-tags origin refs/heads/main:refs/heads/main` 实际输出 `7be2c8c1..81e89c91`；随后 `git ls-remote --heads origin refs/heads/main` 返回完整合并 SHA，与本地一致。
+
+合入前后核对 9,024 个原未跟踪文件的模式／大小／修改时间和原始书源／RSS 两包 SHA-256，均未变；不清工作区、不删除模拟器和用户数据、不强推。已验收业务树没有变化，因此只复核本次 164 项／16 套回归的决定性日志、合并父提交与内容树，不重复编译或 UI 走查，也不宣称新增真机／最低系统／账号验收。
+
+用户随后要求把当前项目状态写入文档。统一入口为 [项目状态页](STATUS.md)，根 README、文档索引、执行计划和批次文档链接到该入口；旧差距审计明确标为历史快照。S8／发布门槛保持未全部接受，Files 文件夹导航限制、段评写动作及其他后置项继续单列。上述合并 SHA 是最新业务合入点，后续纯文档提交不改变业务树。
+
+本次文档校验实际输出 `Documentation OK: 13 files, UTF-8/LF, paired code fences, 293 local links`，随后 `git diff --check: OK`；同时再次确认业务／测试／配置树等于已验收功能提交。仅更新状态及链接，不新增代码、依赖或发布操作。

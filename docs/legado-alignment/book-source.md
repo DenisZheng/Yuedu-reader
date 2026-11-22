@@ -1,6 +1,6 @@
 # 书源与共享规则运行时
 
-返回 [总入口](README.md) · [RSS 专属流程](rss-source.md)。`A/` 为 Android 应用代码根，基准版本见总入口。
+返回 [总入口](README.md) · [项目当前状态](STATUS.md) · [RSS 专属流程](rss-source.md)。`A/` 为 Android 应用代码根，基准版本见总入口。
 
 Fork增量：订阅独立Tab，资源库不再有RSS副入口；树型／原生图标方格、源级批量维护和不依赖搜索接口的活性检查见[订阅首页与源维护](rss-source-home-management.md)。活性检查复用下述共享请求／脚本合同，不能把缓存或网页可达当成媒体播放通过。
 

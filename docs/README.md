@@ -9,7 +9,8 @@ tags: [yuedu, index]
 
 ## 從這裡開始
 
-- **現在做什麼：** [BrowserLayout 目前狀態與下一步](browser-layout/STATUS.md)
+- **项目当前状态：** [LegadoPro 主线、已完成能力与验收边界](legado-alignment/STATUS.md)
+- **阅读引擎专项：** [BrowserLayout 目前狀態與下一步](browser-layout/STATUS.md)
 - **之前做過什麼：** [BrowserLayout Phase 歷史台帳](browser-layout/PHASES.md)
 - **如何繼續實作：** [Phase 5A 設計](superpowers/specs/2026-09-04-lexbor-css-frontend-production-migration-design.md) · [執行計畫](superpowers/plans/2026-09-04-lexbor-css-frontend-production-migration.md)
 
@@ -28,7 +29,7 @@ tags: [yuedu, index]
 
 ## 最小維護方式
 
-1. 開工前讀 `STATUS.md`；只在這裡維護目前狀態與下一件事。
+1. 开工前读对应主题的状态页：Fork 整体读 `legado-alignment/STATUS.md`，BrowserLayout 读 `browser-layout/STATUS.md`；各主题只在自己的状态页维护当前结论和下一步。
 2. 設計與步驟仍放原有 `superpowers/specs/`、`superpowers/plans/`；測試數據與結案報告仍放主題目錄，管理頁只連過去。
 3. 收工時更新狀態、證據連結、實作／驗證 commit 與下一步。只有找到實作時寫「有實作，待驗收」；測試通過須附實際範圍與結果。
 4. `PHASES.md` 保留匯入時的歷史；新結論寫入 `STATUS.md` 並連到新的報告。規劃文字不等於已授權啟動，也不等於完成證據。
