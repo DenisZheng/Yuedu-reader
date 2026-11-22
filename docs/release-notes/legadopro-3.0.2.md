@@ -25,7 +25,7 @@ shasum -a 256 -c LegadoPro-unsigned.ipa.sha256
 
 - 书架搜索修复在 iOS 27.2 模拟器采用可控双源实际点击回归：搜索进行中、暂停后打开详情并返回，共 2 项、0 失败；详情路由回归 3 项通过。
 - 旧 SDK / CI 工具链的适用能力以本版实际 Actions 构建记录为准；较旧 SDK 不因此获得只在新 SDK 提供的 iOS 27 增强路径。
-- 云归档、下载后 checksum、ZIP、主 App / 扩展版本与身份、Mach-O 平台及签名状态，将在发布说明中附上本版实际构建记录；这些不替代真机运行或全部功能验收。
+- 本版云归档与产物检查已完成，实际记录见下方；这些不替代真机运行或全部功能验收。
 
 ## 已知边界与安全提示
 
@@ -39,3 +39,20 @@ shasum -a 256 -c LegadoPro-unsigned.ipa.sha256
 对应源码：[legadopro-v3.0.2](https://github.com/DenisZheng/Yuedu-reader/tree/legadopro-v3.0.2)，也可使用本 Release 的 Source code 附件。源码遵循仓库 MPL-2.0 和各文件、第三方组件的独立许可；保留原作者与许可声明。未签名或重新签名不豁免这些义务，也不授予上游品牌权利。
 
 原始用户书源包、私有请求配置、凭据和本地诊断原始文件未作为本次提交或 Release 附件发布。旧 IPA 附件已按维护者要求清理，历史标签、Release 记录、日志及归档不删除。
+
+## 本版实际构建与产物
+
+- 构建 commit：`f9de39b85c9f043d663577544f87911939481b04`，包含书架搜索修复 `b28a6955`。
+- 发布 Tag：`legadopro-v3.0.2`。
+- GitHub Actions：[run 45018465876](https://github.com/DenisZheng/Yuedu-reader/actions/runs/45018465876)，最终 `completed / success`；Archive、Package、Upload 均成功，没有重新触发构建。
+- App、Widget、ShareExtension 均为 **3.0.2（7）**；主 App 为 `com.deniszheng.legadopro`，两扩展使用 `.widget` / `.shareextension` 后缀。
+- 三个可执行文件均为 **arm64 / iPhoneOS**，Mach-O 最低系统 **17.0**，SDK **26.5**；不是模拟器产物。
+- 下载后实际检查 SHA-256、ZIP CRC、版本、身份、可执行权限通过；ZIP 中没有签名 Bundle 标记或 embedded provisioning profile。
+- IPA 大小：**38460602 字节**。
+- SHA-256：
+
+```text
+80e9d94621a954c1d80a211c6a9bdd668dd826041912baccd5b876f945e72a3a
+```
+
+这些是构建和产物检查结果，不是手机安装、正式签名或完整功能验收结论。

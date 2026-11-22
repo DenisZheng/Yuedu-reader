@@ -2,9 +2,13 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
-## LegadoPro 3.0.2（7）升版和正式 GitHub Release 准备（2026-11-22）
+## LegadoPro 3.0.2（7）正式 GitHub Release 交付（2026-11-22）
 
-用户明确授权先提交/Push搜索修复，再清理全部旧IPA、升为 `3.0.2（7）`，通过现有Actions重新构建并发布正式GitHub Release/Latest。修复提交 `b28a6955` 已Push并核对远端；实际清理本地9份IPA及9份checksum、4个Actions IPA artifact、旧RC1的两个附件，保留archive、日志、Tag和Release记录。共享版本配置已备份并递增，App及两扩展没有版本覆盖。工作流/合成打包24项、Fork配置9项、相关许可文本3项通过；此时尚未完成新云归档或发布，不标S8通过。详细命令、边界与后续实际run/产物/发布状态见[3.0.2发布记录](release-3.0.2.md)。
+用户明确授权先提交/Push搜索修复，再清理全部旧IPA、升为 `3.0.2（7）`，通过现有Actions重新构建并发布正式GitHub Release/Latest。修复提交 `b28a6955` 已Push并核对远端；实际清理本地9份IPA及9份checksum、4个Actions IPA artifact、旧RC1的两个附件，保留archive、日志、Tag和Release记录。共享版本配置已备份并递增，App及两扩展没有版本覆盖。工作流/合成打包24项、Fork配置9项、相关许可文本3项通过。
+
+固定版本提交 `f9de39b8`、Tag `legadopro-v3.0.2` 的 [run 45018465876](https://github.com/DenisZheng/Yuedu-reader/actions/runs/45018465876) 已完成 `success`，没有重触发。下载检查确认主App与两扩展均 `3.0.2（7）`，arm64/iPhoneOS、最低声明17.0、SDK26.5、ZIP完整、checksum匹配；无签名Bundle标记或provisioning profile。已发布[正式Release/Latest](https://github.com/DenisZheng/Yuedu-reader/releases/tag/legadopro-v3.0.2)，非草稿/非预发布，两附件上传完成；发布后重新下载核对，`LegadoPro-unsigned.ipa: OK`。按用户后续要求复制到系统Downloads，版本文件名为 `LegadoPro-3.0.2-build7-unsigned.ipa`，另附同名checksum，SHA-256一致且未覆盖已有文件。
+
+这些是构建、产物和公开下载检查，不是手机签名安装或S8完整验收。详细命令、hash、边界及发布状态见[3.0.2发布记录](release-3.0.2.md)。
 
 ## 书架搜索结果点击丢失状态（2026-11-22）
 

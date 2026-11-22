@@ -19,7 +19,7 @@
 
 只在共享的 `xcconfig/Yuedu-reader_version.xcconfig` 修改 `MARKETING_VERSION = 3.0.2`、`CURRENT_PROJECT_VERSION = 7`。修改前已备份为 `.artifacts/release-3.0.2-fNkR5o/version-before.xcconfig`。实际解析工程证明 App、Widget、ShareExtension 均继承该配置，没有目标级版本覆盖。签名、身份、权限、依赖与构建工作流不变。
 
-发布 Tag 预定为 `legadopro-v3.0.2`，构建前核对不存在同名远端 Tag；以版本提交创建固定 Tag 后手动触发一次，不因慢归档重复触发。使用已有 `build-ios.yml`，`Reader-Fork-Dev` scheme、Release、iPhoneOS、关闭签名；不改工作流权限。
+版本提交 `f9de39b85c9f043d663577544f87911939481b04` 已 Push；固定发布 Tag `legadopro-v3.0.2` 指向同一 commit，包含修复 `b28a6955`。构建前核对同名 Tag / run 不存在，随后只手动触发一次；用户要求不监看时已停止本地轮询，没有取消或重触发 CI。使用已有 `build-ios.yml`，`Reader-Fork-Dev` scheme、Release、iPhoneOS、关闭签名，不改工作流权限。
 
 [发布说明](../release-notes/legadopro-3.0.2.md)明确未签名、重签限制、TLS 风险、真机和旧系统未验收及对应 Fork 源码地址。修正[打包指南](../manual-ipa-build.md)的 Release / Debug 身份说明；[许可说明](../../LICENSING.md)区分 Fork 与上游官方可执行版本的对应源码，不改许可证或历史许可边界。本次新增输入为自建 fixture，未复制 Android 源码或素材；现有独立第三方声明仍适用，以下许可文本检查不冒充完整法务审查。
 
@@ -39,7 +39,37 @@ git diff --check
 
 ## 云归档与发布状态
 
-当前为准备记录：尚未把新产物或 GitHub Release 写成成功。实际版本提交 SHA、手动 run、工具链、归档结论、IPA 检查、发布 URL 与附件验证在对应操作完成后补入本节。
+[run 45018465876](https://github.com/DenisZheng/Yuedu-reader/actions/runs/45018465876) 已完成；`gh run view` 返回 `completed / success`，Tag、head SHA 与上述固定版本一致，Archive、Package、Upload 均成功。实际归档约 29 分钟；三个 Mach-O 的 SDK 记录为 26.5，本节不借用旧 run 的 Xcode / Swift 版本充作本次证据。
+
+下载 artifact `legadopro-unsigned-ipa-45018465876-1` 后，实际 Python 检查 SHA-256、ZIP CRC、App / 两扩展版本与身份、可执行权限、Mach-O 平台及最低系统：
+
+- 主 App `com.deniszheng.legadopro`，Widget / ShareExtension 为对应后缀；全部 `3.0.2（7）`。
+- 三个可执行文件均 `arm64 / iPhoneOS / minOS 17.0`，不是模拟器产物。
+- ZIP 中没有 `_CodeSignature` 或 `embedded.mobileprovision`；本包仍需用户自行签名，不是已签名安装包。
+- IPA 38,460,602 字节，SHA-256：`80e9d94621a954c1d80a211c6a9bdd668dd826041912baccd5b876f945e72a3a`。
+- 输出：`Release IPA verification OK: SHA-256, ZIP, App/extensions 3.0.2 (7), arm64 iPhoneOS, minOS17, unsigned bundle markers`。
+
+已按用户选择正式发布 [LegadoPro 3.0.2（7）](https://github.com/DenisZheng/Yuedu-reader/releases/tag/legadopro-v3.0.2)，发布时间 `2026-11-22T12:26:37Z`。先创建草稿并上传 IPA / checksum，核对两个附件的 GitHub SHA-256 与本地一致，再公开并设 Latest。实际查询确认 `isDraft=false`、`isPrerelease=false`、`isLatest=true`，两个附件均 `uploaded`，Tag 没有移动。
+
+```bash
+gh run view 45018465876 --repo DenisZheng/Yuedu-reader \
+  --json status,conclusion,headSha,headBranch,url,jobs
+gh run download 45018465876 --repo DenisZheng/Yuedu-reader \
+  --pattern 'legadopro-unsigned-ipa-45018465876-*' --dir "$download_dir"
+python3 -I .artifacts/release-3.0.2-fNkR5o/verify_ipa.py "$ipa"
+gh release edit legadopro-v3.0.2 --repo DenisZheng/Yuedu-reader \
+  --draft=false --prerelease=false --latest --verify-tag
+gh release list --repo DenisZheng/Yuedu-reader \
+  --json tagName,isLatest,isDraft,isPrerelease
+gh release download legadopro-v3.0.2 --repo DenisZheng/Yuedu-reader \
+  --pattern 'LegadoPro-unsigned.ipa*' --dir "$public_download_dir"
+# 在下载目录核对实际公开附件：
+shasum -a 256 -c LegadoPro-unsigned.ipa.sha256
+```
+
+`download_dir` / `ipa` / `public_download_dir` 对应本次新的产物目录，实际路径与详细结果保存于 `.artifacts/release-3.0.2-fNkR5o/` 的 `download-dir.txt`、`verification.json`、`public-download-verification.json`。上述为实际执行命令的关键参数摘要，不重复构建。
+
+公开发布后通过 `gh release download` 重新下载，两附件与已校验的 CI 产物字节一致；最终 `shasum` 输出 `LegadoPro-unsigned.ipa: OK`。直接下载：[IPA](https://github.com/DenisZheng/Yuedu-reader/releases/download/legadopro-v3.0.2/LegadoPro-unsigned.ipa)、[checksum](https://github.com/DenisZheng/Yuedu-reader/releases/download/legadopro-v3.0.2/LegadoPro-unsigned.ipa.sha256)。对应源码由固定 Tag / Source code 附件提供；私有源包和原始诊断未上传。后续发布记录提交不改变该产物或固定 Tag。
 
 ## 仍未验收与回滚
 
