@@ -36,7 +36,7 @@ IPA保留14天；失败时仅上传本次依赖解析/归档日志和xcresult，
 - 这是**未签名IPA**，不是可直接安装的App Store/Ad Hoc包，安装前需要自行签名。
 - 不需要向本工作流提供Apple证书、provisioning profile或原版Google配置。
 - 本版按[ADR-0006](adr/0006-pause-icloud-for-current-release.md)暂停iCloud入口、自动同步与CloudKit权限；本地能力和WebDAV保留，不删除历史数据。App Group及分享扩展仍取决于自签授权。
-- App显示名为`LegadoPro`，技术身份仍是`dev.denis.readerfork.dev`与既有`Reader-Fork-Dev`scheme，以免改变数据空间。公开分发仍须遵守许可；当前新包需要自签后手机复验，不能只凭archive判为启动通过。
+- App 显示名为 `LegadoPro`。Release 主 Bundle ID 为 `com.deniszheng.legadopro`，Debug 为 `dev.denis.readerfork.dev`；Widget 和 ShareExtension 使用对应的主身份加后缀。既有 `Reader-Fork-Dev` scheme、App Group 和 URL scheme 不变，重签时不要把 Release 身份误认为 Debug 身份。公开分发仍须遵守许可，archive 成功不能代替真机启动验收。
 
 ## 本地验证与打包
 

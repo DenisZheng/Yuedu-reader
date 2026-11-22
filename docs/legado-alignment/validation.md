@@ -2,6 +2,10 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## LegadoPro 3.0.2（7）升版和正式 GitHub Release 准备（2026-11-22）
+
+用户明确授权先提交/Push搜索修复，再清理全部旧IPA、升为 `3.0.2（7）`，通过现有Actions重新构建并发布正式GitHub Release/Latest。修复提交 `b28a6955` 已Push并核对远端；实际清理本地9份IPA及9份checksum、4个Actions IPA artifact、旧RC1的两个附件，保留archive、日志、Tag和Release记录。共享版本配置已备份并递增，App及两扩展没有版本覆盖。工作流/合成打包24项、Fork配置9项、相关许可文本3项通过；此时尚未完成新云归档或发布，不标S8通过。详细命令、边界与后续实际run/产物/发布状态见[3.0.2发布记录](release-3.0.2.md)。
+
 ## 书架搜索结果点击丢失状态（2026-11-22）
 
 用户确认 iOS 27：从探索放大镜进入能打开搜索结果，从书架放大镜进入则不能；搜索仍在进行或手动暂停后都存在。以 `94b6b476` 为起点，使用两个完全自建的本地书源复现：快源返回 `PartialFixture`，慢源的 HTTP 请求等待测试主动释放。无外站请求、个人账号或原始源包执行；不靠 sleep 等待页面稳定。

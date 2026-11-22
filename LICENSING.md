@@ -16,7 +16,9 @@ The complete historical MIT notice is preserved at [`LICENSES/MIT.txt`](LICENSES
 
 ## Executable releases
 
-MPL-covered source corresponding to official executable releases is available from the project's [GitHub releases](https://github.com/CHANG-JUI-LIN/Yuedu-reader/releases). The app's About screen links recipients to that location and identifies the MPL-2.0 license.
+本仓库的 `LegadoPro` 是独立、非官方 Fork。Fork 可执行版本对应的 MPL 源码通过本仓库的 [GitHub Releases](https://github.com/DenisZheng/Yuedu-reader/releases) 及其固定标签提供；发布说明标明实际构建 commit，可使用该标签的 Source code 附件取得对应源码。Fork 不代表上游官方版本或获得上游品牌授权。
+
+上游官方可执行版本的对应源码仍由[上游 GitHub Releases](https://github.com/CHANG-JUI-LIN/Yuedu-reader/releases)提供。App 的「上游专案与授权」入口用于上游信息，不代替 Fork 发布说明中的对应源码地址。
 
 ## Third-party material
 
