@@ -4,6 +4,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // MARK: - Bookshelf Home
+/// 搜索页和结果都使用值路由，保留同一导航栈中的搜索状态。
+private enum BookshelfNavigationRoute: Hashable {
+    case search
+}
+
 /// A place on the shelf that lists books: 全部 or a group's page, which the shelf swipes
 /// between, or a group opened from its folder on 全部.
 private enum ShelfPage: Hashable {
@@ -614,6 +619,12 @@ struct HomeView: View {
             .animation(DSAnimation.standard, value: store.books.isEmpty)
             .rootTabTitle(localized("書架"), onScroll: .fadesTitle)
             .toolbar { shelfToolbar(addsBooks: true) }
+            .navigationDestination(for: BookshelfNavigationRoute.self) { route in
+                switch route {
+                case .search:
+                    SearchView(usesUnifiedSearch: true).environmentObject(store)
+                }
+            }
             // In edit mode, hide the app tab bar so the contextual .bottomBar (delete / group / share)
             // takes its place — the system selection pattern used by Photos / Files.
             .hidesRootTabBar(editMode == .active)
@@ -967,7 +978,7 @@ struct HomeView: View {
             if addsBooks {
                 // 搜索不再是Tab：書架根頁的明確入口，推入同一個SearchView。
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    NavigationLink { SearchView(usesUnifiedSearch: true) } label: {
+                    NavigationLink(value: BookshelfNavigationRoute.search) {
                         Image(systemName: "magnifyingglass").accessibilityHidden(true)
                     }
                     .accessibilityLabel(localized("搜索"))
@@ -1894,9 +1905,7 @@ struct EmptyLibraryView: View {
                     .padding(.horizontal, DSSpacing.xxl).padding(.vertical, 14)
                     .background(DSColor.accent).clipShape(Capsule())
             }
-            NavigationLink {
-                SearchView(usesUnifiedSearch: true)
-            } label: {
+            NavigationLink(value: BookshelfNavigationRoute.search) {
                 Label(localized("搜索書籍"), systemImage: "magnifyingglass")
                     .font(DSFont.subheadline.weight(.medium))
                     .foregroundStyle(DSColor.textPrimary)
@@ -2763,6 +2772,10 @@ private func previewOnlineBook(hasUpdate: Bool) -> ReadingBook {
     ])
     book.hasNewChapterUpdate = hasUpdate
     return book
+}
+
+#Preview("书架搜索入口") {
+    HomeView().environmentObject(BookStore())
 }
 
 #Preview("BookRow – 有更新 / 無更新") {

@@ -2,6 +2,65 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 书架搜索结果点击丢失状态（2026-11-22）
+
+用户确认 iOS 27：从探索放大镜进入能打开搜索结果，从书架放大镜进入则不能；搜索仍在进行或手动暂停后都存在。以 `94b6b476` 为起点，使用两个完全自建的本地书源复现：快源返回 `PartialFixture`，慢源的 HTTP 请求等待测试主动释放。无外站请求、个人账号或原始源包执行；不靠 sleep 等待页面稳定。
+
+根因是书架搜索入口与搜索结果的导航方式不一致：书架直接用目标 View 的 `NavigationLink` 推入 `SearchView`，结果却按值导航；点击结果时搜索内容被清空，详情未出现。探索的值路由对照正常。现在在书架现有 `NavigationStack` 根部注册 `BookshelfNavigationRoute.search`，工具栏与空书架的搜索链接均按值进入同一栈。没有另外绑定一条路径，没有更改阅读器的 UIKit 推入、搜索请求、暂停/恢复、结果快照或 iOS 17 兼容列表。补了书架入口 Preview，其代码随最终测试构建编译；未单独验收 Preview 的显示。
+
+相关实现和复现输入：
+
+- [书架导航](../../Modules/Features/Bookshelf/HomeView.swift)
+- [真实点击 UI 回归](../../Tests/iOS-UI/SearchStreamingSelectionUITests.swift)
+- [可控本地 HTTP fixture](../../scripts/search_selection_fixture.py)
+- [既有搜索导航复盘和约束](../../Technotes/iOS17SearchWatchdogPostmortem.md)
+
+实际环境：macOS、通过 `scripts/sim.sh` 解析的当前 Xcode；iOS 27.2 iPhone 18 Pro Max 模拟器，scheme `Reader-Fork-Dev`。串行执行，日志与 xcresult 位于 `.artifacts/search-selection-szbaUZ/`：
+
+| 验证 | 实际结果 | 日志 |
+| --- | --- | --- |
+| 修复前探索入口对照 | 搜索进行中/暂停后打开并返回，2 项、0 失败，`** TEST SUCCEEDED **` | `repro-3.log` |
+| 修复前书架入口 | 同样两种状态均点后留在搜索页，`detail.info.source` 不出现，`** TEST FAILED **` | `bookshelf-repro.log` |
+| 修复后书架入口 | 2 项、0 失败，详情来源为快源，返回后保留结果及进行中/暂停状态，`** TEST SUCCEEDED **` | `bookshelf-fixed.log` |
+| 最终详情路由回归 | `SearchWorkRouteTests` 3 项、0 失败，`** TEST SUCCEEDED **` | `routes-final.log` |
+
+主要命令（UI 用例修复前后采用同一 fixture；探索对照是测试改为书架入口前执行的版本）：
+
+```bash
+python3 -I scripts/search_selection_fixture.py
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+bash scripts/xctest.sh -l .artifacts/search-selection-szbaUZ/bookshelf-fixed.log -- \
+  -only-testing:'yuedu appUITests/SearchStreamingSelectionUITests' \
+  -resultBundlePath .artifacts/search-selection-szbaUZ/bookshelf-fixed.xcresult
+bash scripts/xctest.sh -l .artifacts/search-selection-szbaUZ/routes-final.log -- \
+  -only-testing:'yuedu appTests/SearchWorkRouteTests' \
+  -resultBundlePath .artifacts/search-selection-szbaUZ/routes-final.xcresult
+ruby scripts/check_localizations.rb
+git diff --check
+```
+
+最早两轮断言误用繁体文案 key、导航条 identifier，不能作为产品失败证据；已改为实际繁体译文和详情页 `detail.info.source` 的可观察结果。最终本地化检查报告 5 个语言、4383 个主文案键，全部齐全；未新增用户文案。fixture 的 Python AST 解析成功。
+
+未验证：真机、iPad、iOS 17–26、空书架正文搜索链接的独立点击及真实大源包压力；不能把模拟器结果说成手机已安装修复版，也不宣称修复了所有搜索/性能问题。回滚只反向撤销本轮书架导航注册和两处值链接，不动用户数据、搜索存储或签名。以上为提交前验证记录。用户随后明确授权提交/Push修复，再清理所有旧IPA、递增至 `3.0.2（7）` 并正式发布 GitHub Release/Latest；构建和发布必须对应新的固定 commit，不能把旧 run `45005372411` 当作修复版。
+
+## 手动 Release 未签名 IPA 验证（2026-11-22）
+
+原工作流 [run 45005372411](https://github.com/DenisZheng/Yuedu-reader/actions/runs/45005372411) 已完成。实际查询命令 `gh run view 45005372411 --repo DenisZheng/Yuedu-reader --json status,conclusion,headSha,url,jobs` 返回 `status: completed`、`conclusion: success`；head SHA 为 `94b6b47676d739d1e90ef062d2d8dfdfbb49ba9d`，Archive、Package 和 Upload 步骤均成功。未重新触发构建、修改签名/版本或发布。
+
+```bash
+gh run download 45005372411 --repo DenisZheng/Yuedu-reader \
+  --pattern 'legadopro-unsigned-ipa-45005372411-*' \
+  --dir .artifacts/ci-release-45005372411-download-vjCwi5
+```
+
+下载退出 0；产物位于 `.artifacts/ci-release-45005372411-download-vjCwi5/legadopro-unsigned-ipa-45005372411-1/LegadoPro-unsigned.ipa`，同目录有 `.ipa.sha256`。实际 Python 检查：按块计算 SHA-256 并与文件比对，`ZipFile.testzip()` 无损坏，Payload 恰有一个主 App；Bundle ID 为 `com.deniszheng.legadopro`，显示名 `LegadoPro`，版本 `3.0.1 (6)`，最低系统 `17.0`；没有 `_CodeSignature` 或 `embedded.mobileprovision`。决定性输出：`IPA verification: SHA-256 MATCH, ZIP OK, Release Bundle ID OK, unsigned packaging OK`。
+
+大小为 38,458,558 字节，SHA-256 为 `c5e804083169a801b3459809b6b3378c506a370c78b750bfd7fa19deda98e1e2`。验证记录保存在下载目录的 `verification.json`。这些检查证明产物完整及元数据符合原打包合同，不证明真机运行、完整功能或正式发布合格；未签名 IPA 仍需重新签名才能安装，不是 App Store/Ad Hoc 成品。
+
+**该 IPA 是修复提交之前的产物，不包含本次书架搜索导航修复。** 未上传 TestFlight、发布 Release 或改用户数据，不改变 S8 发布门槛。
+
 ## 上游精选修复分步执行（2026-11-22）
 
 用户批准按当前 Fork 的上游评估逐步修复，固定起点 `a732eae9`、上游 `78199517`。登录源快照／菜单诊断、书架无障碍、探索按页读取变量、自动阅读落地／揭页四步已完成本地自动验收：iPhone 各步最终分别 18／6／14／22 项，旧 iOS 26.2 无障碍 6 项，iPad 综合 60 项，均 0 失败／跳过、无 runtimeWarnings；Python 源码 gate 5 项 OK。菜单异常、重复转子动作、逐书主线程读取和提前重置均保留 RED→GREEN 证据；347 KB 合成变量读取由 20 次降至 1 次，变量解析 CPU 单次观测约 50.08→2.79 ms，不能外推全 App 性能。旧完整登录 suite 的开发模拟器共享 Cookie 风险、未挂载测试警告和离屏图层误测保留，不作为隔离或功能成功证据。命令、来源、环境、未验证项和独立回滚见[本批记录](upstream-selected-batch-2026-11-22.md)。用户随后明确授权提交本批并正常推送到 `origin/main`，不打包或发布；提交前远端与本地均为 `a732eae9`，仅准备上述 18 个相关文件，复核既有证据而不重复测试。实际提交／推送结果以 Git 历史和远端哈希核验为准，不改变 S8 发布门槛。
