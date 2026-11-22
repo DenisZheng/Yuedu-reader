@@ -19,6 +19,9 @@ struct ChapterParsePayload {
     var sourceMatched: Bool
     var isPay: Bool
     var runtimeVariables: [String: String]? = nil
+    var subContent: ChapterSubContent? = nil
+    /// 仅本次解析的待取媒体副文地址，完成后清空，不写artifact或播放器状态。
+    var subContentRequest: String? = nil
 }
 
 struct ChapterPaginatedResult {
@@ -576,6 +579,8 @@ struct ChapterFetcher {
         if let nextRuntime = next.runtimeVariables, !nextRuntime.isEmpty {
             merged.runtimeVariables = nextRuntime
         }
+        // Android逐页副文覆盖当前章歌词／弹幕，不把媒体副文拼入可播放地址。
+        if let supplemental = next.subContent { merged.subContent = supplemental }
         if !next.content.isEmpty {
             merged.content = merged.content.isEmpty ? next.content : merged.content + "\n" + next.content
         }
@@ -742,6 +747,7 @@ struct ChapterFetcher {
             contentChecksum: checksum,
             rawHTMLFilename: "\(chapterIndex).raw.html",
             normalizedHTMLFilename: "\(chapterIndex).normalized.xhtml",
+            subContent: parsed.subContent,
             savedAt: savedAt,
             state: .cached,
             failureReason: nil

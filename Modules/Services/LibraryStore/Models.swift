@@ -866,6 +866,7 @@ struct ChapterPackageArtifact: Codable, Equatable {
     let rawHTMLFilename: String?
     let normalizedHTMLFilename: String?
     var renderArtifactVersion: Int? = nil
+    var subContent: ChapterSubContent? = nil
     let savedAt: Date
 }
 
@@ -885,6 +886,7 @@ struct ChapterPackage: Codable, Equatable {
     let rawHTMLFilename: String?
     let normalizedHTMLFilename: String?
     var renderArtifactVersion: Int? = nil
+    var subContent: ChapterSubContent? = nil
     let savedAt: Date
     let state: ChapterPackageState
     let failureReason: String?

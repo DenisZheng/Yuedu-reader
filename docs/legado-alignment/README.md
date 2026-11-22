@@ -27,6 +27,9 @@
 | 独立分支的首批正则、配置保真、文件源与规则包订阅更新 | [首批功能实施与验收](first-functional-parity-batch.md) |
 | mainJs主脚本、固定输入回归、人工确认及已合入状态 | [mainJs主脚本验收](main-js-source-batch.md)（已验收并合入远端main） |
 | 批量正文、章节回存与单章回退 | [批量正文验收](content-batch-source-batch.md)（自动／实站适配／人工通过，已合入main并Push） |
+| 副文获取、歌词／弹幕回存及原生时间列表 | [副文独立批次](sub-content-source-batch.md)（助手自动验收通过） |
+| 声明式与主脚本段评、详情及回复分页 | [原生只读段评](readonly-review-source-batch.md)（助手自动验收通过） |
+| 书源和 RSS 的动态登录表单及命令 | [LoginUiV2](login-ui-v2-source-batch.md)（助手自动验收通过） |
 | 当前基线的网页越界弹层、主动缩放、404重试与双设备复验 | [S6显示与复验](s6-web-display.md) |
 | 当前基线S7的WebDAV中断恢复、后台重载与聚焦验收 | [S7中断恢复](s7-restore-interruption.md) |
 | 当前基线S8的离线规模测量、真实源预审和代表请求 | [S8验收](s8-acceptance.md) |

@@ -519,6 +519,8 @@ extension ReaderView {
         // stale `.ready` there is read as "ready but nothing on disk" — the 資料不一致 overlay
         // users hit on every source switch. They belong to the list we just left; drop them.
         readerViewModel.resetAllChapterStates()
+        pendingChapterContentReplacements.removeAll()
+        manuallyRefreshingChapterIndex = nil
         chapterConsistencyRecoveryAttempts.removeAll()
 
         if let position {

@@ -36,6 +36,16 @@ struct MainJsSourceTests {
         #expect(json["mainJs"] as? String == Self.script)
     }
 
+    @Test("主脚本合法的大批量整数先限制到上限再转换")
+    func mainJsBatchLimitDoesNotOverflow() async throws {
+        for number in ["10000000000000000000", "1e20"] {
+            let script = Self.script.replacingOccurrences(of: "const config = {", with: "const config = {maxBatchSize:\(number),")
+                + "\nfunction getContentBatch(chapters,book){}"
+            let source = try await Task.detached { try MainJsSource.extract(script) }.value
+            #expect(source.ruleContent.maxBatchSize == 50 && source.contentBatchSize == 50)
+        }
+    }
+
     @Test("无声明式searchUrl时主脚本生产搜索仍返回对象列表")
     func searchesWithoutDeclarativeURL() async throws {
         let source = try Self.source()

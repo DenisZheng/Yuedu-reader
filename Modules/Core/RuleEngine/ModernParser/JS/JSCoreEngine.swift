@@ -534,12 +534,13 @@ class JSCoreEngine {
             return work() // already on the JS queue — run inline
         }
         let (queue, queueGeneration) = withQueueLock { (jsQueue, generation) }
+        let restrictedDiagnostics = sourcePropertiesJSON != nil || SourceDiagnosticContext.isRestricted
         return SourcePerfTrace.mainThreadWait("wait.jsQueue") {
             queue.sync {
                 // Queued behind a script a timeout abandoned: the engine moved to a new queue
                 // meanwhile, and run here this would touch the new context alongside it.
                 guard isCurrentGeneration(queueGeneration) else { return onJSQueue(work) }
-                return SourceDiagnosticContext.withThreadRedaction(sourcePropertiesJSON != nil, work)
+                return SourceDiagnosticContext.withThreadRedaction(restrictedDiagnostics, work)
             }
         }
     }
@@ -564,6 +565,8 @@ class JSCoreEngine {
         // The job's queue, generation and `java` bridge, read together: a timeout resets only
         // the generation it dispatched to, and only that bridge says the script awaits the user.
         let (queue, queueGeneration, javaBridge) = withQueueLock { (jsQueue, generation, currentBridges.java) }
+        // 源登录等任务在调用方声明脱敏；GCD 队列不会自动继承 TaskLocal。
+        let restrictedDiagnostics = sourcePropertiesJSON != nil || SourceDiagnosticContext.isRestricted
         let work = JSConfined(work)
         // Only guards against the engine being torn down; the engine itself is unused
         // because `work` is a self-contained closure.
@@ -578,7 +581,7 @@ class JSCoreEngine {
                 group.leave()
                 return
             }
-            let value = JSConfined(SourceDiagnosticContext.withThreadRedaction(liveEngine.sourcePropertiesJSON != nil, work.value))
+            let value = JSConfined(SourceDiagnosticContext.withThreadRedaction(restrictedDiagnostics, work.value))
             result.withLock { $0 = value }
             group.leave()
         }

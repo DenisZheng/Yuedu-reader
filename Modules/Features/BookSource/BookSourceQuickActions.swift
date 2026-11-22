@@ -17,7 +17,7 @@ struct BookSourceActionMenuItems: View {
     let onDelete: () -> Void
 
     private var hasLogin: Bool {
-        !source.loginUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        source.hasLoginEntry
     }
 
     var body: some View {
@@ -123,8 +123,12 @@ struct BookSourceLoginSheet: View {
     let onDone: () -> Void
 
     var body: some View {
-        if source.loginUi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let webLogin = SourceWebLogin(bookSource: source) {
+        if LoginUiV2.isCandidate(source.loginUi) {
+            NavigationStack {
+                SourceLoginUiV2View(title: source.bookSourceName, service: .init(target: .book(source)), onDone: onDone)
+            }
+        } else if source.loginUi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let webLogin = SourceWebLogin(bookSource: source) {
             SourceLoginWebView(login: webLogin, onDismiss: onDone)
         } else {
             BookSourceFormLoginView(source: source, onDismiss: onDone)

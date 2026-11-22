@@ -98,6 +98,15 @@ extension SourceScriptHost where Resident == ModernParserBridge {
         try await resident.getChapterList(url: url, on: self)
     }
 
+    func parseChapterPage(html: String, baseURL: String, ruleURL: String? = nil,
+                          source: BookSource, runtimeVariables: [String: String]? = nil,
+                          chapterRef: OnlineChapterRef? = nil, nextChapterURL: String? = nil,
+                          isVideoEpisode: Bool = false) async throws -> ChapterParsePayload {
+        try await resident.parseChapterPage(html: html, baseURL: baseURL, ruleURL: ruleURL, source: source,
+            runtimeVariables: runtimeVariables, chapterRef: chapterRef, nextChapterURL: nextChapterURL,
+            isVideoEpisode: isVideoEpisode, on: self)
+    }
+
     func getContent(url: String) async throws -> String {
         try await resident.getContent(url: url, on: self)
     }

@@ -65,6 +65,7 @@ protocol BookSourceFetching: Sendable {
     ) -> Bool
 
     func clearChapterCache(bookId: UUID, chapterIndex: Int)
+    func clearChapterCacheAsync(bookId: UUID, chapterIndex: Int) async throws
     func clearAllChapterCache(bookId: UUID)
     func search(query: String, in source: BookSource) async throws -> [OnlineBook]
 
@@ -354,6 +355,10 @@ struct LiveBookSourceFetcher: BookSourceFetching {
 
     func clearChapterCache(bookId: UUID, chapterIndex: Int) {
         bookSourceFetcher.clearChapterCache(bookId: bookId, chapterIndex: chapterIndex)
+    }
+
+    func clearChapterCacheAsync(bookId: UUID, chapterIndex: Int) async throws {
+        try await bookSourceFetcher.clearChapterCacheAsync(bookId: bookId, chapterIndex: chapterIndex)
     }
 
     func clearAllChapterCache(bookId: UUID) {

@@ -327,6 +327,8 @@ import JavaScriptCore
     /// selector this way from its TOC rule.
     func putVariable(_ key: String, _ value: JSValue)
     func getVariable(_ key: String) -> String
+    func putLyric(_ value: JSValue)
+    func putDanmaku(_ value: JSValue)
 }
 
 /// Legado's mutable `chapter` object, lock-guarded and copied on a timeout reset for the same
@@ -338,6 +340,7 @@ import JavaScriptCore
         var order: Int
         var url: String
         var isVip: Bool
+        var subContent: ChapterSubContent? = nil
     }
 
     private let state: Locked<State>
@@ -361,11 +364,13 @@ import JavaScriptCore
     /// The `chapter` for the context a JS timeout reset creates (`LegadoBookBridge.replacementForNewContext()`).
     func replacementForNewContext() -> LegadoChapterBridge {
         let chapter = state.withLock { $0 }
-        return LegadoChapterBridge(
+        let copy = LegadoChapterBridge(
             index: chapter.index, title: chapter.title, order: chapter.order,
             url: chapter.url, isVip: chapter.isVip,
             chapterScope: chapterScope, storedVariables: storedVariables
         )
+        copy.state.withLock { $0.subContent = chapter.subContent }
+        return copy
     }
 
     @objc var index: Int {
@@ -401,7 +406,24 @@ import JavaScriptCore
         variables.putVariable(key: key, value: value.isNull || value.isUndefined ? nil : value.toString())
     }
 
+    var subContent: ChapterSubContent? { state.withLock { $0.subContent } }
+
+    func putLyric(_ value: JSValue) { putSubContent(value, kind: .lyric) }
+    func putDanmaku(_ value: JSValue) { putSubContent(value, kind: .danmaku) }
+    private func putSubContent(_ value: JSValue, kind: ChapterSubContent.Kind) {
+        if value.isNull || value.isUndefined {
+            state.withLock { $0.subContent = nil }; return
+        }
+        let text = value.toString() ?? ""
+        guard text.utf8.count <= ChapterSubContent.maximumBytes else {
+            JSContext.current()?.exception = JSValue(newErrorFromMessage: "Chapter supplemental content exceeds budget", in: JSContext.current())
+            return
+        }
+        state.withLock { $0.subContent = .init(kind: kind, text: text) }
+    }
+
     func getVariable(_ key: String) -> String {
+        if let content = subContent, content.kind.rawValue == key { return content.text }
         if let value = chapterScope?()?.getVariable(key: key), !value.isEmpty { return value }
         return storedVariables[key] ?? ""
     }

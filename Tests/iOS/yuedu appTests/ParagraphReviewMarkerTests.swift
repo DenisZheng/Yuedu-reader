@@ -576,8 +576,8 @@ struct ParagraphReviewMarkerTests {
         #expect(marker.title == "番茄段评")
     }
 
-    @Test("source fetch success reuses persisted render artifacts instead of rewriting from plain text")
-    func sourceFetchSuccessReusesPersistedRenderArtifacts() {
+    @Test("当前的 HTML 和正文缓存都可直接读取；只有丢失标记的旧渲染缓存需要重抓")
+    func cachedSourceRenderArtifactsRemainReadable() {
         let packageWithReviewHTML = ChapterPackage(
             bookId: UUID(),
             chapterIndex: 4,
@@ -588,18 +588,14 @@ struct ParagraphReviewMarkerTests {
             contentChecksum: "checksum",
             rawHTMLFilename: "4.raw.html",
             normalizedHTMLFilename: "4.normalized.xhtml",
+            renderArtifactVersion: OnlineChapterRenderArtifact.currentVersion,
             savedAt: Date(),
             state: .cached,
             failureReason: nil
         )
 
-        #expect(OnlineChapterCacheWritePolicy.shouldReusePersistedRenderArtifacts(
-            package: packageWithReviewHTML,
-            hasBookSource: true
-        ))
-        #expect(!OnlineChapterCacheWritePolicy.shouldReusePersistedRenderArtifacts(
-            package: packageWithReviewHTML,
-            hasBookSource: false
+        #expect(OnlineChapterCacheWritePolicy.isReusableCachedPackage(
+            packageWithReviewHTML, hasBookSource: true
         ))
 
         let plainPackage = ChapterPackage(
@@ -616,9 +612,8 @@ struct ParagraphReviewMarkerTests {
             state: .cached,
             failureReason: nil
         )
-        #expect(!OnlineChapterCacheWritePolicy.shouldReusePersistedRenderArtifacts(
-            package: plainPackage,
-            hasBookSource: true
+        #expect(OnlineChapterCacheWritePolicy.isReusableCachedPackage(
+            plainPackage, hasBookSource: true
         ))
 
         let strippedPackage = ChapterPackage(

@@ -15,21 +15,23 @@ extension BookSourceFetcher {
         let batch = SourceContentBatch(refs: limited, bookId: bookId, variables: variables,
             repository: repository, active: { session.isActive })
         defer { batch.close() }
+        let missing: [OnlineChapterRef]
         do {
-            try await withTaskCancellationHandler {
-                try await session.parse { bridge in
+            missing = try await withTaskCancellationHandler {
+                let missing = try await session.parse { bridge in
                     try SourcePerfTrace.span("batch.script", "chapters=\(limited.count) main=\(Thread.isMainThread)") {
                         try bridge.runContentBatch(batch)
                     }
                 }
                 try Task.checkCancellation()
                 try batch.checkCurrent()
+                return missing
             } onCancel: { batch.cancel() }
         } catch {
             try batch.checkCurrent()
             if let failure = batch.failure { throw failure }
             throw error
         }
-        return batch.missing + candidates.dropFirst(limited.count)
+        return missing + candidates.dropFirst(limited.count)
     }
 }

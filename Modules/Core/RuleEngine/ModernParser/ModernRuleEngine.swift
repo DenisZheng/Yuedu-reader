@@ -104,6 +104,9 @@ final class ModernRuleEngine {
     /// Set this in `BookSourceDebugEngine` to collect granular logs comparable with
     /// Legado's Android debug output.  Has zero overhead when nil.
     var debugObserver: ((RuleDebugEvent) -> Void)?
+    /// 普通规则保持原有容错结果；需要区分失败与合法空的用例可读取本次提取失败标记。
+    private(set) var extractionFailed = false
+    func resetExtractionFailure() { extractionFailed = false }
 
     // MARK: - JS Pattern (matching Legado AppPattern.JS_PATTERN)
 
@@ -960,9 +963,12 @@ final class ModernRuleEngine {
         if let json = extractor as? JsonExtractor {
             return json.extractValue(json: JsonExtractor.document(content), rule: rule)
         }
-        return try? extractor.extractValue(
-            from: Self.toString(content), rule: rule, baseURL: pageURL
-        )
+        do {
+            return try extractor.extractValue(from: Self.toString(content), rule: rule, baseURL: pageURL)
+        } catch {
+            extractionFailed = true
+            return nil
+        }
     }
 
     private func extractStringListViaExtractor(
@@ -1001,6 +1007,7 @@ final class ModernRuleEngine {
             }
             return try extractor.extractList(from: contentStr, rule: rule, baseURL: pageURL)
         } catch {
+            extractionFailed = true
             AppLogger.parse("getStringList extraction failed", context: [
                 "rule": String(rule.prefix(120)),
                 "error": error.localizedDescription
@@ -1076,6 +1083,7 @@ final class ModernRuleEngine {
         do {
             return try extractor.extractList(from: Self.toString(content), rule: rule, baseURL: pageURL)
         } catch {
+            extractionFailed = true
             AppLogger.parse("getElements extraction failed", context: [
                 "rule": String(rule.prefix(120)),
                 "error": error.localizedDescription
@@ -1116,6 +1124,7 @@ final class ModernRuleEngine {
             }
             return (selected ?? []).map { RuleHTMLElement($0) }
         } catch {
+            extractionFailed = true
             AppLogger.parse("getElements extraction failed", context: [
                 "rule": String(rule.prefix(120)),
                 "error": error.localizedDescription
@@ -1132,6 +1141,7 @@ final class ModernRuleEngine {
             return [contentStr]
         }
         guard let regex = RegexCache.shared.regex(for: pattern) else {
+            extractionFailed = true
             return [contentStr]
         }
 

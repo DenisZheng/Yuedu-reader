@@ -45,9 +45,12 @@ extension BookSourceFetcher {
         Self.chapterCacheRepository.clearAllChapterCache(bookId: bookId)
     }
 
-    /// 主线程入口等待实际清理完成，但文件IO和写入互斥不占用主线程。
-    nonisolated func clearAllChapterCacheAsync(bookId: UUID) async {
-        Self.chapterCacheRepository.clearAllChapterCache(bookId: bookId)
+    nonisolated func clearChapterCacheAsync(bookId: UUID, chapterIndex: Int) async throws {
+        try await Self.chapterCacheRepository.clearChapterCacheAsync(bookId: bookId, chapterIndex: chapterIndex)
+    }
+
+    nonisolated func clearAllChapterCacheAsync(bookId: UUID) async throws {
+        try await Self.chapterCacheRepository.clearAllChapterCacheAsync(bookId: bookId)
     }
 
     @discardableResult
@@ -77,12 +80,14 @@ extension BookSourceFetcher {
     nonisolated func saveChapterPackageToCache(
         _ package: ChapterPackage,
         rawHTML: String?,
-        normalizedHTML: String?
+        normalizedHTML: String?,
+        writeTicket: ChapterCacheRepository.WriteTicket? = nil
     ) throws -> String {
         try Self.chapterCacheRepository.saveChapterPackageToCache(
             package,
             rawHTML: rawHTML,
-            normalizedHTML: normalizedHTML
+            normalizedHTML: normalizedHTML,
+            writeTicket: writeTicket
         )
     }
 
@@ -109,8 +114,10 @@ extension BookSourceFetcher {
 }
 
 extension BookSourceFetching {
-    /// Swift 5非isolated async在后台执行；返回后调用方才重启章节请求。
-    func clearChapterCacheAsync(bookId: UUID, chapterIndex: Int) async {
+    /// 同步实现也不能借调用者的 MainActor 做 I/O；生产实现另在取得书锁后检查取消。
+    @concurrent
+    func clearChapterCacheAsync(bookId: UUID, chapterIndex: Int) async throws {
+        try Task.checkCancellation()
         clearChapterCache(bookId: bookId, chapterIndex: chapterIndex)
     }
 }

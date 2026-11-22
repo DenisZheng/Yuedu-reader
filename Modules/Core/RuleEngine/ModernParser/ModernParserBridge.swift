@@ -346,8 +346,10 @@ class ModernParserBridge {
     }
 
     /// 请求构建阶段已求值的头只合并一次；RSS认证仍按目标作用域过滤。
-    private func applySourceAuthentication(to request: inout URLRequest, sourceHeaders: [String: String]? = nil) {
-        let headers = sourceHeaders ?? resolvedSourceHeaders()
+    private func applySourceAuthentication(to request: inout URLRequest, sourceHeaders: [String: String]? = nil,
+                                           inheritedScope: SourceRequestHeaderScope? = nil) {
+        let headers = inheritedScope?.inheritedHeaders(sourceHeaders ?? resolvedSourceHeaders(), for: request.url)
+            ?? sourceHeaders ?? resolvedSourceHeaders()
         if let runtimeOverrides {
             let scoped = runtimeOverrides.headerScope?.inheritedHeaders(headers, for: request.url) ?? headers
             for (key, value) in scoped where request.value(forHTTPHeaderField: key) == nil {
@@ -360,7 +362,9 @@ class ModernParserBridge {
                 request.setValue(value, forHTTPHeaderField: key)
             }
         }
-        loginManager.applyLoginHeaders(to: &request, sourceUrl: runtimeOverrides?.authenticationKey ?? sourceRuleData.source.bookSourceUrl)
+        if inheritedScope?.contains(request.url) != false {
+            loginManager.applyLoginHeaders(to: &request, sourceUrl: sourceRuleData.source.bookSourceUrl)
+        }
         if request.value(forHTTPHeaderField: "Cookie") == nil,
            let url = request.url?.absoluteString {
             let jar = CookieStore.shared.get(url: url)
@@ -1192,6 +1196,44 @@ class ModernParserBridge {
         return try body()
     }
 
+    /// V2 仍在同一源宿主，只调用事先定义的函数；用户输入与状态通过绑定传入，而不是拼接成代码。
+    func evaluateLoginUiV2(state: LoginUiV2.State, action: String? = nil, form: [String: String] = [:]) throws -> String? {
+        try Task.checkCancellation()
+        let source = sourceRuleData.source
+        try LoginUiV2.verifyMarker(source.loginUi)
+        let definitions = source.isJsSource ? source.mainJs ?? "" : loginManager.extractLoginJs(source.loginUrl) ?? source.loginUrl
+        guard definitions.contains(where: { !$0.isWhitespace }) else { throw LoginUiV2.Failure.configuration }
+
+        let expression = action == nil ? "loginUi(JSON.parse(__ydLoginState))"
+            : "loginAction(__ydLoginAction, JSON.parse(__ydLoginState), JSON.parse(__ydLoginForm))"
+        let script = definitions + "\n;" + """
+        (function(){
+          if (typeof loginUi !== 'function' || typeof loginAction !== 'function') return '{"available":false}';
+          var value = \(expression);
+          return JSON.stringify({available:true, value:value==null?null:(typeof value==='string'?value:JSON.stringify(value))});
+        })()
+        """
+        let bindings: [String: Any] = [
+            "__ydLoginState": state.json, "__ydLoginAction": action ?? "", "__ydLoginForm": try LoginUiV2.encode(form),
+            "book": NSNull(), "chapter": NSNull(), "baseUrl": source.bookSourceUrl, "baseURL": source.bookSourceUrl
+        ]
+        struct Result: Decodable { let available: Bool; let value: String? }
+        return try withRuleContext(content: "", baseURL: source.bookSourceUrl, scope: nil, bindings: bindings, stage: "login.v2") { reader in
+            let engine = jsEngine
+            engine.ruleReaders = Self.ruleReaders(of: reader)
+            guard let raw = engine.evaluateIsolated(script, bindings: bindings), engine.lastError == nil else {
+                throw action == nil ? LoginUiV2.Failure.render : LoginUiV2.Failure.action
+            }
+            // JSON 对字符串的再次转义会放大 envelope；实际值仍由协议层检查。
+            guard raw.utf8.count <= 3 * LoginUiV2.byteLimit else { throw LoginUiV2.Failure.limit }
+            let result: Result
+            do { result = try JSONDecoder().decode(Result.self, from: Data(raw.utf8)) }
+            catch { throw action == nil ? LoginUiV2.Failure.render : LoginUiV2.Failure.action }
+            guard result.available else { throw LoginUiV2.Failure.configuration }
+            return result.value
+        }
+    }
+
     func userInterfaceJava(_ api: NSObject, methods: [String]) throws -> Any {
         guard let value = jsEngine.delegatingJava(to: api, methods: methods) else { throw ModernParserBridgeError.parseError("Source UI bridge unavailable") }
         return value
@@ -1874,6 +1916,30 @@ class ModernParserBridge {
             })()
             """
         )
+        // 副文读同一页及正文执行后的chapter变量；先追加文本再执行整章替换。
+        // 媒体副文只返回分型数据／待取地址，不污染可播放内容。
+        var supplemental = jsEngine.chapterBridge.subContent
+        var supplementalRequest: String?
+        let supplementalRule = source.ruleContent.subContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !supplementalRule.isEmpty, source.bookSourceType == 0 || ChapterSubContent.kind(sourceType: source.bookSourceType) != nil {
+            let generation = jsEngine.generation
+            let extra = engine.getString(ruleStr: supplementalRule)
+            guard jsEngine.generation == generation else { throw ModernParserBridgeError.timeout }
+            let kind = ChapterSubContent.kind(sourceType: source.bookSourceType)
+            if jsEngine.lastError != nil {
+                supplemental = kind.map { ChapterSubContent(kind: $0, text: "", failure: .rule) }
+                AppLogger.parse("Chapter subcontent rule failed", context: ["index": chapterRef?.index ?? -1], level: .error)
+            } else if extra.utf8.count > ChapterSubContent.maximumBytes {
+                supplemental = kind.map { ChapterSubContent(kind: $0, text: "", failure: .budget) }
+                AppLogger.parse("Chapter subcontent budget exceeded", context: ["bytes": extra.utf8.count], level: .error)
+            } else if source.bookSourceType == 0 {
+                if !extra.isEmpty { content += (content.isEmpty ? "" : "\n") + extra }
+            } else if let kind {
+                let text = extra.trimmingCharacters(in: .whitespacesAndNewlines)
+                supplemental = ChapterSubContent(kind: kind, text: text)
+                if text.lowercased().hasPrefix("http") { supplementalRequest = text }
+            }
+        }
         // 全文替换 — Legado `BookContent.analyzeContent`: line-trim, then run the source's own
         // `replaceRegex` **through the rule engine**, which is what expands `{{chapter.title}}`
         // templates and splits `##pattern##replacement`. Handing the raw string to a regex API
@@ -1975,8 +2041,74 @@ class ModernParserBridge {
             title: title,
             sourceMatched: true,
             isPay: false,
-            runtimeVariables: dumpRuntimeVariables()
+            runtimeVariables: dumpRuntimeVariables(),
+            subContent: supplemental,
+            subContentRequest: supplementalRequest
         )
+    }
+
+    /// 完整一页在source turn内提取并取回副文，同源其他章不能在请求间替换上下文。
+    func parseChapterPage(html: String, baseURL: String, ruleURL: String? = nil,
+                          source: BookSource, runtimeVariables: [String: String]? = nil,
+                          chapterRef: OnlineChapterRef? = nil, nextChapterURL: String? = nil,
+                          isVideoEpisode: Bool = false,
+                          on host: isolated SourceScriptHost<ModernParserBridge>) async throws -> ChapterParsePayload {
+        var parsed = try parseChapterResult(html: html, baseURL: baseURL, ruleURL: ruleURL, source: source,
+            runtimeVariables: runtimeVariables, chapterRef: chapterRef, nextChapterURL: nextChapterURL, isVideoEpisode: isVideoEpisode)
+        guard let target = parsed.subContentRequest, let supplemental = parsed.subContent else { return parsed }
+        parsed.subContentRequest = nil
+        do {
+            let scope = RuleData(); scope.variableMap = parsed.runtimeVariables ?? runtimeVariables ?? [:]
+            let sourceScope = SourceRequestHeaderScope(urls: [source.bookSourceUrl, baseURL].compactMap { URL(string: $0) })
+            let prepared = try prepareFetch(ruleUrl: target, key: nil, page: nil, runtimeVariables: scope.variableMap,
+                pageScope: scope, isPrimaryRequest: false, additionalHeaders: [:], inheritedHeaderScope: sourceScope)
+            let text: String
+            switch prepared {
+            case .dataURI(let body, _): text = body
+            case .network(let analyzed, let request):
+                // 副文是有限文本资源，不建立无限网页子资源通道。
+                guard !analyzed.useWebView else { throw SourceSubContentError.request }
+                let executor = SourceRequestExecutor(session: requestSession, rate: source.concurrentRate,
+                    rateKey: runtimeOverrides?.authenticationKey ?? source.bookSourceUrl,
+                    cookieJarEnabled: source.enabledCookieJar, runtimeState: runtimeOverrides?.state,
+                    cookieScope: SourceRequestHeaderScope(urls: [request.url].compactMap { $0 }),
+                    maximumBytes: ChapterSubContent.maximumBytes)
+                let response = try await executor.response(for: request)
+                guard let http = response.response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                    throw SourceSubContentError.request
+                }
+                // fetch的URL准备可在同一host上交错；响应脚本重新绑定本章快照，不能读到另一次请求的chapter。
+                loadRuntimeVariables(scope.variableMap)
+                setBookContext(runtimeVariables: scope.variableMap)
+                let previousChapter = jsEngine.chapterBridge
+                let previousScopes = (runtimeBookScope, runtimeChapterScope)
+                jsEngine.setChapterBridge(contentChapterBridge(chapterRef, runtimeVariables: scope.variableMap))
+                runtimeBookScope = nil; runtimeChapterScope = scope
+                defer {
+                    jsEngine.setChapterBridge(previousChapter)
+                    runtimeBookScope = previousScopes.0; runtimeChapterScope = previousScopes.1
+                }
+                text = try withPutScope(scope) {
+                    try finishFetch(data: response.data, response: response.response, request: request,
+                        options: .init(charset: analyzed.charset, bodyJs: analyzed.bodyJs), java: analyzed.scriptView).0
+                }
+            }
+            try Task.checkCancellation()
+            guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
+            guard text.utf8.count <= ChapterSubContent.maximumBytes else { throw SourceSubContentError.budget }
+            parsed.subContent = ChapterSubContent(kind: supplemental.kind, text: text.trimmingCharacters(in: .whitespacesAndNewlines))
+            parsed.runtimeVariables = scope.variableMap
+        } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
+            guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
+            let reason: ChapterSubContent.Failure
+            if (error as? URLError)?.code == .dataLengthExceedsMaximum || (error as? SourceSubContentError) == .budget {
+                reason = .budget
+            } else { reason = .request }
+            parsed.subContent = ChapterSubContent(kind: supplemental.kind, text: "", failure: reason)
+            AppLogger.parse("Chapter subcontent request failed", context: ["kind": supplemental.kind.rawValue, "reason": reason.rawValue], level: .error)
+        }
+        return parsed
     }
 
     /// `texts` through the source's own face-code replacer — the `[fn=19]` → 😂 step every 起点
@@ -2122,7 +2254,9 @@ class ModernParserBridge {
                 chapters.forEach(function(c,i){
                   Object.defineProperties(c,{
                     getVariable:{value:function(k){return __batchNativeChapters[i].getVariable(k);}},
-                    putVariable:{value:function(k,v){return __batchNativeChapters[i].putVariable(k,v);}}
+                    putVariable:{value:function(k,v){return __batchNativeChapters[i].putVariable(k,v);}},
+                    putLyric:{value:function(v){return __batchNativeChapters[i].putLyric(v);}},
+                    putDanmaku:{value:function(v){return __batchNativeChapters[i].putDanmaku(v);}}
                   });
                 });
                 """
@@ -2171,7 +2305,9 @@ class ModernParserBridge {
                 var chapter=JSON.parse(__mainJsChapterJSON);
                 Object.defineProperties(chapter,{
                   putVariable:{value:function(k,v){return __mainJsNativeChapter.putVariable(k,v);}},
-                  getVariable:{value:function(k){return __mainJsNativeChapter.getVariable(k);}}
+                  getVariable:{value:function(k){return __mainJsNativeChapter.getVariable(k);}},
+                  putLyric:{value:function(v){return __mainJsNativeChapter.putLyric(v);}},
+                  putDanmaku:{value:function(v){return __mainJsNativeChapter.putDanmaku(v);}}
                 });
                 """
             }
@@ -2270,8 +2406,150 @@ class ModernParserBridge {
         return chapters
     }
 
+    func prepareNativeReviewRequest(ruleURL: String, chapter: OnlineChapterRef, variables: [String: String],
+                                    locals: [String: String], page: Int) throws -> SourcePreparedWebRequest {
+        let scope = RuleData(); scope.variableMap = variables.merging(locals) { _, value in value }
+        return try withRuleContext(content: "", baseURL: chapter.url, scope: scope,
+                                   bindings: locals, stage: "review.request") { _ in
+            setBookContext(runtimeVariables: scope.variableMap)
+            runtimeBookScope = nil; runtimeChapterScope = scope
+            jsEngine.setChapterBridge(contentChapterBridge(chapter, runtimeVariables: scope.variableMap))
+            let prepared = try prepareFetch(ruleUrl: ruleURL, key: nil, page: page, runtimeVariables: scope.variableMap,
+                pageScope: scope, isPrimaryRequest: false, additionalHeaders: [:],
+                inheritedHeaderScope: SourceRequestHeaderScope(urls: [sourceRuleData.source.bookSourceUrl, chapter.url].compactMap {
+                    AnalyzeUrl.requestURL(AnalyzeUrl.cleanBaseURL($0))
+                }),
+                baseURL: chapter.url, urlBindings: locals)
+            guard case .network(let analyzed, let request) = prepared, !analyzed.useWebView else { throw NativeReviewFailure.configuration }
+            return .init(request: request, responseOptions: .init(charset: analyzed.charset, bodyJs: analyzed.bodyJs), variables: scope.variableMap)
+        }
+    }
+
+    func finishNativeReviewRequest(prepared: SourcePreparedWebRequest, data: Data, response: URLResponse,
+                                   chapter: OnlineChapterRef, locals: [String: String]) throws -> (body: String, variables: [String: String]) {
+        let scope = RuleData(); scope.variableMap = prepared.variables
+        return try withRuleContext(content: "", baseURL: response.url?.absoluteString ?? chapter.url, scope: scope,
+                                   bindings: locals, stage: "review.response") { _ in
+            setBookContext(runtimeVariables: scope.variableMap)
+            runtimeBookScope = nil; runtimeChapterScope = scope
+            jsEngine.setChapterBridge(contentChapterBridge(chapter, runtimeVariables: scope.variableMap))
+            let body = try withPutScope(scope) {
+                try finishFetch(data: data, response: response, request: prepared.request, options: prepared.responseOptions).0
+            }
+            return (body, scope.variableMap)
+        }
+    }
+
+    func nativeReviewCall(name: String, chapter: OnlineChapterRef, variables: [String: String],
+                          paragraphIndex: Int, paragraphData: String, reviewID: String?, page: Int) throws -> (result: MainJsSource.Call, variables: [String: String]) {
+        let args = name == "getReviewSummary" ? ["chapter", "book"]
+            : name == "getReviewReplies" ? ["chapter", "book", "paraIndex", "paraData", "reviewId", "page"]
+            : ["chapter", "book", "paraIndex", "paraData", "page"]
+        let (call, updated) = try mainJsCall(name, arguments: args,
+            bindings: ["paraIndex":paragraphIndex, "paraData":paragraphData, "reviewId":reviewID ?? "", "page":page],
+            variables: variables, chapter: chapter, optional: name != "getReviewDetail")
+        guard call.exists else { throw NativeReviewFailure.unavailable }
+        return (call, updated)
+    }
+
+    func parseNativeReviewSummary(body: String, baseURL: String, chapter: OnlineChapterRef,
+                                  variables: [String: String]) throws -> NativeReviewSummary {
+        let rule = sourceRuleData.source.ruleReview
+        let scope = RuleData(); scope.variableMap = variables
+        return try withRuleContext(content: body, baseURL: baseURL, scope: scope, stage: "review.summary") { engine in
+            setBookContext(runtimeVariables: variables)
+            runtimeBookScope = nil; runtimeChapterScope = scope
+            jsEngine.setChapterBridge(contentChapterBridge(chapter, runtimeVariables: variables))
+            engine.resetExtractionFailure()
+            let rows = engine.getElements(ruleStr: rule.summaryListRule)
+            guard rows.count <= NativeReviewValues.maximumItems else { throw NativeReviewFailure.budget }
+            guard jsEngine.lastError == nil, !engine.extractionFailed else { throw NativeReviewFailure.rule }
+            var result: [Int: NativeReviewSummary.Paragraph] = [:]
+            for (offset, row) in rows.enumerated() {
+                engine.setContent(row, baseUrl: baseURL)
+                let rawIndex = engine.getString(ruleStr: rule.summaryParagraphIndexRule)
+                let index = NativeReviewValues.integer(rawIndex) ?? offset + 1
+                let count = NativeReviewValues.integer(engine.getString(ruleStr: rule.summaryCountRule)) ?? 0
+                let data = rule.summaryParagraphDataRule.isEmpty ? rawIndex : engine.getString(ruleStr: rule.summaryParagraphDataRule)
+                guard jsEngine.lastError == nil, !engine.extractionFailed else { throw NativeReviewFailure.rule }
+                if index == -1 || index > 0, count > 0 {
+                    let key = data.isEmpty ? (rawIndex.isEmpty ? String(index) : rawIndex) : data
+                    guard key.utf8.count <= 8192 else { throw NativeReviewFailure.budget }
+                    result[index] = .init(index: index, data: key, count: count)
+                }
+            }
+            return .init(paragraphs: result.values.sorted { $0.index < $1.index }, runtimeVariables: scope.variableMap)
+        }
+    }
+
+    func parseNativeReviewDetail(body: String, baseURL: String, chapter: OnlineChapterRef,
+                                 variables: [String: String], locals: [String: String], repliesOnly: Bool) throws -> NativeReviewPage {
+        let rule = sourceRuleData.source.ruleReview
+        let scope = RuleData(); scope.variableMap = variables.merging(locals) { _, value in value }
+        return try withRuleContext(content: body, baseURL: baseURL, scope: scope, bindings: locals, stage: "review.detail") { engine in
+            setBookContext(runtimeVariables: scope.variableMap)
+            runtimeBookScope = nil; runtimeChapterScope = scope
+            jsEngine.setChapterBridge(contentChapterBridge(chapter, runtimeVariables: scope.variableMap))
+            let listRule = repliesOnly ? rule.replyListRule : rule.detailListRule
+            guard !listRule.isEmpty else { throw NativeReviewFailure.configuration }
+            engine.resetExtractionFailure()
+            let rows = engine.getElements(ruleStr: listRule)
+            guard rows.count <= NativeReviewValues.maximumItems else { throw NativeReviewFailure.budget }
+            guard jsEngine.lastError == nil, !engine.extractionFailed else { throw NativeReviewFailure.rule }
+            let next = !repliesOnly && !rule.reviewDetailNextPageUrl.isEmpty ? engine.getString(ruleStr: rule.reviewDetailNextPageUrl) : ""
+            var remaining = NativeReviewValues.maximumItems
+            func object(_ row: Any, reply: Bool) throws -> [String: Any] {
+                guard remaining > 0 else { throw NativeReviewFailure.budget }
+                remaining -= 1
+                engine.setContent(row, baseUrl: baseURL)
+                var dictionary: [String: Any] = [:]
+                for (key, value) in [("id", reply ? rule.replyIdRule : rule.detailIdRule),
+                                     ("avatar", reply ? rule.replyAvatarRule : rule.detailAvatarRule),
+                                     ("name", reply ? rule.replyNameRule : rule.detailNameRule),
+                                     ("badge", reply ? rule.replyBadgeRule : rule.detailBadgeRule),
+                                     ("content", reply ? rule.replyContentRule : rule.detailContentRule)] where !value.isEmpty {
+                    if key == "badge" {
+                        dictionary[key] = engine.getStringList(ruleStr: value)
+                    } else if key == "content", let path = Self.nativeReviewObjectPath(value),
+                              let map = row as? [String: Any],
+                              let raw = JsonExtractor().extractRawObject(json: map, rule: path) as? [String: Any] {
+                        // 简单 JSONPath 读取协议对象本身。普通正文/规则链继续保留已有字符串和替换语义。
+                        dictionary[key] = raw
+                    } else {
+                        dictionary[key] = engine.getString(ruleStr: value)
+                    }
+                    guard jsEngine.lastError == nil, !engine.extractionFailed else { throw NativeReviewFailure.rule }
+                }
+                if !reply, rule.reviewQuoteUrl.isEmpty, !rule.replyListRule.isEmpty {
+                    let children = engine.getElements(ruleStr: rule.replyListRule)
+                    guard children.count <= NativeReviewValues.maximumItems else { throw NativeReviewFailure.budget }
+                    dictionary["replies"] = try children.map { try object($0, reply: true) }
+                }
+                return dictionary
+            }
+            let items = try NativeReviewValues.items(rows.map { try object($0, reply: repliesOnly) }, base: baseURL)
+            guard !engine.extractionFailed else { throw NativeReviewFailure.rule }
+            guard rows.isEmpty || !items.isEmpty else { throw NativeReviewFailure.response }
+            let nextTarget = NativeReviewValues.absolute(next, base: baseURL)
+            return .init(items: items, nextPageURL: nextTarget, hasSeparateReplies: !repliesOnly && rule.hasReplies,
+                         runtimeVariables: scope.variableMap)
+        }
+    }
+
+    private static func nativeReviewObjectPath(_ rule: String) -> String? {
+        let text = rule.trimmingCharacters(in: .whitespacesAndNewlines)
+        let path = text.lowercased().hasPrefix("@json:") ? String(text.dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines) : text
+        guard path.hasPrefix("$.") || path.hasPrefix("$["),
+              !["@", "<", "{", "##", "&&", "||", "%%"].contains(where: { path.contains($0) }) else { return nil }
+        return path
+    }
+
     func mainJsContent(chapter: OnlineChapterRef, nextChapterURL: String?) throws -> String {
-        if chapter.shouldRenderAsVolumeSeparator { return "" }
+        try mainJsChapterContent(chapter: chapter, nextChapterURL: nextChapterURL).content
+    }
+
+    func mainJsChapterContent(chapter: OnlineChapterRef, nextChapterURL: String?) throws -> ChapterParsePayload {
+        if chapter.shouldRenderAsVolumeSeparator { return .init(content: "", title: chapter.title, sourceMatched: false, isPay: chapter.isPay) }
         let (call, _) = try mainJsCall("getContent", arguments: ["chapter", "book", "nextChapterUrl"],
             bindings: ["nextChapterUrl": nextChapterURL as Any? ?? NSNull()],
             variables: chapter.runtimeVariables ?? [:], chapter: chapter)
@@ -2279,34 +2557,55 @@ class ModernParserBridge {
         guard chapter.isVolume || !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw MainJsSource.Failure.invalidResult("getContent")
         }
-        return content
+        return ChapterParsePayload(content: content, title: chapter.title, sourceMatched: true, isPay: chapter.isPay,
+            runtimeVariables: chapter.runtimeVariables, subContent: jsEngine.chapterBridge.subContent)
     }
 
-    func runContentBatch(_ batch: SourceContentBatch) throws {
+    func runContentBatch(_ batch: SourceContentBatch) throws -> [OnlineChapterRef] {
         try batch.checkCurrent()
-        let native = batch.refs.map { ref -> LegadoChapterBridge in
-            let scope = RuleData(); scope.variableMap = ref.runtimeVariables ?? [:]
-            return LegadoChapterBridge(index: ref.index, title: ref.title, url: ref.url,
-                isVip: ref.isVip, chapterScope: { scope }, storedVariables: ref.runtimeVariables ?? [:])
+        let entries = batch.refs.map { ref in
+            let scope = RuleData()
+            scope.variableMap = batch.variables.merging(ref.runtimeVariables ?? [:]) { _, chapter in chapter }
+            // 此章的变量只在这一份 scope 中；删除不应从一份旧快照重新读回来。
+            let bridge = LegadoChapterBridge(index: ref.index, title: ref.title, url: ref.url,
+                isVip: ref.isVip, chapterScope: { scope })
+            return (index: ref.index, scope: scope, bridge: bridge)
         }
-        let java = jsEngine.bridge
+        let native = entries.map(\.bridge)
+        let byIndex = Dictionary(uniqueKeysWithValues: entries.map { ($0.index, $0) })
+        let js = jsEngine
+        let java = js.bridge
         let previous = java.cacheContentHandler
+        let previousReaders = js.ruleReaders
+        let previousBook = js.bookBridge
+        let previousChapter = js.chapterBridge
+        defer {
+            java.cacheContentHandler = previous
+            batch.close()
+            js.setBookBridge(previousBook)
+            js.setChapterBridge(previousChapter)
+            js.ruleReaders = previousReaders
+        }
         java.cacheContentHandler = { [weak self] identifier, content in
             guard let self else { throw CancellationError() }
             do {
-                return try batch.save(identifier, content: content) { ref, text in
+                return try batch.save(identifier, content: content, supplemental: { ref in
+                    byIndex[ref.index]?.bridge.subContent
+                }) { ref, text in
                     let replacement = self.sourceRuleData.source.ruleContent.replaceRegex
                     guard !replacement.isEmpty else { return text }
-                    let scope = RuleData(); scope.variableMap = batch.variables.merging(ref.runtimeVariables ?? [:]) { _, new in new }
-                    let readers = self.jsEngine.ruleReaders
-                    defer { self.jsEngine.ruleReaders = readers }
-                    return try self.withRuleContext(content: text, baseURL: ref.url, scope: scope, stage: "batch.replace") { engine in
-                        let previousChapter = self.jsEngine.chapterBridge
-                        let previousScope = self.runtimeChapterScope
-                        self.runtimeChapterScope = scope
-                        self.jsEngine.setChapterBridge(LegadoChapterBridge(index: ref.index, title: ref.title, url: ref.url,
-                            isVip: ref.isVip, chapterScope: { scope }, storedVariables: ref.runtimeVariables ?? [:]))
-                        defer { self.jsEngine.setChapterBridge(previousChapter); self.runtimeChapterScope = previousScope }
+                    guard let entry = byIndex[ref.index] else { throw SourceContentBatch.Failure.invalidIdentifier }
+                    let js = self.jsEngine
+                    let readers = js.ruleReaders
+                    let chapterBeforeReplacement = js.chapterBridge
+                    defer {
+                        js.setChapterBridge(chapterBeforeReplacement)
+                        js.ruleReaders = readers
+                    }
+                    return try self.withRuleContext(content: text, baseURL: ref.url, scope: entry.scope, stage: "batch.replace") { engine in
+                        self.runtimeChapterScope = entry.scope
+                        engine.chapter = entry.scope
+                        js.setChapterBridge(entry.bridge)
                         let normalized = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
                         let replaced = engine.getString(ruleStr: replacement, mContent: normalized)
                         let isText = self.sourceRuleData.source.bookSourceType == 0
@@ -2315,7 +2614,6 @@ class ModernParserBridge {
                 }
             } catch { batch.record(error); throw error }
         }
-        defer { java.cacheContentHandler = previous; batch.close() }
         if sourceRuleData.source.isJsSource {
             let objects: [[String: Any]] = batch.refs.map { ref in
                 ["index": ref.index, "title": ref.title, "url": ref.url, "isVolume": ref.isVolume,
@@ -2352,6 +2650,11 @@ class ModernParserBridge {
         }
         try batch.checkCurrent()
         if let failure = batch.failure { throw failure }
+        return batch.missing.map { ref in
+            var ref = ref
+            ref.runtimeVariables = byIndex[ref.index]?.scope.variableMap ?? ref.runtimeVariables
+            return ref
+        }
     }
 
     // MARK: - Full pipeline methods (fetch + parse)
@@ -2688,7 +2991,7 @@ class ModernParserBridge {
         let source = sourceRuleData.source
         if source.isJsSource { return try mainJsContent(chapter: OnlineChapterRef(index: 0, title: "", url: url), nextChapterURL: nil) }
         let (body, finalUrl) = try await fetch(ruleUrl: url, contentStage: true, on: host)
-        return try parseChapterResult(html: body, baseURL: finalUrl, ruleURL: url, source: source).content
+        return try await parseChapterPage(html: body, baseURL: finalUrl, ruleURL: url, source: source, on: host).content
     }
 
     // MARK: - Explore / Discover
@@ -3685,7 +3988,10 @@ class ModernParserBridge {
     private func prepareFetch(
         ruleUrl: String, key: String?, page: Int?, runtimeVariables: [String: String]?,
         pageScope: RuleData?, isPrimaryRequest: Bool, additionalHeaders: [String: String], allowsWebView: Bool = false,
-        includesLegadoDefaultUserAgent: Bool = true
+        includesLegadoDefaultUserAgent: Bool = true,
+        inheritedHeaderScope: SourceRequestHeaderScope? = nil,
+        baseURL: String? = nil,
+        urlBindings: [String: String] = [:]
     ) throws -> PreparedFetch {
         // A book's request is built against its variables, as Legado's `AnalyzeUrl(ruleData =
         // book)` builds it: a detail, TOC or content URL can read back what the book's search
@@ -3710,17 +4016,22 @@ class ModernParserBridge {
         // then starts from (`pageScope`): Legado's `WebBook.searchBookAwait`/`exploreBookAwait`
         // build the `AnalyzeUrl` with `ruleData = RuleData()` and hand it to `BookList`. Stored
         // as source state, it rewrote the source's preferences on every search request.
+        let sourceHeader: String
+        if let inheritedHeaderScope {
+            let targetURL = AnalyzeUrl.requestURL(AnalyzeUrl.stripOptions(from: ruleUrl))
+            sourceHeader = String(decoding: try JSONEncoder().encode(inheritedHeaderScope.inheritedHeaders(sourceHeaders, for: targetURL)), as: UTF8.self)
+        } else { sourceHeader = sourceRuleData.source.header }
         let analyzeUrl = withPutScope(pageScope) {
             AnalyzeUrl(
                 ruleUrl: ruleUrl,
                 key: key,
                 page: page,
-                sourceHeader: sourceRuleData.source.header,
-                baseUrl: sourceRuleData.source.bookSourceUrl,
+                sourceHeader: sourceHeader,
+                baseUrl: baseURL ?? sourceRuleData.source.bookSourceUrl,
                 source: sourceRuleData,
                 book: pageScope,
                 jsEvaluator: { [weak self] jsCode, bindings in
-                    self?.jsEngine.evaluateIsolated(jsCode, bindings: bindings)
+                    self?.jsEngine.evaluateIsolated(jsCode, bindings: bindings.merging(urlBindings.mapValues { $0 as Any }) { current, _ in current })
                 },
                 jsErrorProvider: { [weak self] in self?.jsEngine.lastError }
             )
@@ -3770,7 +4081,7 @@ class ModernParserBridge {
             request.setValue(value, forHTTPHeaderField: key)
         }
         if isPrimaryRequest, let url = request.url { runtimeOverrides?.headerScope?.admitPrimaryURL(url) }
-        applySourceAuthentication(to: &request, sourceHeaders: sourceHeaders)
+        applySourceAuthentication(to: &request, sourceHeaders: sourceHeaders, inheritedScope: inheritedHeaderScope)
         if runtimeOverrides != nil { request.httpShouldHandleCookies = sourceRuleData.source.enabledCookieJar }
         if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
         if runtimeOverrides != nil, _jsEngine?.lastError != nil { throw ModernParserBridgeError.parseError("Source JavaScript failed") }

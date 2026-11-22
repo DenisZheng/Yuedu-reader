@@ -167,8 +167,9 @@ struct TOCRule: Codable {
     }
 }
 
-struct ContentRule: Codable {
+struct ContentRule: Codable, Equatable {
     var content: String = ""
+    var subContent: String = ""
     var title: String = ""
     var nextContentUrl: String = ""
     var webJs: String = ""
@@ -185,7 +186,7 @@ struct ContentRule: Codable {
     var maxBatchSize: Int?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case content, title, nextContentUrl, webJs, sourceRegex, replaceRegex, imageStyle, imageDecode, payAction, callBackJs
+        case content, subContent, title, nextContentUrl, webJs, sourceRegex, replaceRegex, imageStyle, imageDecode, payAction, callBackJs
         case contentBatch, maxBatchSize
     }
 
@@ -193,6 +194,7 @@ struct ContentRule: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         content        = c.safeString(forKey: .content)
+        subContent     = c.safeString(forKey: .subContent)
         title          = c.safeString(forKey: .title)
         nextContentUrl = c.safeString(forKey: .nextContentUrl)
         webJs          = c.safeString(forKey: .webJs)
@@ -204,7 +206,17 @@ struct ContentRule: Codable {
         let callBack   = c.safeString(forKey: .callBackJs)
         callBackJs     = callBack.isEmpty ? nil : callBack
         contentBatch   = c.safeString(forKey: .contentBatch)
-        maxBatchSize   = try c.decodeIfPresent(Int.self, forKey: .maxBatchSize)
+        maxBatchSize   = Self.decodeBatchSize(c)
+    }
+
+    private static func decodeBatchSize(_ container: KeyedDecodingContainer<CodingKeys>) -> Int? {
+        // 仅接受整数值；坏的可选批量配置不影响普通正文。exactly 同时拒绝小数和溢出。
+        if let number = try? container.decode(Int.self, forKey: .maxBatchSize) { return number }
+        if let string = try? container.decode(String.self, forKey: .maxBatchSize) {
+            let value = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return Int(value) ?? Double(value).flatMap { Int(exactly: $0) }
+        }
+        return (try? container.decode(Double.self, forKey: .maxBatchSize)).flatMap { Int(exactly: $0) }
     }
 }
 
@@ -248,17 +260,70 @@ struct ExploreRule: Codable {
 
 // MARK: - Review Rules (Legado ReviewRule)
 
-struct ReviewRule: Codable {
+struct ReviewRule: Codable, Equatable {
     var review: String = ""
+    var enabled = false
+    var reviewSummaryUrl = ""
+    var summaryListRule = ""
+    var summaryParagraphIndexRule = ""
+    var summaryParagraphDataRule = ""
+    var summaryCountRule = ""
+    var reviewDetailUrl = ""
+    var reviewDetailNextPageUrl = ""
+    var detailListRule = ""
+    var detailIdRule = ""
+    var detailAvatarRule = ""
+    var detailNameRule = ""
+    var detailBadgeRule = ""
+    var detailContentRule = ""
+    var reviewQuoteUrl = ""
+    var replyListRule = ""
+    var replyIdRule = ""
+    var replyAvatarRule = ""
+    var replyNameRule = ""
+    var replyBadgeRule = ""
+    var replyContentRule = ""
 
+    var hasSummary: Bool {
+        enabled && configured(reviewSummaryUrl, summaryListRule, summaryParagraphIndexRule, summaryCountRule)
+    }
+    var hasDetail: Bool { enabled && configured(reviewDetailUrl, detailListRule, detailContentRule) }
+    var hasReplies: Bool { enabled && configured(reviewQuoteUrl, replyListRule, replyContentRule) }
+
+    private func configured(_ fields: String...) -> Bool {
+        fields.allSatisfy { $0.contains { !$0.isWhitespace } }
+    }
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case review
+        case review, enabled, reviewSummaryUrl, summaryListRule, summaryParagraphIndexRule, summaryParagraphDataRule, summaryCountRule
+        case reviewDetailUrl, reviewDetailNextPageUrl, detailListRule, detailIdRule, detailAvatarRule, detailNameRule, detailBadgeRule, detailContentRule
+        case reviewQuoteUrl, replyListRule, replyIdRule, replyAvatarRule, replyNameRule, replyBadgeRule, replyContentRule
     }
 
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         review = c.safeString(forKey: .review)
+        enabled = c.safeBool(forKey: .enabled)
+        reviewSummaryUrl = c.safeString(forKey: .reviewSummaryUrl)
+        summaryListRule = c.safeString(forKey: .summaryListRule)
+        summaryParagraphIndexRule = c.safeString(forKey: .summaryParagraphIndexRule)
+        summaryParagraphDataRule = c.safeString(forKey: .summaryParagraphDataRule)
+        summaryCountRule = c.safeString(forKey: .summaryCountRule)
+        reviewDetailUrl = c.safeString(forKey: .reviewDetailUrl)
+        reviewDetailNextPageUrl = c.safeString(forKey: .reviewDetailNextPageUrl)
+        detailListRule = c.safeString(forKey: .detailListRule)
+        detailIdRule = c.safeString(forKey: .detailIdRule)
+        detailAvatarRule = c.safeString(forKey: .detailAvatarRule)
+        detailNameRule = c.safeString(forKey: .detailNameRule)
+        detailBadgeRule = c.safeString(forKey: .detailBadgeRule)
+        detailContentRule = c.safeString(forKey: .detailContentRule)
+        reviewQuoteUrl = c.safeString(forKey: .reviewQuoteUrl)
+        replyListRule = c.safeString(forKey: .replyListRule)
+        replyIdRule = c.safeString(forKey: .replyIdRule)
+        replyAvatarRule = c.safeString(forKey: .replyAvatarRule)
+        replyNameRule = c.safeString(forKey: .replyNameRule)
+        replyBadgeRule = c.safeString(forKey: .replyBadgeRule)
+        replyContentRule = c.safeString(forKey: .replyContentRule)
     }
 }
 
@@ -289,11 +354,8 @@ struct BookSource: Identifiable, Codable {
     /// source round-trips intact, and exposed to rule JS as `source.enabledCookieJar`.
     /// No editor control, because a switch that changes nothing reads as a bug.
     var enabledCookieJar: Bool = false
-    /// Legado's 段评 switch, which there enables the source's `ruleReview`.
-    /// **Carried, not honored:** this app has no `ruleReview` parsing path at all —
-    /// paragraph reviews are detected from the review markers a source embeds in the
-    /// chapter HTML (`ReaderViewModel.recordParagraphReviewsIfPresent`), which no flag
-    /// gates. Kept for round-tripping and for `source.enabledReview` in rule JS.
+    /// 旧源级字段继续往返并暴露给脚本。原生只读段评由 ruleReview.enabled
+    /// 及摘要规则控制，不改变 HTML 自带标记的网页段评路径。
     var enabledReview: Bool = false
     /// legado-E / MD3 `eventListener`: run `ruleContent.callBackJs` on book and UI events
     /// (`SourceCallBackService`). Optional so a source that never set it encodes as before.
@@ -332,6 +394,7 @@ struct BookSource: Identifiable, Codable {
     var header: String = ""           // JSON string, e.g. {"User-Agent":"..."}
     var loginUrl: String = ""
     var loginUi: String = ""          // Legado: login UI configuration JSON
+    var hasLoginEntry: Bool { LoginUiV2.isCandidate(loginUi) || loginUrl.contains { !$0.isWhitespace } }
     var loginCheckJs: String = ""     // Legado: executed after search response; skip parsing if login is required
     var respondTime: Int64 = 180000   // Legado: response time (milliseconds)
     var lastUpdateTime: Int64 = 0     // Legado: last update timestamp
@@ -414,14 +477,7 @@ struct BookSource: Identifiable, Codable {
         ruleExplore  = c.decodeRule(ExploreRule.self,  forKey: .ruleExplore)  ?? ExploreRule()
         ruleBookInfo = c.decodeRule(BookInfoRule.self, forKey: .ruleBookInfo) ?? BookInfoRule()
         ruleToc      = c.decodeRule(TOCRule.self,      forKey: .ruleToc)      ?? TOCRule()
-        if let raw = try c.decodeIfPresent(PreservedJSON.self, forKey: .ruleContent), raw != .null {
-            if case .string(let text) = raw {
-                ruleContent = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? ContentRule()
-                    : try JSONDecoder().decode(ContentRule.self, from: Data(text.utf8))
-            } else {
-                ruleContent = try JSONDecoder().decode(ContentRule.self, from: JSONEncoder().encode(raw))
-            }
-        } else { ruleContent = ContentRule() }
+        ruleContent   = c.decodeRule(ContentRule.self, forKey: .ruleContent) ?? ContentRule()
         ruleReview   = c.decodeRule(ReviewRule.self,   forKey: .ruleReview)   ?? ReviewRule()
         preservedConfiguration = try BookSourceConfiguration.capture(from: decoder)
     }
@@ -466,7 +522,17 @@ struct BookSource: Identifiable, Codable {
         try container.encode(BookSourceConfiguration.Rule(value: ruleExplore, extra: preservedConfiguration["ruleExplore"]), forKey: .ruleExplore)
         try container.encode(BookSourceConfiguration.Rule(value: ruleBookInfo, extra: preservedConfiguration["ruleBookInfo"]), forKey: .ruleBookInfo)
         try container.encode(BookSourceConfiguration.Rule(value: ruleToc, extra: preservedConfiguration["ruleToc"]), forKey: .ruleToc)
-        try container.encode(BookSourceConfiguration.Rule(value: ruleContent, extra: preservedConfiguration["ruleContent"]), forKey: .ruleContent)
+        let originalContentRule = preservedConfiguration["ruleContent"]
+        let hasUnparsedContentRule = switch originalContentRule {
+        case .object?, nil: false
+        default: true
+        }
+        if let originalContentRule, hasUnparsedContentRule, ruleContent == ContentRule() {
+            // 不能执行的旧值原样保留；编辑出有效规则后，以新规则为准。
+            try container.encode(originalContentRule, forKey: .ruleContent)
+        } else {
+            try container.encode(BookSourceConfiguration.Rule(value: ruleContent, extra: originalContentRule), forKey: .ruleContent)
+        }
         try container.encode(BookSourceConfiguration.Rule(value: ruleReview, extra: preservedConfiguration["ruleReview"]), forKey: .ruleReview)
     }
 

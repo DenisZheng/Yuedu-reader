@@ -406,6 +406,7 @@ struct ReaderView: View {
     @State var contentDebugTarget: ReaderContentDebugTarget?
     @State private var replaceRuleDraft: ReplaceRule?
     @State var reviewTarget: ReaderHTMLUtilities.ReviewTarget?
+    @State var nativeReviewSelection: NativeReviewSelection?
     @State private var coreTextExternalTargetVersion: UInt = 0
     @State var bookDocument: (any BookDocument)? = nil
     @State var contentProvider: (any BookContentProvider)? = nil
@@ -1764,7 +1765,9 @@ struct ReaderView: View {
         let volumeHandler = volumeHandler
         let pageBars = pageBarsController
         let renderer = epubRenderer
+        let model = readerViewModel
         return ReaderTeardownProbe {
+            model.cancelChapterRefetches()
             volumeHandler.onPageTurn = nil
             autoReader.usesContinuousScroll = { false }
             autoReader.onAdvancePage = nil
@@ -3131,6 +3134,10 @@ struct ReaderView: View {
                     refreshCurrentChapter()
                 }
             }
+        }
+        .sheet(item: $nativeReviewSelection) { selection in
+            NativeReviewView(selection: selection)
+                .environment(\.colorScheme, readerColorScheme)
         }
         .sheet(item: $reviewTarget) { target in
             LegadoReviewBrowserView(target: target) { _ in
