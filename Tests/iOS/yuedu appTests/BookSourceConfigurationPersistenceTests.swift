@@ -35,14 +35,26 @@ struct BookSourceConfigurationPersistenceTests {
         #expect(rule["content"] as? String == "main@html" && rule["subContent"] as? String == "aside@text")
     }
 
-    @Test("双重编码规则扩展字段也保留，坏规则不能转成空规则成功")
+    @Test("双重编码规则扩展字段也保留，坏正文规则不妨碍整个源载入")
     func encodedRule() throws {
         let raw = Data(#"{"bookSourceUrl":"https://example.invalid","ruleBookInfo":"{\"name\":\"h1@text\",\"future\":{\"keep\":true}}"}"#.utf8)
         let source = try JSONDecoder().decode(BookSource.self, from: raw)
         let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(source)) as? [String: Any])
         #expect(((object["ruleBookInfo"] as? [String: Any])?["future"] as? [String: Bool])?["keep"] == true)
-        #expect(throws: (any Error).self) {
-            _ = try JSONDecoder().decode(BookSource.self, from: Data(#"{"bookSourceUrl":"https://example.invalid","ruleContent":"{bad}"}"#.utf8))
+        for malformed in [PreservedJSON.string("{bad}"), .array([.integer(1)]), .bool(true)] {
+            let raw = try JSONEncoder().encode([
+                "bookSourceUrl": PreservedJSON.string("https://example.invalid"),
+                "ruleSearch": .object(["name": .string("h2@text")]),
+                "ruleContent": malformed
+            ])
+            var loaded = try JSONDecoder().decode(BookSource.self, from: raw)
+            #expect(loaded.ruleSearch.name == "h2@text")
+            #expect(loaded.ruleContent.content.isEmpty && loaded.contentBatchSize == 1)
+            let exported = try JSONDecoder().decode([String: PreservedJSON].self, from: JSONEncoder().encode(loaded))
+            #expect(exported["ruleContent"] == malformed)
+            loaded.ruleContent.content = "main@text"
+            let edited = try JSONDecoder().decode(BookSource.self, from: JSONEncoder().encode(loaded))
+            #expect(edited.ruleContent.content == "main@text")
         }
     }
 }

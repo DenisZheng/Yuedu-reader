@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import yuedu_app
 
@@ -119,6 +120,87 @@ struct SourceContentBatchTests {
         }
     }
 
+    @Test("两种批量规则中章节写入和删除在当次替换可见，不串到相邻章节")
+    func mutatedChapterVariablesAndRawContent() async throws {
+        let root = try Self.root(); defer { Self.cleanup(root) }
+        let repo = ChapterCacheRepository(rootDirectory: root)
+        let raw = "<p>替换前</p>"
+        for main in [true, false] {
+            let id = UUID()
+            let body = """
+                chapters[0].putVariable('token', '本批新值');
+                chapters[1].putVariable('token', null);
+                java.cacheContent(chapters[0], '<p>替换前</p>');
+                java.cacheContent(chapters[1], '替换前');
+                java.cacheContent(chapters[2], '替换前');
+                """
+            var source = Self.source(mainJs: main, batch: body)
+            source.ruleContent.replaceRegex = "@js: '已替换|' + chapter.index + '|' + chapter.getVariable('token') + '|' + java.get('token')"
+            let missing = try await BookSourceFetcher().fetchContentBatch(refs: Self.refs(), bookId: id,
+                source: source, repository: repo)
+            #expect(missing.isEmpty)
+            for (index, token) in [(0, "本批新值"), (1, ""), (2, "变量2")] {
+                let package = try #require(repo.loadChapterPackageSync(bookId: id, chapterIndex: index))
+                #expect(package.content.trimmingCharacters(in: .whitespacesAndNewlines) == "已替换|\(index)|\(token)|\(token)")
+                if index == 0 {
+                    let filename = try #require(package.rawHTMLFilename)
+                    let bytes = try Data(contentsOf: root.appendingPathComponent(id.uuidString).appendingPathComponent(filename))
+                    #expect(String(decoding: bytes, as: UTF8.self) == raw)
+                } else {
+                    #expect(package.rawHTMLFilename == nil && package.normalizedHTMLFilename == nil)
+                }
+            }
+        }
+    }
+
+    @Test("同次批量中未回存的章节把变量快照交给单章回退；其他章保留自己的变量")
+    func batchVariablesReachSingleFallback() async throws {
+        var fixture = Self.source(batch: """
+            chapters[0].putVariable('token', '回退变量0');
+            java.cacheContent(chapters[1], '批量1');
+            java.cacheContent(chapters[2], '批量2');
+            """)
+        fixture.mainJs = try #require(fixture.mainJs).replacingOccurrences(of: "return '单章'+c.index;",
+                                                                         with: "return '单章'+c.index+'|'+c.getVariable('token');")
+        let source = fixture
+        let fetcher = BookSourceFetcher()
+        let manager = ChapterFetchManager(bookSourceFetcher: fetcher, sourceLookup: { _ in source })
+        let id = UUID()
+        defer { fetcher.clearAllChapterCache(bookId: id) }
+        let book = Self.book(id: id, sourceId: source.id)
+        let fallback = try await manager.fetchChapter(book: book, chapterIndex: 0, priority: .download, store: nil)
+        #expect(fallback.content.contains("单章0|回退变量0"))
+        let adjacent = try await manager.fetchChapter(book: book, chapterIndex: 1, priority: .download, store: nil)
+        #expect(adjacent.content == "批量1")
+        #expect(book.onlineChapters?.first?.runtimeVariables?["token"] == "变量0")
+    }
+
+    @Test("批量选章用清洗后的 URL 命中已缓存邻章，回存直接返回批量结果")
+    func batchCandidatesUseCanonicalURL() async throws {
+        let source = Self.source(batch: "chapters.forEach(function(c){java.cacheContent(c,'批量|'+chapters.length+'|'+c.index);});")
+        let fetcher = BookSourceFetcher()
+        let manager = ChapterFetchManager(bookSourceFetcher: fetcher, sourceLookup: { _ in source })
+        let id = UUID()
+        defer { fetcher.clearAllChapterCache(bookId: id) }
+        let canonical = Self.refs()
+        var book = Self.book(id: id, sourceId: source.id)
+        book.onlineChapters = canonical.map { ref in
+            var wrapped = ref
+            wrapped.url = "<a href=\"\(ref.url)\">\(ref.title)</a>"
+            return wrapped
+        }
+        try fetcher.saveToCache(content: "已有正文，不可重抓", bookId: id, chapterIndex: 1,
+            sourceURL: canonical[1].url, tocTitle: canonical[1].title)
+        let result = try await manager.fetchChapter(book: book, chapterIndex: 0, priority: .download, store: nil)
+        #expect(result.content == "批量|2|0")
+        #expect(result.rawHTMLFilename == nil && result.normalizedHTMLFilename == nil)
+        #expect(fetcher.loadChapterPackageSync(bookId: id, chapterIndex: 0)?.savedAt == result.savedAt)
+        let kept = try await manager.fetchChapter(book: book, chapterIndex: 1, priority: .download, store: nil)
+        #expect(kept.content == "已有正文，不可重抓")
+        let adjacent = try await manager.fetchChapter(book: book, chapterIndex: 2, priority: .download, store: nil)
+        #expect(adjacent.content == "批量|2|2")
+    }
+
     @Test("取消／源失效／清缓存拒绝网络之后的批量晚到回存")
     func lateBatchResults() async throws {
         for mode in ["cancel", "invalidate", "clear"] {
@@ -205,12 +287,25 @@ struct SourceContentBatchTests {
         #expect(p0.content == "批量完成" && p1.content.contains("单章1"))
     }
 
-    @Test("非法批量配置不被宽容解码吞掉，回传字节预算明确拒绝")
-    func malformedAndBudget() async throws {
-        for value in ["true", "2.5", "{}"] {
-            let json = "{\"bookSourceName\":\"固定\",\"bookSourceUrl\":\"https://batch.invalid\",\"ruleContent\":{\"content\":\"body\",\"maxBatchSize\":" + value + "}}"
-            #expect(throws: (any Error).self) { try JSONDecoder().decode(BookSource.self, from: Data(json.utf8)) }
+    @Test("声明式数量兼容整数值字符串和浮点；坏值仅关闭批量并保留其他规则")
+    func tolerantBatchSize() throws {
+        for (value, expected) in [("\"10\"", 10), ("10.0", 10), ("\" 10.0 \"", 10),
+                                  ("true", 1), ("2.5", 1), ("{}", 1), ("null", 1), ("1e20", 1)] {
+            let rule = #"{"content":"body","subContent":"aside","contentBatch":"// 固定","maxBatchSize":"# + value + "}"
+            for encoded in [false, true] {
+                let json = try JSONSerialization.data(withJSONObject: [
+                    "bookSourceName": "固定", "bookSourceUrl": "https://batch.invalid",
+                    "ruleContent": encoded ? rule : JSONSerialization.jsonObject(with: Data(rule.utf8))
+                ])
+                let source = try JSONDecoder().decode(BookSource.self, from: json)
+                #expect(source.ruleContent.content == "body" && source.ruleContent.subContent == "aside")
+                #expect(source.contentBatchSize == expected, Comment(rawValue: value))
+            }
         }
+    }
+
+    @Test("批量回传字节预算明确拒绝")
+    func batchByteBudget() async throws {
         let root = try Self.root(); defer { Self.cleanup(root) }
         let source = Self.source(batch: "java.cacheContent(chapters[0],new Array(17*1024*1024+1).join('x'));")
         await #expect(throws: SourceContentBatch.Failure.self) {
@@ -251,11 +346,74 @@ struct SourceContentBatchTests {
         #expect(fetcher.loadChapterPackageSync(bookId: id, chapterIndex: 2)?.content == "共享下载2")
     }
 
+    @Test("旧批次失效，等待者尚未释放也不影响同窗口下一批")
+    func completedBatchDoesNotAcceptNewWaiters() async throws {
+        let host = "batch-generation-" + UUID().uuidString.lowercased() + ".invalid"
+        let requests = AsyncStream<URLRequest>.makeStream()
+        RSSPageFixtureProtocol.serve(host: host, sequences: ["/batch": [
+            .init(body: Data("旧".utf8), held: true),
+            .init(body: Data("新".utf8))
+        ]], events: requests.continuation)
+        defer { RSSPageFixtureProtocol.release(host: host); RSSPageFixtureProtocol.remove(host: host) }
+
+        let source = Self.source(batch: """
+            var value=java.ajax('https://\(host)/batch');
+            chapters.forEach(function(c){java.cacheContent(c,value+'|'+c.index);});
+            """)
+        let oldSession = BookSourceSession.session(for: source, requestSession: RSSPageFixtureProtocol.makeSession())
+        let id = UUID(), book = Self.book(id: id, sourceId: source.id)
+        let fetcher = BookSourceFetcher()
+        defer { fetcher.clearAllChapterCache(bookId: id) }
+        let manager = ChapterFetchManager(bookSourceFetcher: fetcher, sourceLookup: { _ in source })
+        let joins = AsyncStream<Int>.makeStream()
+        let returning = AsyncStream<Void>.makeStream(), releaseWaiter = AsyncStream<Void>.makeStream()
+        let held = OSAllocatedUnfairLock(initialState: false)
+        await manager.observeBatchWaiters({ joins.continuation.yield($0) }, beforeRelease: {
+            let hold = held.withLock { value in
+                guard !value else { return false }
+                value = true
+                return true
+            }
+            if hold {
+                returning.continuation.yield(())
+                var iterator = releaseWaiter.stream.makeAsyncIterator()
+                _ = await iterator.next()
+            }
+        })
+        defer { releaseWaiter.continuation.finish() }
+        let first = Task { try await manager.fetchChapter(book: book, chapterIndex: 0, priority: .download, store: nil) }
+        defer { first.cancel() }
+        var requestEvents = requests.stream.makeAsyncIterator()
+        _ = try #require(await requestEvents.next())
+        let second = Task { try await manager.fetchChapter(book: book, chapterIndex: 1, priority: .download, store: nil) }
+        defer { second.cancel() }
+        var counts = joins.stream.makeAsyncIterator()
+        while let count = await counts.next(), count != 2 {}
+        oldSession.invalidate()
+        RSSPageFixtureProtocol.release(host: host)
+        var returns = returning.stream.makeAsyncIterator()
+        _ = try #require(await returns.next())
+
+        _ = BookSourceSession.session(for: source, requestSession: RSSPageFixtureProtocol.makeSession())
+        do {
+            let later = try await manager.fetchChapter(book: book, chapterIndex: 2, priority: .download, store: nil)
+            #expect(later.content == "新|2")
+        } catch { Issue.record("新请求继承了旧批次结果：\(error)") }
+        releaseWaiter.continuation.finish()
+        await #expect(throws: CancellationError.self) { try await first.value }
+        await #expect(throws: CancellationError.self) { try await second.value }
+        #expect(RSSPageFixtureProtocol.requests(host: host).count == 2)
+    }
+
     @Test("交付离线样本实际导入并批量读取三章")
     func offlineFixture() async throws {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/content-batch/offline-demo.js")
-        let source = try await SourceScriptThread.run { try MainJsSource.extract(String(contentsOf: url, encoding: .utf8)) }
+        let source = try await SourceScriptThread.run {
+            let script = try String(contentsOf: url, encoding: .utf8)
+            // fixture的批次计数是源持久变量；每次测试分配独立sourceKey，不污染人工验收或历史运行。
+            return try MainJsSource.extract(script.replacingOccurrences(of: "batch-demo.invalid", with: "batch-fixture-" + UUID().uuidString.lowercased() + ".invalid"))
+        }
         let fetcher = BookSourceFetcher()
         let book = try #require(try await fetcher.searchOutcome(query: "验收", in: source, usesCache: false).books.first)
         let info = try await fetcher.fetchBookInfoPackage(url: book.bookUrl, source: source, knownBook: book, usesCache: false)

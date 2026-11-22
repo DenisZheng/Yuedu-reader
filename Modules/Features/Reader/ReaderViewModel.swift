@@ -56,12 +56,14 @@ final class ReaderViewModel: ObservableObject {
         let token: UUID
         let priority: ChapterFetchPriority
         let task: Task<Void, Never>
+        var isRefetch = false
     }
 
     private var chapterFetcher: ChapterFetching
     private var bookSourceFetcher: BookSourceFetching
     private var offlineDownloadManager: (any OfflineDownloadManaging)?
     private var inFlightRequests: [Int: InFlightRequest] = [:]
+    private var chapterListGeneration = UUID()
     /// Books already checked for auto manga detection this session (cached-chapter path),
     /// so a genuine text book is not re-probed on every `ensureChapterReady`.
     private var mangaDetectionAttempted: Set<UUID> = []
@@ -128,6 +130,7 @@ final class ReaderViewModel: ObservableObject {
     /// source's (necessarily empty) cache and render the 資料不一致 failure overlay on
     /// every source switch.
     func resetAllChapterStates() {
+        chapterListGeneration = UUID()
         for (_, request) in inFlightRequests {
             request.task.cancel()
         }
@@ -150,16 +153,70 @@ final class ReaderViewModel: ObservableObject {
     /// widening four signatures for a diagnostic.
     private var currentBookId: String?
 
+    /// 清理和抓取归同一个在途请求：重复点按不再起另一次删除，旧结果也不能登记替换。
+    @discardableResult
+    func refetchChapter(
+        book: ReadingBook, chapterIndex: Int, store: BookStore?, resetFailureBudget: Bool,
+        currentBook: @escaping @MainActor () -> ReadingBook?,
+        didClear: @escaping @MainActor () -> Void,
+        discard: @escaping @MainActor () -> Void
+    ) -> Task<Void, Never>? {
+        guard let refs = book.onlineChapters, refs.indices.contains(chapterIndex),
+              !refs[chapterIndex].shouldRenderAsVolumeSeparator else { return nil }
+        let ref = refs[chapterIndex]
+        let isCurrent: @MainActor () -> Bool = {
+            guard let latest = currentBook(), latest.id == book.id, latest.bookSourceId == book.bookSourceId,
+                  latest.bookInfoURL == book.bookInfoURL, let chapters = latest.onlineChapters,
+                  chapters.indices.contains(chapterIndex) else { return false }
+            let current = chapters[chapterIndex]
+            return current.index == ref.index && current.url == ref.url && current.title == ref.title
+        }
+        guard isCurrent() else { return nil }
+        if let request = inFlightRequests[chapterIndex], request.isRefetch { return request.task }
+        inFlightRequests[chapterIndex]?.task.cancel()
+        currentBookId = book.id.uuidString
+        setChapterState(.loading, for: chapterIndex, contentAvailable: false)
+        let token = UUID()
+        let task = startFetchTask(book: book, chapterIndex: chapterIndex, priority: .jump, store: store, token: token,
+                                  isCurrent: isCurrent, discard: discard) { [chapterFetcher, bookSourceFetcher] in
+            await chapterFetcher.cancelChapter(bookId: book.id, chapterIndex: chapterIndex)
+            try Task.checkCancellation()
+            guard isCurrent() else { return false }
+            if resetFailureBudget {
+                await chapterFetcher.resetFailureBudget(for: book.id)
+                try Task.checkCancellation()
+                guard isCurrent() else { return false }
+                store?.clearAutomaticQuarantine(bookId: book.id)
+            }
+            try await bookSourceFetcher.clearChapterCacheAsync(bookId: book.id, chapterIndex: chapterIndex)
+            try Task.checkCancellation()
+            guard isCurrent() else { return false }
+            store?.clearCachedChapter(bookId: book.id, chapterIndex: chapterIndex)
+            didClear()
+            return true
+        }
+        inFlightRequests[chapterIndex] = InFlightRequest(token: token, priority: .jump, task: task, isRefetch: true)
+        return task
+    }
+
+    /// 真正退出才停止主动刷新；被设置页或播放器暂时覆盖不算退出。
+    func cancelChapterRefetches() {
+        for (index, request) in inFlightRequests where request.isRefetch {
+            inFlightRequests.removeValue(forKey: index)
+            request.task.cancel()
+        }
+    }
+
     func ensureChapterReady(
         book: ReadingBook?,
         chapterIndex: Int,
         priority: ChapterFetchPriority,
         store: BookStore?
     ) async {
-        guard let book, let refs = book.onlineChapters, refs.indices.contains(chapterIndex) else {
-            return
-        }
+        guard let book, let refs = book.onlineChapters, refs.indices.contains(chapterIndex),
+              inFlightRequests[chapterIndex]?.isRefetch != true, !Task.isCancelled else { return }
         currentBookId = book.id.uuidString
+        let generation = chapterListGeneration
 
         // Volume headers (作品相关 / 第N卷 …) have no fetchable content. Mark ready immediately so
         // the builder renders a divider page instead of spinning forever on an empty fetch.
@@ -168,6 +225,7 @@ final class ReaderViewModel: ObservableObject {
                 existing.task.cancel()
                 await chapterFetcher.cancelChapter(bookId: book.id, chapterIndex: chapterIndex)
             }
+            guard generation == chapterListGeneration, !Task.isCancelled else { return }
             setChapterState(.ready, for: chapterIndex, contentAvailable: true)
             return
         }
@@ -183,7 +241,10 @@ final class ReaderViewModel: ObservableObject {
             chapterStates[chapterIndex] = .loading
         }
 
-        if await chapterFetcher.isChapterCached(book: book, chapterIndex: chapterIndex) {
+        let cached = await chapterFetcher.isChapterCached(book: book, chapterIndex: chapterIndex)
+        guard generation == chapterListGeneration, inFlightRequests[chapterIndex]?.isRefetch != true,
+              !Task.isCancelled else { return }
+        if cached {
             setChapterState(.ready, for: chapterIndex, contentAvailable: true)
             if let existing = inFlightRequests.removeValue(forKey: chapterIndex) {
                 existing.task.cancel()
@@ -585,17 +646,35 @@ final class ReaderViewModel: ObservableObject {
         chapterIndex: Int,
         priority: ChapterFetchPriority,
         store: BookStore?,
-        token: UUID
+        token: UUID,
+        isCurrent: (@MainActor () -> Bool)? = nil,
+        discard: (@MainActor () -> Void)? = nil,
+        prepare: (@MainActor () async throws -> Bool)? = nil
     ) -> Task<Void, Never> {
         Task { [weak self] in
             guard let self else { return }
+            @MainActor func acceptsResult(prepared: Bool = true) -> Bool {
+                guard self.inFlightRequests[chapterIndex]?.token == token else { return false }
+                guard prepared, isCurrent?() != false else {
+                    self.resetChapterState(for: chapterIndex)
+                    discard?()
+                    return false
+                }
+                return true
+            }
+
+            guard acceptsResult() else { return }
             do {
+                try Task.checkCancellation()
+                if let prepare, !acceptsResult(prepared: try await prepare()) { return }
+                try Task.checkCancellation()
                 let package = try await self.chapterFetcher.fetchChapter(
                     book: book,
                     chapterIndex: chapterIndex,
                     priority: priority,
                     store: store
                 )
+                guard acceptsResult() else { return }
                 guard !Task.isCancelled else {
                     self.clearInFlight(chapterIndex: chapterIndex, token: token)
                     return
@@ -624,6 +703,7 @@ final class ReaderViewModel: ObservableObject {
                 }
                 self.finishFetch(chapterIndex: chapterIndex, token: token, result: result)
             } catch {
+                guard acceptsResult() else { return }
                 // Cancellation is not a verdict on the chapter, and it arrives in more than
                 // one shape: `CancellationError` thrown directly, and `URLError.cancelled`
                 // (-999) from a URLSession or WKWebView navigation torn down mid-flight.

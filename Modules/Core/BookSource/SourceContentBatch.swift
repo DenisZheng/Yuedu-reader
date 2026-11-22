@@ -15,6 +15,8 @@ final class SourceContentBatch: @unchecked Sendable {
             }
         }
     }
+    private static let htmlTag = try! NSRegularExpression(pattern: #"<[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?/?>"#)
+
     let refs: [OnlineChapterRef]
     let variables: [String: String]
     private let bookId: UUID
@@ -63,21 +65,29 @@ final class SourceContentBatch: @unchecked Sendable {
     }
 
     func save(_ identifier: JSValue, content: String,
+              supplemental: (OnlineChapterRef) -> ChapterSubContent? = { _ in nil },
               replace: (OnlineChapterRef, String) throws -> String) throws -> Bool {
         try checkCurrent()
         guard !state.withLock({ $0.closed }) else { return false }
         let ref = try resolve(identifier)
         let text = try replace(ref, content)
+        let subContent = supplemental(ref)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        // 只有书源真回传了 HTML 才保留原稿。替换后的纯文本只写正文，不冒充原始 HTML。
+        let rawHTML = content.utf8.contains(0x3c) && Self.htmlTag.firstMatch(
+            in: content, range: NSRange(content.startIndex..., in: content)
+        ) != nil ? content : nil
         try state.withLock { state in
-            state.bytes += text.utf8.count
+            let rawBytes = text == rawHTML ? 0 : rawHTML?.utf8.count ?? 0
+            state.bytes += text.utf8.count + rawBytes + (subContent?.text.utf8.count ?? 0)
             guard state.bytes <= 16 * 1024 * 1024 else { throw Failure.budget }
         }
         try checkCurrent()
         guard let ticket = tickets[ref.index] else { throw Failure.invalidIdentifier }
         _ = try SourcePerfTrace.span("batch.cache", "index=\(ref.index) bytes=\(text.utf8.count) main=\(Thread.isMainThread)") {
             try repository.saveToCache(content: text, bookId: bookId, chapterIndex: ref.index,
-                sourceURL: ref.url, tocTitle: ref.title, rawHTML: text, writeTicket: ticket)
+                sourceURL: ref.url, tocTitle: ref.title, rawHTML: rawHTML,
+                storeNormalizedHTML: rawHTML != nil, subContent: subContent, writeTicket: ticket)
         }
         _ = state.withLock { $0.saved.insert(ref.index) }
         return true

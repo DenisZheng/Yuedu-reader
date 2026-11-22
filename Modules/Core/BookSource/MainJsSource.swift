@@ -21,17 +21,19 @@ enum MainJsSource {
         let exists: Bool
         let value: String?
         let book: String?
+        let hasReviewReplies: Bool?
     }
 
     /// 函数和调用表达式在同一新scope中，返回值的getter／toJSON也在同一执行预算内。
     static func functionScript(_ script: String, name: String, arguments: [String]) -> String {
         let expression = name + "(" + arguments.joined(separator: ",") + ")"
         let book = arguments.contains("book") ? "JSON.stringify(book)" : "null"
+        let reviewCapability = name == "getReviewDetail" ? ",hasReviewReplies:typeof getReviewReplies==='function'" : ""
         return script + "\n;" + """
         JSON.stringify((function(){
             if(typeof \(name)!=='function') return {exists:false,value:null,book:\(book)};
             var value=\(expression);
-            return {exists:true,value:value==null?null:(typeof value==='string'?value:JSON.stringify(value)),book:\(book)};
+            return {exists:true,value:value==null?null:(typeof value==='string'?value:JSON.stringify(value)),book:\(book)\(reviewCapability)};
         })())
         """
     }
@@ -88,15 +90,17 @@ enum MainJsSource {
         for name in required where functions[name] != true { throw Failure.missingFunction(name) }
         if !source.exploreUrl.isEmpty, functions["explore"] != true { throw Failure.missingFunction("explore") }
         if functions["loginUi"] == true {
-            // 动态登录仍是后置协议；明确拒绝，不能伪装成旧式表单。
-            throw Failure.invalidConfiguration
+            guard source.loginUi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.invalidConfiguration }
+            guard functions["loginAction"] == true else { throw Failure.missingFunction("loginAction") }
+            source.loginUi = LoginUiV2.marker
+        } else if !source.loginUi.isEmpty, functions["login"] != true {
+            throw Failure.missingFunction("login")
         }
-        if !source.loginUi.isEmpty, functions["login"] != true { throw Failure.missingFunction("login") }
         if let size = config["maxBatchSize"] {
             guard let number = size as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
                   number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue, number.doubleValue > 1,
                   functions["getContentBatch"] == true else { throw Failure.invalidConfiguration }
-            source.ruleContent.maxBatchSize = min(number.intValue, 50)
+            source.ruleContent.maxBatchSize = Int(min(number.doubleValue, 50))
         } else if functions["getContentBatch"] == true { throw Failure.invalidConfiguration }
         return source
     }

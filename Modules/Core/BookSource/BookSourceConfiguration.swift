@@ -31,11 +31,19 @@ enum BookSourceConfiguration {
                 case .object(let value): object = value
                 case .string(let value):
                     if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
-                    // 双重编码规则沿既有合同读取；无效输入不能悄悄写成空规则。
-                    guard let bytes = value.data(using: .utf8) else { throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "规则不是UTF-8") }
-                    object = try JSONDecoder().decode([String: PreservedJSON].self, from: bytes)
+                    do {
+                        object = try JSONDecoder().decode([String: PreservedJSON].self, from: Data(value.utf8))
+                    } catch where key.stringValue == "ruleContent" {
+                        result[key.stringValue] = raw
+                        continue
+                    }
                 case .null: continue
-                default: throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "规则必须是对象或JSON字符串")
+                default:
+                    guard key.stringValue == "ruleContent" else {
+                        throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "规则必须是对象或JSON字符串")
+                    }
+                    result[key.stringValue] = raw
+                    continue
                 }
                 let extra = object.filter { !fields.contains($0.key) }
                 if !extra.isEmpty { result[key.stringValue] = .object(extra) }

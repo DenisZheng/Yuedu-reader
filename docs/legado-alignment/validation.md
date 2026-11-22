@@ -1557,3 +1557,102 @@ REAL_BATCH index=249 original=PASS adapted=PASS chapters=3 requests=10
 本次会话实际验证证据仍有效：scripts/xctest.sh主相关选择79项／8 suites／9.318秒／TEST SUCCEEDED；另一次fixture测试1项／0.171秒／TEST SUCCEEDED；用户批准的实站适配探针1项／20.412秒／TEST SUCCEEDED，两真实站原样单章及批量三章一致，21个受控Swift请求。内容树与验收时相同，因此只核对决定性日志、SHA和合并树，不重复全量或额外公网执行。交付时ruby scripts/check_localizations.rb再次实际输出Localization OK；源码隐私单测3项、文档UTF-8/LF/代码围栏与119本地链接及git diff --check核对见本次输出。
 
 用户提供流程人工已通过，仍不宣称原生作者批量源、全部书源／DRM、真实账户、真机／iPad／最低iOS17／VoiceOver专项通过。系统Files文件夹导航原限制未修，根层选文件绕行继续如实记录。原8bc未签名Release IPA仍不含mainJs和本批内容，未自动重新打包或发布。回滚若后续批准，使用普通撤回提交保留共享历史与数据，不reset main、git clean或force push。
+
+## 副文自动开发与助手验收（2026-11-22）
+
+用户明确授权按建议自动开发、测试和验收，人在屏幕外，不提问汇报；本次不暂停等用户人工，不把助手UI称为用户确认。范围与受限项见[副文批次](sub-content-source-batch.md)，基线main 7be2c8c1，分支feature/legado-sub-content，未commit／合入／push。
+
+按固定Android330e606落实声明式subContent：文本原页追加在整章replaceRegex前；音频歌词／视频弹幕可HTTP取回，独立存于唯一ChapterPackageArtifact；图片不拼文字，文本URL不自动请求。保持mainJs与批量协议区别，不自动重跑副文规则；chapter.putLyric／putDanmaku主动回存经当前章节桥、字节预算及唯一cache票据处理。取消／清cache／源失效、同源等待时上下文交错、分型失败、旧artifact和无变化不写均覆盖。
+
+实际命令均用动态Xcode／sim目标及Reader-Fork-Dev：
+
+```bash
+bash scripts/xctest.sh -l .artifacts/sub-content/final-regressions.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appTests/SourceSubContentTests' \
+  -only-testing:'yuedu appTests/SourceContentBatchTests' \
+  -only-testing:'yuedu appTests/MainJsSourceTests' \
+  -only-testing:'yuedu appTests/ChapterCacheRepositoryWriteTests' \
+  -only-testing:'yuedu appTests/ChapterCacheMigrationTests' \
+  -only-testing:'yuedu appTests/OnlineReaderPipelineUnificationTests' \
+  -only-testing:'yuedu appTests/OnlineChapterMergeHeuristicTests'
+```
+
+88项／7 suites／4.516秒，最终TEST SUCCEEDED。原始缺口red-2真实2项／2问题；主脚本chapter歌词桥另有真实.javascript RED；工具超时／测试启动握手等待不算业务测试通过。等待阶段App sample停在XCTest准备配置，保留证据，未删除模拟器／DerivedData。fixture历史计数改为测试随机sourceKey隔离，没有清原源变量或改期望。
+
+助手UI在新隔离设备Legado副文自动验收-bb6f66／BEC54913-3551-4004-AC0B-5B2A130F55B0／iPhone 18 Pro Max／iOS27.2运行：原生歌词、空歌词、明确失败、视频XML弹幕与时间按钮／关闭／重开。第一次UI实际发现普通源没有eventListener就不显示歌词入口，修复后2项／96.768秒／0 failures／TEST SUCCEEDED（ui-2.log）。本地只用5本自建书、静音WAV及既有自建视频，媒体HTTP限64请求，不代表真机音画或原包实站播放。
+
+UI提供LRC／XML原生时间列表和调用既有定位，不宣称全套滚动弹幕／实时歌词高亮；未映射格式明确受限。五语言9新key，ruby scripts/check_localizations.rb输出Localization OK；python3 -B -m unittest scripts.tests.test_source_debug_logging_privacy -v真实3项／OK；文档UTF-8／LF／围栏／链接及git diff --check核对本次输出。临时UI／导出探针已归档.artifacts/sub-content/probes，不遗留自动公网／依赖本机产物的常规Tests。
+
+原253／307包SHA不变，个人数据、备份、批量验收设备和旧IPA保持；只停止本次自建本机媒体服务。下一批按依赖继续只读段评和 LoginUiV2，不因本次验收恢复收费／Google／iCloud／Cron、扩大账号或系统权限，不自动 commit／push／发布。
+
+## 原生只读段评自动验收（2026-11-22）
+
+按 [本批合同](readonly-review-source-batch.md) 对齐声明式和 mainJs 摘要、段落键、详情、回复和分页。原正文 HTML 标记／网页段评路径保留。本次没有写动作、真实账号或外站段评请求。
+
+在 Xcode 27.2（27B52）、Reader-Fork-Dev、动态默认 iPhone 模拟器跑相关回归：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)" YUEDU_SCHEME=Reader-Fork-Dev
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+suites=(NativeReviewTests ModernRuleEngineTests ParagraphReviewMarkerTests ReviewSummaryResponseCacheTests
+        BookSourceConfigurationPersistenceTests DismissalSequencedPresentationTests ReaderChromeCustomizationTests
+        SourceSubContentTests SourceContentBatchTests MainJsSourceTests ChapterCacheRepositoryWriteTests
+        ChapterCacheMigrationTests OnlineReaderPipelineUnificationTests OnlineChapterMergeHeuristicTests)
+args=()
+for suite in "${suites[@]}"; do args+=("-only-testing:yuedu appTests/$suite"); done
+bash scripts/xctest.sh -l .artifacts/readonly-review/final-regression-1.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile "${args[@]}"
+```
+
+关键输出 `Test run with 172 tests in 14 suites passed after 5.320 seconds`、`** TEST SUCCEEDED **`。初始 RED 是真实行为失败，不以编译失败充数。随后在隔离设备 `Legado只读段评自动验收`（iPhone 18 Pro Max / iOS 27.2，UDID `1BB9B3E9-89A9-4582-8F16-33EE0655F06C`）串行选 `yuedu appTests/NativeReviewTests` 及 `yuedu appUITests/TemporaryNativeReviewUITests`，日志 `.artifacts/readonly-review/ui-2.log`：13 项／0.587 秒、2 项 UI／103.725 秒，均无失败，`** TEST SUCCEEDED **`。相应截图及 JSON 夹具仅在本机 artifacts，临时探针归档至 `.artifacts/readonly-review/probes`，不用私人源／账号。
+
+`ruby scripts/check_localizations.rb` 五语言检查成功；`python3 -B -m unittest scripts.tests.test_source_debug_logging_privacy -v` 3 项／OK；文档及 `git diff --check` 通过；253／307 原始包 SHA 与基准一致。未做真机、iPad、最低 iOS 17、VoiceOver 专项及全部站点验证。回滚只针对只读段评的改动，不替换前批副文和用户数据。未 commit、merge、push 或发布。
+
+## LoginUiV2 自动验收（2026-11-22）
+
+[本批合同](login-ui-v2-source-batch.md)：动态 V2 指令进现有书源和 RSS 宿主；只在收到有效 `login` 命令时由原凭据存储处理原生保存，不把编辑、关闭或字段错误自动保存。旧数组／网页登录回归分别验证。
+
+在 Xcode 27.2（27B52）、Reader-Fork-Dev、独立 iPhone 18 Pro Max／iOS 27.2（设备配置 `.artifacts/login-ui-v2/ui-device.json`）执行：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)" YUEDU_SCHEME=Reader-Fork-Dev
+device="$(python3 -c 'import json; print(json.load(open(".artifacts/login-ui-v2/ui-device.json"))["udid"])')"
+export YUEDU_DEST="id=$device"
+suites=(LoginUiV2Tests RSSLoginServiceTests LoginFormRenderingTests LoginFormLayoutTests MainJsSourceTests
+        NativeReviewTests SourceSubContentTests SourceContentBatchTests SourceDebugLoggingCompatibilityTests
+        BookSourceConfigurationPersistenceTests)
+args=()
+for suite in "${suites[@]}"; do args+=("-only-testing:yuedu appTests/$suite"); done
+bash scripts/xctest.sh -t 360 -l .artifacts/login-ui-v2/final-regressions.log -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -resultBundlePath .artifacts/login-ui-v2/final-regressions.xcresult "${args[@]}" \
+  -only-testing:'yuedu appTests/RSSNativeWebFlowTests/loginPageOwnsItsForm()' \
+  -only-testing:'yuedu appUITests/TemporaryLoginUiV2UITests'
+```
+
+输出 `Test run with 90 tests in 10 suites passed after 5.007 seconds`，既有布局 XCTest 输出 `Executed 2 tests, with 0 failures (0 unexpected) in 0.544 (0.548) seconds`，两项隔离 UI 输出 `Executed 2 tests, with 0 failures (0 unexpected) in 68.748 (68.754) seconds`，最终 `** TEST SUCCEEDED **`。上述计数不把前两批的运行重复相加。
+
+首次 UI 失败留在 `ui-1.log` 与 `ui-1-triage/book-hierarchy.txt`：点击整行中心没有改变系统开关，快照仍为 0。修正探针，等待值改变后走同一真实界面，未放宽对字段错误、重绘、冷却、关闭的断言。最终四张截图保存在 `.artifacts/login-ui-v2/screenshots/`；临时 UI 探针归档至 `.artifacts/login-ui-v2/probes/`，复跑须先把探针临时放回原测试目录，并使用新结果路径。既有模拟器、验收数据、备份与原始源包均保留。
+
+`ruby scripts/check_localizations.rb` 五语言通过，隐私测试 3 项通过，文档及 `git diff --check` 通过，原始源包 SHA-256 不变。无人工或真实账号验收；未验证真机、iPad、最低 iOS 17、VoiceOver 与站点验证。未提交、合并、推送、发布或重新打包；回滚只撤本批 V2 改动，不覆盖源包与数据。
+
+## 批量正文与缓存 Review 修复（2026-11-22）
+
+在 `feature/legado-sub-content` 的既有未提交工作区修复 [批量正文](content-batch-source-batch.md) 相关问题。iOS 基线为 `7be2c8c1`，Android 固定基准仍为 `330e606c`。本轮没有执行原始书源包、真实站点脚本或账号操作。
+
+- 声明式 `ruleContent` 外形错误时，导入仍保留其他规则；无法解析的原值可导出，用户改成有效规则后采用新值。声明式 `maxBatchSize` 接受能精确转换的整数值，坏值只停用批量；mainJs 保留 Android 的批量函数配对要求，并在浮点数域先限制到 50，再转换为整数。
+- 批量选章和回存后读取统一用清洗后的 URL，仍接受旧缓存中的原 URL。批次任务按 ID 退出在途表，旧等待者不能影响新任务，单个等待者取消也不取消仍被共享的任务。章节的写入／删除在本次替换及正常单章回退可见，章间不串值，批量结束恢复 JS 读取回调与章／书对象。HTML 原稿与替换后的正文分开存；纯文本不生成假 HTML。上层不再重写已验证落盘的正文包。
+- 缓存仓库按书目录串行落盘与清理，不同书可以并行；跨仓库实例访问同一目录仍使用同一份写入票据。异步清理明确离开主线程，拿到书锁后再检查取消。阅读器同章重复刷新合并，待清理完成并确认仍是同一章才登记内容替换；退出、目标变更或清理失败不产生旧替换。
+
+自建固定输入的原始失败日志留在 `.artifacts/batch-review/`：`red.log`（规则形状／数量、变量、HTML 和 URL 缓存）、`generation-red.log`（主脚本超大整数和旧批次阻挡新请求）、`cache-lock-red-2.log`（一本书清理阻塞另一书写入）。编译阶段的失败未计作行为复现。
+
+使用 Xcode 27.2（27B52）、`Reader-Fork-Dev`、`scripts/sim.sh dest` 解析出的 iOS 模拟器执行：
+
+```bash
+bash .artifacts/batch-review/run-regressions.sh .artifacts/batch-review/final-regression-3.log
+```
+
+脚本调用 `scripts/xctest.sh`，选 16 套回归，包含书源导入、批量与单章、缓存持久化／迁移、下载、阅读器刷新、副文、段评和 LoginUiV2。实际输出 `Test run with 164 tests in 16 suites passed after 48.314 seconds`，随后 `** TEST SUCCEEDED **`。不同书的清理／写入用受控事件验证独立进度，不把夹具耗时外推为整机提速。
+
+本轮是模拟器自动回归，未重复 UI 走查，也未验证真实站点／账号、真机、iPad、最低 iOS 17 或 VoiceOver。原始源包 SHA-256 与基准一致。回滚只反向应用本轮改动，保留既有副文、段评、LoginUiV2 和用户数据。上述各节的未提交、未推送为验收时状态。验收后用户授权将副文、只读段评、LoginUiV2 与 Review 修复一并提交推送到 `origin/feature/legado-sub-content`；不合入 `main`，不发布或重新打包。

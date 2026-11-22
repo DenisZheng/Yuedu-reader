@@ -1,7 +1,21 @@
 import SwiftUI
 
-/// RSS登录是源自己的前台操作；正文enableJs不关闭网站登录必需的JavaScript，且不把源桥暴露给登录网站。
 struct RSSSourceLoginView: View {
+    let source: RSSSource
+    let owner: RSSStore
+
+    var body: some View {
+        if LoginUiV2.isCandidate(source.loginUi) {
+            SourceLoginUiV2View(title: source.name, service: .init(target: .rss(source, owner)))
+                .hidesRootTabBar()
+        } else {
+            RSSLegacySourceLoginView(source: source, owner: owner)
+        }
+    }
+}
+
+/// RSS登录是源自己的前台操作；正文enableJs不关闭网站登录必需的JavaScript，且不把源桥暴露给登录网站。
+private struct RSSLegacySourceLoginView: View {
     let source: RSSSource
     let owner: RSSStore
     @Environment(\.dismiss) private var dismiss

@@ -113,6 +113,78 @@ struct ChapterCacheRepositoryWriteTests {
         #expect(reloaded?.content == "正文")
     }
 
+    @Test("一本书正在清理时，另一书仍能完成写入")
+    func differentBookWritesDoNotWaitForRemoval() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bookA = UUID(), bookB = UUID()
+        let entering = AsyncStream<Void>.makeStream()
+        let otherBookSaved = DispatchSemaphore(value: 0)
+        let repository = ChapterCacheRepository(rootDirectory: root) { url in
+            if url.lastPathComponent == bookA.uuidString {
+                entering.continuation.yield(())
+                // 等另一书真正写完；仅用超时报告旧全局锁，不用延时推动状态。
+                #expect(otherBookSaved.wait(timeout: .now() + 3) == .success,
+                        "书 A 正在清理时，书 B 的写入被同一把锁阻塞")
+            }
+            try FileManager.default.removeItem(at: url)
+        }
+        try repository.saveChapterPackageToCache(package(bookId: bookA, content: "旧正文"), rawHTML: nil, normalizedHTML: nil)
+        let removal = Task.detached { repository.clearAllChapterCache(bookId: bookA) }
+        var events = entering.stream.makeAsyncIterator()
+        _ = await events.next()
+        defer { otherBookSaved.signal() }
+        try repository.saveChapterPackageToCache(package(bookId: bookB, content: "新正文"), rawHTML: nil, normalizedHTML: nil)
+        otherBookSaved.signal()
+        await removal.value
+        #expect(repository.loadChapterPackageSync(bookId: bookA, chapterIndex: 0) == nil)
+        #expect(repository.loadChapterPackageSync(bookId: bookB, chapterIndex: 0)?.content == "新正文")
+    }
+
+    @Test("不同 repository 开同一个目录，整书清理仍让旧章票据失效")
+    func clearInvalidatesWritersAcrossRepositories() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = ChapterCacheRepository(rootDirectory: root)
+        let second = ChapterCacheRepository(rootDirectory: root.appendingPathComponent(".", isDirectory: true))
+        let bookId = UUID()
+        let old = first.beginWrite(bookId: bookId, chapterIndex: 0)
+        defer { first.finishWrite(old) }
+        second.clearAllChapterCache(bookId: bookId)
+        #expect(throws: ChapterCacheWriteError.staleWrite) {
+            try first.saveChapterPackageToCache(package(bookId: bookId, content: "旧正文"),
+                                               rawHTML: nil, normalizedHTML: nil, writeTicket: old)
+        }
+        let new = second.beginWrite(bookId: bookId, chapterIndex: 0)
+        defer { second.finishWrite(new) }
+        first.finishWrite(old)
+        try first.saveChapterPackageToCache(package(bookId: bookId, content: "新正文"),
+                                           rawHTML: nil, normalizedHTML: nil, writeTicket: new)
+        #expect(second.loadChapterPackageSync(bookId: bookId, chapterIndex: 0)?.content == "新正文")
+    }
+
+    @Test("从主线程等清理磁盘，并且已取消的清理不删正文")
+    @MainActor
+    func asyncRemovalRunsOffMainAndRespectsCancellation() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = ChapterCacheRepository(rootDirectory: root) { url in
+            #expect(!Thread.isMainThread)
+            try FileManager.default.removeItem(at: url)
+        }
+        let bookId = UUID()
+        try repository.saveChapterPackageToCache(package(bookId: bookId, content: "正文"), rawHTML: nil, normalizedHTML: nil)
+        let cancelled = Task { try await repository.clearChapterCacheAsync(bookId: bookId, chapterIndex: 0) }
+        cancelled.cancel()
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
+        #expect(repository.loadChapterPackageSync(bookId: bookId, chapterIndex: 0)?.content == "正文")
+
+        try await repository.clearChapterCacheAsync(bookId: bookId, chapterIndex: 0)
+        #expect(repository.loadChapterPackageSync(bookId: bookId, chapterIndex: 0) == nil)
+        try await repository.clearAllChapterCacheAsync(bookId: bookId)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(bookId.uuidString).path))
+    }
+
     private func temporaryRoot() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("ChapterCacheRepositoryWriteTests-\(UUID().uuidString)")

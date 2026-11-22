@@ -1,0 +1,20 @@
+# 原生只读段评
+
+本批在副文批次之后独立验收，本地基线为 `main` 的 `7be2c8c1`。Android 合同固定在 `330e606c4d57e08adc056ff8ab7a4132c784da9a`，对照 `ReviewRule`、`ReviewRuleParser`、`JsSourceReview`、`ReadBookActivity` 和 `ReviewDetailDialog`。本批只读取，不新增发帖、点赞、删除或登录行为。
+
+## iOS 行为
+
+- 声明式书源由 `ruleReview.enabled` 和完整摘要规则启用。摘要使用 `-1` 表示标题，正文使用正段落序号；详情请求使用源返回的计数和段落数据键，不使用 CoreText 页码作为身份。详情与独立回复分别校验配置。
+- 主脚本通过既有宿主调用 `getReviewSummary(chapter,book)`、`getReviewDetail(chapter,book,paraIndex,paraData,page)`、可选 `getReviewReplies(chapter,book,paraIndex,paraData,reviewId,page)`。缺函数、合法空结果、脚本或解析失败有不同结果；回复入口取决于实际能力，不靠猜测回复计数。
+- 详情支持纯文本、结构化内容、徽章、内嵌回复、独立回复及分页。复用请求执行器、规则引擎和登录上下文；声明式网络响应及解码后结果均限 1 MiB，主脚本结果进入解析前限 1 MiB。每页（含回复）最多 1,000 条、深度最多 8、每条分页链最多 50 页。成功后才推进页号；失败可重试原页；取消和配置失效不应用旧结果。后续页目标按当前详情地址解析，不把服务端传来的请求选项或脚本当成新的源规则执行。
+- 现代阅读器书卡新增「原生段评」。原生列表显示「本章说」及各段序号／计数，点入查看该段详情和回复，不改变正文布局或旧网页段评。图片／音频为用户主动打开的 HTTP(S) 附件链接，不自动拉取头像／媒体，不复制 Android 的正文气泡、分页预取或段评媒体播放器。不新增缓存或持久化评论。
+- 界面采用 inline NavigationStack、List、系统返回及关闭；空、加载、错误和重试不靠颜色表示。跟随阅读器深浅色，五语言。按钮标明用途，作者／时间可纵向排列。专门的 VoiceOver、最大动态字体、深色及长文案实机走查不在本次通过范围。
+
+## 自动验收
+
+- 初始 RED：`red.log` 中 1 项／3 个断言失败，证明旧 `ReviewRule` 不承载执行字段。`behavior-5.log` 复现坏 CSS 被误报为空；`edge-red.log` 复现响应超限分类、配置失效、缺省段落键、结构化回复及重复页问题。均已在后续测试转绿。
+- `.artifacts/readonly-review/final-regression-1.log`：172 项／14 suites，5.320 秒，`TEST SUCCEEDED`。涵盖声明式 HTML／JSON、主脚本、内嵌／独立回复、分页、取消、失效、跨域继承请求头、旧段评标记，以及副文、批量正文、缓存和阅读器回归。
+- `.artifacts/readonly-review/ui-2.log`：在新的独立 iPhone 18 Pro Max（iOS 27.2）上，用 3 本自建书完成 13 项段评用例与 2 项 UI 测试。实际经过书架、书卡、标题／第 1 段、详情、回复返回、下一页、空与失败。2 项 UI 共 103.725 秒，零失败；截图在 `ui-2.xcresult` 与 `screenshots/`。这是助手自动验收，不是用户人工反馈。
+- 未执行私人脚本、登录真实账号或发出站点段评请求。旧网页段评保留并通过标记与摘要缓存回归；未声称验证所有真实书源、真机、iPad、最低 iOS 17 或全部无障碍场景。
+
+命令与环境见[验证记录](validation.md)。自动验收时本批尚未提交、合并或推送；需要回滚时只移除本批的调用、模型、界面和测试差异，保留此前副文改动、原源包、数据及模拟器。

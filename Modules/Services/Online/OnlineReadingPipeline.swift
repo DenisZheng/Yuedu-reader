@@ -10,13 +10,6 @@ extension Notification.Name {
 }
 
 enum OnlineChapterCacheWritePolicy {
-    static func shouldReusePersistedRenderArtifacts(
-        package: ChapterPackage,
-        hasBookSource: Bool
-    ) -> Bool {
-        hasBookSource && (package.rawHTMLFilename != nil || package.normalizedHTMLFilename != nil)
-    }
-
     /// Rejects normalized source render artifacts that cannot preserve current
     /// HTML-only semantics (such as 段評 badges). This includes the legacy
     /// normalized-without-raw shape and artifacts written before the current
@@ -89,12 +82,21 @@ actor ChapterFetchManager {
     private let moduleReader: ModuleBookReader
     private var tasks: [String: Task<ChapterPackage, Error>] = [:]
     private var priorities: [String: ChapterFetchPriority] = [:]
-    private var batchTasks: [String: (id: UUID, task: Task<[Int], Error>)] = [:]
+    private struct BatchRequest {
+        let id: UUID
+        let task: Task<[OnlineChapterRef], Error>
+        var waiters: Set<UUID> = []
+    }
+    private var batchTasks: [String: BatchRequest] = [:]
     private var batchFallback: [String: Set<Int>] = [:]
-    private var batchWaiters: [String: Set<UUID>] = [:]
     private var batchWaiterObserver: (@Sendable (Int) -> Void)?
-    // 固定输入测试等到真实共享等待者登记，不靠sleep等状态稳定。
-    func observeBatchWaiters(_ observer: @escaping @Sendable (Int) -> Void) { batchWaiterObserver = observer }
+    private var beforeBatchWaiterRelease: (@Sendable () async -> Void)?
+    // 固定输入按加入、拿到结果的事件驱动等待者，不依赖调度或休眠。
+    func observeBatchWaiters(_ observer: @escaping @Sendable (Int) -> Void,
+                             beforeRelease: (@Sendable () async -> Void)? = nil) {
+        batchWaiterObserver = observer
+        beforeBatchWaiterRelease = beforeRelease
+    }
     private let sourceLookup: @MainActor @Sendable (UUID) -> BookSource?
 
     // MARK: - Generation Token
@@ -286,7 +288,11 @@ actor ChapterFetchManager {
         let ref = refs[chapterIndex]
         guard !ref.shouldRenderAsVolumeSeparator else { return nil }
 
-        let sanitizedURL = RuleEngine.sanitizeExtractedURL(ref.url)
+        return cachedChapterPackage(book: book, chapterIndex: chapterIndex, originalRef: ref, sanitizedURL: ref.sanitizedContentURL)
+    }
+
+    private func cachedChapterPackage(book: ReadingBook, chapterIndex: Int, originalRef ref: OnlineChapterRef,
+                                      sanitizedURL: String) -> ChapterPackage? {
         var shouldClearCachedChapter = false
         var candidateURLs = [sanitizedURL]
         if sanitizedURL != ref.url {
@@ -339,8 +345,9 @@ actor ChapterFetchManager {
         }
 
         // Clean up HTML fragment URLs that may remain from old caches (e.g. <a href="...">Chapter 1</a>)
-        var ref = refs[chapterIndex]
-        let sanitizedURL = RuleEngine.sanitizeExtractedURL(ref.url)
+        let originalRef = refs[chapterIndex]
+        let sanitizedURL = originalRef.sanitizedContentURL
+        var ref = originalRef
         ref.url = sanitizedURL
 
         if ref.hasVolumeSeparatorTitle || ref.isVolume {
@@ -358,40 +365,9 @@ actor ChapterFetchManager {
             throw FetchError.volumeSeparator(ref.title)
         }
 
-        var shouldClearCachedChapter = false
-
-        // Load once and branch on the result. The `else if` this replaces re-ran the same
-        // call with the same arguments purely to tell "no cache" from "unusable cache" —
-        // and each run re-reads the metadata, the artifact and the whole chapter body, then
-        // checksums the body. It runs on this actor's serial executor, which now serves
-        // every concurrent download worker, so the duplicate was work they all queued behind.
-        if let cached = bookSourceFetcher.loadChapterPackageSync(
-            bookId: book.id,
-            chapterIndex: chapterIndex,
-            expectedSourceURL: sanitizedURL,
-            expectedTOCTitle: ref.title
-        ) {
-            if isReusableCachedPackage(cached, for: book) {
-                return cached
-            }
-            shouldClearCachedChapter = true
-        }
-        // Also accept caches stored under the original URL (legacy path)
-        if sanitizedURL != refs[chapterIndex].url,
-           let legacyCached = bookSourceFetcher.loadChapterPackageSync(
-            bookId: book.id,
-            chapterIndex: chapterIndex,
-            expectedSourceURL: refs[chapterIndex].url,
-            expectedTOCTitle: ref.title
-        ) {
-            if isReusableCachedPackage(legacyCached, for: book) {
-                return legacyCached
-            }
-            shouldClearCachedChapter = true
-        }
-
-        if shouldClearCachedChapter {
-            bookSourceFetcher.clearChapterCache(bookId: book.id, chapterIndex: chapterIndex)
+        if let cached = cachedChapterPackage(book: book, chapterIndex: chapterIndex, originalRef: originalRef,
+                                              sanitizedURL: sanitizedURL) {
+            return cached
         }
 
         let taskKey = key(bookId: book.id, chapterIndex: chapterIndex)
@@ -513,15 +489,16 @@ actor ChapterFetchManager {
                         domain: "OnlineReadingPipeline", code: -2,
                         userInfo: [NSLocalizedDescriptionKey: "找不到來源配置"])
                 }
+                var requestRef = ref
                 if priority == .download || priority == .prefetch || priority == .background {
-                    try await self.prepareContentBatch(book: book, requestedIndex: chapterIndex, source: source)
+                    let variables = try await self.prepareContentBatch(book: book, requestedIndex: chapterIndex, source: source)
                     try Task.checkCancellation()
-                    if let cached = bookSourceFetcher.loadChapterPackageSync(bookId: book.id, chapterIndex: chapterIndex,
-                            expectedSourceURL: ref.url, expectedTOCTitle: ref.title),
-                       OnlineChapterCacheWritePolicy.isReusableCachedPackage(cached, hasBookSource: true) { return cached }
+                    if let cached = cachedChapterPackage(book: book, chapterIndex: chapterIndex, originalRef: originalRef,
+                                                          sanitizedURL: ref.url) { return cached }
+                    if let variables { requestRef.runtimeVariables = variables }
                 }
                 return try await bookSourceFetcher.fetchChapterPackage(
-                    ref: ref,
+                    ref: requestRef,
                     bookId: book.id,
                     source: source,
                     chapterReferer: book.tocURL ?? book.bookInfoURL ?? book.source,
@@ -610,28 +587,8 @@ actor ChapterFetchManager {
                         "len": package.content.count,
                     ])
                 }
-                // BookSourceFetcher already persisted raw/normalized render artifacts when the
-                // policy says to reuse them. Re-saving from plain text here would strip
-                // HTML-only inline markers such as paragraph-review badges.
-                //
-                // The cached file is all a cached chapter is: `isChapterCached` and every load
-                // read the file. Each chapter used to be marked in the book's table of contents
-                // as well (`cachedFilename`), which nothing decides by, and each mark wrote the
-                // whole list again — 385 KB for a 2000-chapter book, per chapter read, preloaded
-                // or downloaded (3.0.0 (136) MetricKit disk-write exception, 1073 MB in a day).
-                if !OnlineChapterCacheWritePolicy.shouldReusePersistedRenderArtifacts(
-                    package: package,
-                    hasBookSource: book.chaptersBuiltByRules
-                ) {
-                    try bookSourceFetcher.saveToCache(
-                        content: package.content,
-                        bookId: book.id,
-                        chapterIndex: chapterIndex,
-                        sourceURL: ref.url,
-                        tocTitle: ref.title,
-                        storeNormalizedHTML: book.chaptersBuiltByRules
-                    )
-                }
+                // 每条获取路径已返回落盘且重新读出的 package。即使没有 HTML，也不能
+                // 从正文再存一次：这会丢掉副文，还可能在清理缓存后把旧结果写回来。
                 // Success: reset failure counter
                 bookFailureCounts[bookId] = 0
                 for slot in Array(batchFallback.keys) where slot.hasPrefix(bookId.uuidString + "#batch#") {
@@ -685,59 +642,73 @@ actor ChapterFetchManager {
     }
 
     /// 同一书／配置／窗口仅有一个在途批量任务，不复制正文缓存。未回存只试一次批量。
-    private func prepareContentBatch(book: ReadingBook, requestedIndex: Int, source: BookSource) async throws {
+    private func prepareContentBatch(book: ReadingBook, requestedIndex: Int, source: BookSource) async throws -> [String: String]? {
         let size = source.contentBatchSize
-        guard size > 1, let refs = book.onlineChapters else { return }
+        guard size > 1, let refs = book.onlineChapters else { return nil }
         let start = requestedIndex / size * size
         let slot = book.id.uuidString + "#batch#" + source.id.uuidString + "#" + String(source.lastUpdateTime) + "#" + String(start)
-        guard batchFallback[slot]?.contains(requestedIndex) != true else { return }
-        let request: (id: UUID, task: Task<[Int], Error>)
+        guard batchFallback[slot]?.contains(requestedIndex) != true else { return nil }
+        let request: BatchRequest
         if let existing = batchTasks[slot] { request = existing }
         else {
-            let candidates = refs.dropFirst(start).prefix(size).filter { ref in
-                !ref.shouldRenderAsVolumeSeparator &&
-                bookSourceFetcher.loadChapterPackageSync(bookId: book.id, chapterIndex: ref.index,
-                    expectedSourceURL: ref.url, expectedTOCTitle: ref.title) == nil
-            }.map { ref -> OnlineChapterRef in
-                var ref = ref; ref.url = RuleEngine.sanitizeExtractedURL(ref.url)
-                ref.runtimeVariables = (book.runtimeVariables ?? [:]).merging(ref.runtimeVariables ?? [:]) { _, new in new }
+            let candidates = refs.dropFirst(start).prefix(size).compactMap { original -> OnlineChapterRef? in
+                guard !original.shouldRenderAsVolumeSeparator else { return nil }
+                let url = original.sanitizedContentURL
+                guard cachedChapterPackage(book: book, chapterIndex: original.index, originalRef: original,
+                                           sanitizedURL: url) == nil else { return nil }
+                var ref = original
+                ref.url = url
                 return ref
             }
-            guard candidates.count >= 2 else { return }
+            guard candidates.count >= 2 else { return nil }
             let id = UUID(), fetcher = bookSourceFetcher
-            let task = Task { () throws -> [Int] in
+            let task = Task { () throws -> [OnlineChapterRef] in
+                // 任务本身先退出在途表，再唤醒等待者；晚到释放不能删掉同窗口的新任务。
+                defer { if batchTasks[slot]?.id == id { batchTasks[slot] = nil } }
+                let missing: [OnlineChapterRef]
                 do {
-                    return try await fetcher.fetchContentBatch(refs: candidates, bookId: book.id, source: source,
-                        variables: book.runtimeVariables ?? [:]).map(\.index)
-                } catch is CancellationError { throw CancellationError() }
-                catch is BookSourceSession.SessionFailure { throw CancellationError() }
-                catch {
+                    missing = try await fetcher.fetchContentBatch(refs: candidates, bookId: book.id, source: source,
+                                                                   variables: book.runtimeVariables ?? [:])
+                } catch let error where Self.isCancellation(error) || error is BookSourceSession.SessionFailure
+                    || (error as? ChapterCacheWriteError) == .staleWrite {
+                    throw CancellationError()
+                } catch {
                     // 基准允许脚本先回存部分再失败；保留已写内容，只把未回存章交回单章用例。
                     AppLogger.parse("Batch content failed; uncached chapters use single fetch", context: [
                         "chapters": candidates.count, "code": (error as NSError).code
                     ], level: .error)
-                    return candidates.filter { fetcher.loadChapterPackageSync(bookId: book.id, chapterIndex: $0.index,
-                        expectedSourceURL: $0.url, expectedTOCTitle: $0.title) == nil }.map(\.index)
+                    missing = candidates.compactMap { ref in
+                        guard cachedChapterPackage(book: book, chapterIndex: ref.index, originalRef: ref,
+                                                   sanitizedURL: ref.url) == nil else { return nil }
+                        var ref = ref
+                        ref.runtimeVariables = nil  // 失败脚本的半成品状态不传给单章。
+                        return ref
+                    }
                 }
+                try Task.checkCancellation()
+                guard batchTasks[slot]?.id == id else { throw CancellationError() }
+                if !missing.isEmpty { batchFallback[slot, default: []].formUnion(missing.map(\.index)) }
+                return missing
             }
-            request = (id, task); batchTasks[slot] = request
+            request = BatchRequest(id: id, task: task)
+            batchTasks[slot] = request
         }
-        let waiter = UUID()
-        batchWaiters[slot, default: []].insert(waiter)
-        batchWaiterObserver?(batchWaiters[slot]?.count ?? 0)
-        defer { releaseBatchWaiter(slot: slot, waiter: waiter) }
-        let missing = try await withTaskCancellationHandler { try await request.task.value } onCancel: {
-            Task { await self.releaseBatchWaiter(slot: slot, waiter: waiter) }
+        let waiter = UUID(), requestID = request.id
+        batchTasks[slot]?.waiters.insert(waiter)
+        batchWaiterObserver?(batchTasks[slot]?.waiters.count ?? 0)
+        defer { releaseBatchWaiter(slot: slot, id: requestID, waiter: waiter) }
+        let result = await withTaskCancellationHandler { await request.task.result } onCancel: {
+            Task { await self.releaseBatchWaiter(slot: slot, id: requestID, waiter: waiter) }
         }
+        await beforeBatchWaiterRelease?()
         try Task.checkCancellation()
-        if !missing.isEmpty { batchFallback[slot, default: []].formUnion(missing) }
+        return try result.get().first { $0.index == requestedIndex }?.runtimeVariables
     }
 
-    private func releaseBatchWaiter(slot: String, waiter: UUID) {
-        guard batchWaiters[slot]?.remove(waiter) != nil else { return }
-        if batchWaiters[slot]?.isEmpty == true {
+    private func releaseBatchWaiter(slot: String, id: UUID, waiter: UUID) {
+        guard batchTasks[slot]?.id == id, batchTasks[slot]?.waiters.remove(waiter) != nil else { return }
+        if batchTasks[slot]?.waiters.isEmpty == true {
             batchTasks.removeValue(forKey: slot)?.task.cancel()
-            batchWaiters.removeValue(forKey: slot)
         }
     }
 
@@ -809,7 +780,6 @@ actor ChapterFetchManager {
         if includingDownloads || survivingKeys.isEmpty {
             for slot in Array(batchTasks.keys) where slot.hasPrefix(bookId.uuidString + "#batch#") {
                 batchTasks.removeValue(forKey: slot)?.task.cancel()
-                batchWaiters.removeValue(forKey: slot)
             }
             batchFallback = batchFallback.filter { !$0.key.hasPrefix(bookId.uuidString + "#batch#") }
         }

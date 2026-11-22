@@ -30,7 +30,7 @@ struct ExploreSourcePage: View {
     private var currentSource: BookSource { discover.selectedSource ?? source }
 
     private var hasLogin: Bool {
-        !currentSource.loginUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        currentSource.hasLoginEntry
     }
 
     var body: some View {

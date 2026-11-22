@@ -125,8 +125,15 @@ extension BookDetailSourceMenuActions {
                 callBacks.request(.clickClearCache, result: nil) {
                     guard let shelfBookId else { return }
                     Task { @MainActor in
-                        await BookSourceFetcher.shared.clearAllChapterCacheAsync(bookId: shelfBookId)
-                        bookStore.clearAllCachedChapterFilenames(bookId: shelfBookId)
+                        do {
+                            try await BookSourceFetcher.shared.clearAllChapterCacheAsync(bookId: shelfBookId)
+                            try Task.checkCancellation()
+                            bookStore.clearAllCachedChapterFilenames(bookId: shelfBookId)
+                        } catch is CancellationError {
+                            return
+                        } catch {
+                            AppLogger.cache("Book cache removal failed", error: error)
+                        }
                     }
                 }
             }

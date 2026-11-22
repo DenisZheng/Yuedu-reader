@@ -58,7 +58,7 @@ struct BookSourceInfoSheet: View {
                     if !source.concurrentRate.isEmpty {
                         infoRow(localized("併發限制"), value: source.concurrentRate)
                     }
-                    if !source.loginUrl.isEmpty {
+                    if source.hasLoginEntry {
                         infoRow(localized("登入網址"), value: source.loginUrl, monospaced: true)
                     }
                 }

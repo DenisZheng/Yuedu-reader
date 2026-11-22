@@ -68,18 +68,22 @@ extension BookSourceFetcher {
         ), cached.state == .cached, !cached.content.isEmpty {
             return cached
         }
+        let writeTicket = Self.chapterCacheRepository.beginWrite(bookId: bookId, chapterIndex: ref.index)
+        defer { Self.chapterCacheRepository.finishWrite(writeTicket) }
+        let session = BookSourceSession.session(for: source)
         if source.isJsSource {
-            return try await fetchMainJsChapterPackage(ref: ref, bookId: bookId, source: source)
+            return try await fetchMainJsChapterPackage(ref: ref, bookId: bookId, source: source, writeTicket: writeTicket)
         }
         if source.readsChapterURLAsContent {
-            return try saveChapterURLPackage(ref: ref, bookId: bookId)
+            return try saveChapterURLPackage(ref: ref, bookId: bookId, writeTicket: writeTicket)
         }
         if source.shouldUseLegadoRuntimeFetch(for: ref.url) {
             return try await fetchLegadoRuntimeChapterPackage(
                 ref: ref,
                 bookId: bookId,
                 source: source,
-                isVideoEpisode: isVideoEpisode
+                isVideoEpisode: isVideoEpisode,
+                writeTicket: writeTicket
             )
         }
         // Sanitize: old TOC cache may contain HTML fragments (e.g. <a href="...">), sanitize before parsing
@@ -279,10 +283,13 @@ extension BookSourceFetcher {
             return try await fetchChapterHTML(pageURL, "GET", nil, false)
         }
 
+        try Task.checkCancellation()
+        guard session.isActive else { throw BookSourceSession.SessionFailure.invalidated }
         try saveChapterPackageToCache(
             buildResult.package,
             rawHTML: buildResult.rawHTML,
-            normalizedHTML: buildResult.normalizedHTML
+            normalizedHTML: buildResult.normalizedHTML,
+            writeTicket: writeTicket
         )
         // #region agent log
         _dbgLog(
@@ -302,7 +309,7 @@ extension BookSourceFetcher {
     }
 
     /// An audio source's chapter when the source has no content rule: its URL, unfetched.
-    private func saveChapterURLPackage(ref: OnlineChapterRef, bookId: UUID) throws -> ChapterPackage {
+    private func saveChapterURLPackage(ref: OnlineChapterRef, bookId: UUID, writeTicket: ChapterCacheRepository.WriteTicket) throws -> ChapterPackage {
         let checksum = SHA256.hash(data: Data(ref.url.utf8)).map {
             String(format: "%02x", $0)
         }.joined()
@@ -320,7 +327,7 @@ extension BookSourceFetcher {
             state: .cached,
             failureReason: nil
         )
-        try saveChapterPackageToCache(package, rawHTML: nil, normalizedHTML: nil)
+        try saveChapterPackageToCache(package, rawHTML: nil, normalizedHTML: nil, writeTicket: writeTicket)
         guard let reloaded = loadChapterPackageSync(
             bookId: bookId,
             chapterIndex: ref.index,
@@ -332,14 +339,15 @@ extension BookSourceFetcher {
         return reloaded
     }
 
-    private func fetchMainJsChapterPackage(ref: OnlineChapterRef, bookId: UUID, source: BookSource) async throws -> ChapterPackage {
+    private func fetchMainJsChapterPackage(ref: OnlineChapterRef, bookId: UUID, source: BookSource, writeTicket: ChapterCacheRepository.WriteTicket) async throws -> ChapterPackage {
         let nextURL = ref.runtimeVariables?[Self.nextChapterRuntimeVariableKey]
         let session = BookSourceSession.session(for: source)
-        let content = try await session.parse { bridge in
+        let parsed = try await session.parse { bridge in
             try SourcePerfTrace.span("mainJs.content", "bytes=\(source.mainJs?.utf8.count ?? 0) main=\(Thread.isMainThread)") {
-                try bridge.mainJsContent(chapter: ref, nextChapterURL: nextURL)
+                try bridge.mainJsChapterContent(chapter: ref, nextChapterURL: nextURL)
             }
         }
+        let content = parsed.content
         try Task.checkCancellation()
         guard let url = URL(string: ref.url) else { throw MainJsSource.Failure.invalidResult("getContent") }
         let result = try await ChapterFetcher.shared.buildChapterPackage(
@@ -347,14 +355,13 @@ extension BookSourceFetcher {
             initialHTML: content, initialURL: url, initialBaseURL: ref.url,
             reviewContext: source.legadoReviewContext.withRuntimeVariables(ref.runtimeVariables).withChapter(ref),
             nextChapterURL: nextURL,
-            parsePage: { _, _, _ in ChapterParsePayload(content: content, title: ref.title, sourceMatched: false,
-                                                       isPay: ref.isPay, runtimeVariables: ref.runtimeVariables) },
+            parsePage: { _, _, _ in parsed },
             extractNextURLs: { _, _, _ in [] },
             fetchNextPageHTML: { _ in throw MainJsSource.Failure.invalidResult("getContent") }
         )
         try Task.checkCancellation()
         guard session.isActive else { throw BookSourceSession.SessionFailure.invalidated }
-        try saveChapterPackageToCache(result.package, rawHTML: result.rawHTML, normalizedHTML: result.normalizedHTML)
+        try saveChapterPackageToCache(result.package, rawHTML: result.rawHTML, normalizedHTML: result.normalizedHTML, writeTicket: writeTicket)
         guard let saved = loadChapterPackageSync(bookId: bookId, chapterIndex: ref.index,
                 expectedSourceURL: ref.url, expectedTOCTitle: ref.title) else { throw ChapterCacheWriteError.verificationFailed }
         return saved
@@ -364,7 +371,8 @@ extension BookSourceFetcher {
         ref: OnlineChapterRef,
         bookId: UUID,
         source: BookSource,
-        isVideoEpisode: Bool
+        isVideoEpisode: Bool,
+        writeTicket: ChapterCacheRepository.WriteTicket
     ) async throws -> ChapterPackage {
         logChapterFetchGate(ref: ref, source: source)
         guard !ref.shouldRenderAsVolumeSeparator else {
@@ -398,19 +406,10 @@ extension BookSourceFetcher {
                 .withChapter(ref),
             nextChapterURL: nextChapterURL,
             parsePage: { html, baseURL, ruleURL in
-                let parsed = try await session.parse { bridge in
-                    try SourcePerfTrace.span("chapter.parse", source.bookSourceName) {
-                        try bridge.parseChapterResult(
-                            html: html,
-                            baseURL: baseURL,
-                            ruleURL: ruleURL,
-                            source: source,
-                            runtimeVariables: runtimeBox.get(),
-                            chapterRef: ref,
-                            nextChapterURL: nextChapterURL,
-                            isVideoEpisode: isVideoEpisode
-                        )
-                    }
+                let parsed = try await session.operation { host in
+                    try await host.parseChapterPage(html: html, baseURL: baseURL, ruleURL: ruleURL, source: source,
+                        runtimeVariables: runtimeBox.get(), chapterRef: ref, nextChapterURL: nextChapterURL,
+                        isVideoEpisode: isVideoEpisode)
                 }
                 if let runtimeVariables = parsed.runtimeVariables, !runtimeVariables.isEmpty {
                     runtimeBox.set(runtimeVariables)
@@ -435,10 +434,13 @@ extension BookSourceFetcher {
                 ).0
             }
         )
+        try Task.checkCancellation()
+        guard session.isActive else { throw BookSourceSession.SessionFailure.invalidated }
         try saveChapterPackageToCache(
             buildResult.package,
             rawHTML: buildResult.rawHTML,
-            normalizedHTML: buildResult.normalizedHTML
+            normalizedHTML: buildResult.normalizedHTML,
+            writeTicket: writeTicket
         )
         guard let reloaded = loadChapterPackageSync(
             bookId: bookId,

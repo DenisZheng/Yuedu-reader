@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 
 enum ChapterCacheWriteError: LocalizedError, Equatable, Sendable {
     case emptyContent
@@ -32,40 +33,72 @@ enum ChapterCacheWriteError: LocalizedError, Equatable, Sendable {
 
 struct ChapterCacheRepository: Sendable {
     private let rootDirectory: URL
-    // 票据只保护当前在途写入；仍由这个repository拥有唯一正文文件。
-    private static let mutationLock = NSRecursiveLock()
-    nonisolated(unsafe) private static var writeTickets: [String: [WeakWriteTicket]] = [:]
-    private struct WeakWriteTicket { weak var value: WriteTicket? }
-    final class WriteTicket: @unchecked Sendable {
-        fileprivate let key: String
-        fileprivate var valid = true
-        fileprivate init(key: String) { self.key = key }
+    private let removeItem: @Sendable (URL) throws -> Void
+    // 目录路径是同步边界：两个 repository 指向同一本书时共享同一把锁。
+    // 全局表只登记在途操作和票据；不拿着全局锁等待书锁或做文件操作。
+    private typealias BookLock = OSAllocatedUnfairLock<[Int: UUID]>
+    private struct BookMutation {
+        let lock = BookLock(initialState: [:])
+        var users = 0
+    }
+    private static let mutations = OSAllocatedUnfairLock(initialState: [String: BookMutation]())
+
+    final class WriteTicket: Sendable {
+        fileprivate let folder: String
+        fileprivate let chapterIndex: Int
+        fileprivate let id = UUID()
+
+        fileprivate init(folder: String, chapterIndex: Int) {
+            self.folder = folder
+            self.chapterIndex = chapterIndex
+        }
+
+        deinit { ChapterCacheRepository.releaseBookLock(folder) }
     }
 
     func beginWrite(bookId: UUID, chapterIndex: Int) -> WriteTicket {
-        Self.mutationLock.lock(); defer { Self.mutationLock.unlock() }
-        let key = cachePath(bookId: bookId, chapterIndex: chapterIndex).path
-        invalidateWrites(key: key)
-        let ticket = WriteTicket(key: key)
-        Self.writeTickets[key] = [WeakWriteTicket(value: ticket)]
+        let folder = cacheDir(for: bookId).path
+        let lock = Self.acquireBookLock(folder)  // 由票据持有，直到离开作用域。
+        let ticket = WriteTicket(folder: folder, chapterIndex: chapterIndex)
+        lock.withLock { $0[chapterIndex] = ticket.id }
         return ticket
     }
 
     func finishWrite(_ ticket: WriteTicket) {
-        Self.mutationLock.lock(); defer { Self.mutationLock.unlock() }
-        ticket.valid = false
-        Self.writeTickets[ticket.key] = Self.writeTickets[ticket.key]?.filter { $0.value != nil && $0.value !== ticket }
-        if Self.writeTickets[ticket.key]?.isEmpty == true { Self.writeTickets.removeValue(forKey: ticket.key) }
+        Self.withBookMutation(ticket.folder) { tickets in
+            if tickets[ticket.chapterIndex] == ticket.id { tickets[ticket.chapterIndex] = nil }
+        }
     }
 
-    private func invalidateWrites(key: String, except ticket: WriteTicket? = nil) {
-        for current in Self.writeTickets[key] ?? [] where current.value !== ticket { current.value?.valid = false }
-        Self.writeTickets[key] = Self.writeTickets[key]?.filter { $0.value != nil && $0.value === ticket }
-        if Self.writeTickets[key]?.isEmpty == true { Self.writeTickets.removeValue(forKey: key) }
+    private static func acquireBookLock(_ folder: String) -> BookLock {
+        mutations.withLock { entries in
+            var entry = entries[folder] ?? BookMutation()
+            entry.users += 1
+            entries[folder] = entry
+            return entry.lock
+        }
     }
 
-    init(rootDirectory: URL? = nil) {
-        self.rootDirectory = rootDirectory ?? StorageLocations.onlineCache
+    private static func releaseBookLock(_ folder: String) {
+        mutations.withLock { entries in
+            guard var entry = entries[folder] else { return }
+            entry.users -= 1
+            entries[folder] = entry.users == 0 ? nil : entry
+        }
+    }
+
+    private static func withBookMutation<Result>(_ folder: String, _ body: (inout [Int: UUID]) throws -> Result) rethrows -> Result {
+        let lock = acquireBookLock(folder)
+        defer { releaseBookLock(folder) }
+        return try lock.withLockUnchecked(body)
+    }
+
+    init(
+        rootDirectory: URL? = nil,
+        removeItem: @escaping @Sendable (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }
+    ) {
+        self.rootDirectory = (rootDirectory ?? StorageLocations.onlineCache).standardizedFileURL
+        self.removeItem = removeItem
     }
 
     func loadNormalizedChapterHTMLSync(
@@ -132,7 +165,7 @@ struct ChapterCacheRepository: Sendable {
         for name in names where name.hasSuffix(".txt") {
             guard let index = Int(name.dropLast(4)), refs.indices.contains(index) else { continue }
             let ref = refs[index]
-            let sanitizedURL = RuleEngine.sanitizeExtractedURL(ref.url)
+            let sanitizedURL = ref.sanitizedContentURL
             let candidateURLs = sanitizedURL == ref.url ? [ref.url] : [sanitizedURL, ref.url]
             if candidateURLs.contains(where: {
                 isCachedChapterMetadataValid(
@@ -149,22 +182,58 @@ struct ChapterCacheRepository: Sendable {
     }
 
     func clearChapterCache(bookId: UUID, chapterIndex: Int) {
-        Self.mutationLock.lock(); defer { Self.mutationLock.unlock() }
-        invalidateWrites(key: cachePath(bookId: bookId, chapterIndex: chapterIndex).path)
-        try? FileManager.default.removeItem(at: cachePath(bookId: bookId, chapterIndex: chapterIndex))
-        try? FileManager.default.removeItem(at: cacheMetadataPath(bookId: bookId, chapterIndex: chapterIndex))
-        try? FileManager.default.removeItem(at: chapterPackagePath(bookId: bookId, chapterIndex: chapterIndex))
-        try? FileManager.default.removeItem(at: chapterRawHTMLPath(bookId: bookId, chapterIndex: chapterIndex))
-        try? FileManager.default.removeItem(
-            at: chapterNormalizedHTMLPath(bookId: bookId, chapterIndex: chapterIndex)
-        )
+        do { try clearChapterCache(bookId: bookId, chapterIndex: chapterIndex, respectingCancellation: false) }
+        catch { AppLogger.cache("Chapter cache removal failed", error: error, context: ["index": chapterIndex]) }
     }
 
     func clearAllChapterCache(bookId: UUID) {
-        Self.mutationLock.lock(); defer { Self.mutationLock.unlock() }
-        let prefix = cacheDir(for: bookId).path + "/"
-        for key in Array(Self.writeTickets.keys) where key.hasPrefix(prefix) { invalidateWrites(key: key) }
-        try? FileManager.default.removeItem(at: cacheDir(for: bookId))
+        do { try clearAllChapterCache(bookId: bookId, respectingCancellation: false) }
+        catch { AppLogger.cache("Book cache removal failed", error: error, context: ["bookId": bookId.uuidString]) }
+    }
+
+    @concurrent
+    func clearChapterCacheAsync(bookId: UUID, chapterIndex: Int) async throws {
+        try SourcePerfTrace.span("chapterCache.clear", "chapters=1 main=\(Thread.isMainThread)") {
+            try clearChapterCache(bookId: bookId, chapterIndex: chapterIndex, respectingCancellation: true)
+        }
+    }
+
+    @concurrent
+    func clearAllChapterCacheAsync(bookId: UUID) async throws {
+        try SourcePerfTrace.span("chapterCache.clearBook", "books=1 main=\(Thread.isMainThread)") {
+            try clearAllChapterCache(bookId: bookId, respectingCancellation: true)
+        }
+    }
+
+    private func clearChapterCache(bookId: UUID, chapterIndex: Int, respectingCancellation: Bool) throws {
+        try Self.withBookMutation(cacheDir(for: bookId).path) { tickets in
+            // 等本书上一次写入释放后再检查，取消的刷新不能清掉新一轮正文。
+            if respectingCancellation { try Task.checkCancellation() }
+            tickets[chapterIndex] = nil
+            try removeChapterFiles(bookId: bookId, chapterIndex: chapterIndex)
+        }
+    }
+
+    private func clearAllChapterCache(bookId: UUID, respectingCancellation: Bool) throws {
+        let dir = cacheDir(for: bookId)
+        try Self.withBookMutation(dir.path) { tickets in
+            if respectingCancellation { try Task.checkCancellation() }
+            tickets.removeAll()
+            try removeIfPresent(dir)
+        }
+    }
+
+    private func removeChapterFiles(bookId: UUID, chapterIndex: Int) throws {
+        try removeIfPresent(cachePath(bookId: bookId, chapterIndex: chapterIndex))
+        try removeIfPresent(cacheMetadataPath(bookId: bookId, chapterIndex: chapterIndex))
+        try removeIfPresent(chapterPackagePath(bookId: bookId, chapterIndex: chapterIndex))
+        try removeIfPresent(chapterRawHTMLPath(bookId: bookId, chapterIndex: chapterIndex))
+        try removeIfPresent(chapterNormalizedHTMLPath(bookId: bookId, chapterIndex: chapterIndex))
+    }
+
+    private func removeIfPresent(_ url: URL) throws {
+        do { try removeItem(url) }
+        catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile { return }
     }
 
     @discardableResult
@@ -177,6 +246,7 @@ struct ChapterCacheRepository: Sendable {
         extractedTitle: String? = nil,
         rawHTML: String? = nil,
         storeNormalizedHTML: Bool = true,
+        subContent: ChapterSubContent? = nil,
         writeTicket: WriteTicket? = nil
     ) throws -> String {
         let canonicalTitle = extractedTitle.map {
@@ -205,6 +275,7 @@ struct ChapterCacheRepository: Sendable {
             contentChecksum: cacheChecksum(for: content),
             rawHTMLFilename: hasRawHTML ? "\(chapterIndex).raw.html" : nil,
             normalizedHTMLFilename: persistsNormalizedHTML ? "\(chapterIndex).normalized.xhtml" : nil,
+            subContent: subContent,
             savedAt: Date(),
             state: .cached,
             failureReason: nil
@@ -224,32 +295,46 @@ struct ChapterCacheRepository: Sendable {
         normalizedHTML: String?,
         writeTicket: WriteTicket? = nil
     ) throws -> String {
-        Self.mutationLock.lock(); defer { Self.mutationLock.unlock() }
-        let key = cachePath(bookId: package.bookId, chapterIndex: package.chapterIndex).path
-        if let writeTicket {
-            guard writeTicket.key == key, writeTicket.valid else { throw ChapterCacheWriteError.staleWrite }
-            // 批量重复回存仅内容／身份和资源都相同才不写，savedAt不是内容修订。
-            if let current = loadChapterPackageSync(bookId: package.bookId, chapterIndex: package.chapterIndex,
-                    expectedSourceURL: package.sourceURL, expectedTOCTitle: package.tocTitle),
-               current.content == package.content, current.canonicalTitle == package.canonicalTitle,
-               current.sourceURL == package.sourceURL, current.tocTitle == package.tocTitle,
-               try artifactMatches(rawHTML, at: chapterRawHTMLPath(bookId: package.bookId, chapterIndex: package.chapterIndex)),
-               try artifactMatches(normalizedHTML, at: chapterNormalizedHTMLPath(bookId: package.bookId, chapterIndex: package.chapterIndex)) {
-                return "\(package.chapterIndex).txt"
+        let dir = cacheDir(for: package.bookId)
+        let index = package.chapterIndex
+        return try Self.withBookMutation(dir.path) { tickets in
+            if let writeTicket {
+                guard writeTicket.folder == dir.path, writeTicket.chapterIndex == index, tickets[index] == writeTicket.id else {
+                    throw ChapterCacheWriteError.staleWrite
+                }
+                // 新副文属于同一内容修订，正文相同也不能保留旧歌词／弹幕。
+                if let current = readChapterPackage(bookId: package.bookId, chapterIndex: index,
+                        expectedSourceURL: package.sourceURL, expectedTOCTitle: package.tocTitle),
+                   current.content == package.content, current.canonicalTitle == package.canonicalTitle,
+                   current.sourceURL == package.sourceURL, current.tocTitle == package.tocTitle,
+                   current.subContent == package.subContent,
+                   try artifactMatches(rawHTML, at: chapterRawHTMLPath(bookId: package.bookId, chapterIndex: index)),
+                   try artifactMatches(normalizedHTML, at: chapterNormalizedHTMLPath(bookId: package.bookId, chapterIndex: index)) {
+                    return "\(index).txt"
+                }
+            }
+            guard !package.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ChapterCacheWriteError.emptyContent
+            }
+            tickets[index] = writeTicket?.id
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            } catch {
+                throw ChapterCacheWriteError.createDirectory(error.localizedDescription)
+            }
+            do {
+                return try persistChapterPackage(package, rawHTML: rawHTML, normalizedHTML: normalizedHTML)
+            } catch {
+                tickets[index] = nil
+                do { try removeChapterFiles(bookId: package.bookId, chapterIndex: index) }
+                catch { AppLogger.cache("Failed chapter write cleanup failed", error: error, context: ["index": index]) }
+                throw error
             }
         }
-        invalidateWrites(key: key, except: writeTicket)
-        guard !package.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ChapterCacheWriteError.emptyContent
-        }
+    }
 
-        let dir = cacheDir(for: package.bookId)
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        } catch {
-            throw ChapterCacheWriteError.createDirectory(error.localizedDescription)
-        }
-
+    // 只在持有对应书锁时调用；读回校验不进入会写入的旧缓存升级路径。
+    private func persistChapterPackage(_ package: ChapterPackage, rawHTML: String?, normalizedHTML: String?) throws -> String {
         let filename = "\(package.chapterIndex).txt"
         let contentPath = cachePath(bookId: package.bookId, chapterIndex: package.chapterIndex)
         let checksum = cacheChecksum(for: package.content)
@@ -257,7 +342,6 @@ struct ChapterCacheRepository: Sendable {
         do {
             try package.content.write(to: contentPath, atomically: true, encoding: .utf8)
         } catch {
-            clearChapterCache(bookId: package.bookId, chapterIndex: package.chapterIndex)
             throw ChapterCacheWriteError.writeBody(error.localizedDescription)
         }
 
@@ -277,7 +361,6 @@ struct ChapterCacheRepository: Sendable {
                 options: .atomic
             )
         } catch {
-            clearChapterCache(bookId: package.bookId, chapterIndex: package.chapterIndex)
             throw ChapterCacheWriteError.writeMetadata(error.localizedDescription)
         }
 
@@ -289,15 +372,13 @@ struct ChapterCacheRepository: Sendable {
                 normalizedHTML: normalizedHTML
             )
         } catch let error as ChapterCacheWriteError {
-            clearChapterCache(bookId: package.bookId, chapterIndex: package.chapterIndex)
             throw error
         } catch {
-            clearChapterCache(bookId: package.bookId, chapterIndex: package.chapterIndex)
             throw ChapterCacheWriteError.writeArtifact(error.localizedDescription)
         }
 
         guard
-            let verified = loadChapterPackageSync(
+            let verified = readChapterPackage(
                 bookId: package.bookId,
                 chapterIndex: package.chapterIndex,
                 expectedSourceURL: package.sourceURL,
@@ -307,7 +388,6 @@ struct ChapterCacheRepository: Sendable {
             verified.content == package.content,
             verified.contentChecksum == checksum
         else {
-            clearChapterCache(bookId: package.bookId, chapterIndex: package.chapterIndex)
             throw ChapterCacheWriteError.verificationFailed
         }
         // The body and the HTML beside it; the metadata and package files are a few hundred bytes.
@@ -333,6 +413,11 @@ struct ChapterCacheRepository: Sendable {
         // old offline downloads here (not only from `isChapterCached`) so opening
         // an already-downloaded chapter can never miss its valid `.txt` body.
         upgradeLegacyChapterCacheIfNeeded(bookId: bookId, chapterIndex: chapterIndex)
+        return readChapterPackage(bookId: bookId, chapterIndex: chapterIndex,
+                                  expectedSourceURL: expectedSourceURL, expectedTOCTitle: expectedTOCTitle)
+    }
+
+    private func readChapterPackage(bookId: UUID, chapterIndex: Int, expectedSourceURL: String?, expectedTOCTitle: String?) -> ChapterPackage? {
         // "No metadata at all" is the ordinary not-cached-yet path and is checked
         // once per chapter by the offline validator — logging it would drown the
         // rejections below, which are the ones that mean a cache went bad.
@@ -408,6 +493,7 @@ struct ChapterCacheRepository: Sendable {
                 rawHTMLFilename: artifact.rawHTMLFilename,
                 normalizedHTMLFilename: artifact.normalizedHTMLFilename,
                 renderArtifactVersion: artifact.renderArtifactVersion,
+                subContent: artifact.subContent,
                 savedAt: artifact.savedAt,
                 state: .cached,
                 failureReason: nil
@@ -530,9 +616,16 @@ struct ChapterCacheRepository: Sendable {
     /// "loading" state in the reader.
     private func upgradeLegacyChapterCacheIfNeeded(bookId: UUID, chapterIndex: Int) {
         let packageURL = chapterPackagePath(bookId: bookId, chapterIndex: chapterIndex)
-        guard !FileManager.default.fileExists(atPath: packageURL.path) else { return }
-
         let bodyURL = cachePath(bookId: bookId, chapterIndex: chapterIndex)
+        guard !FileManager.default.fileExists(atPath: packageURL.path),
+              FileManager.default.fileExists(atPath: bodyURL.path) else { return }
+        Self.withBookMutation(cacheDir(for: bookId).path) { _ in
+            guard !FileManager.default.fileExists(atPath: packageURL.path) else { return }
+            upgradeLegacyChapterCache(bookId: bookId, chapterIndex: chapterIndex, bodyURL: bodyURL, packageURL: packageURL)
+        }
+    }
+
+    private func upgradeLegacyChapterCache(bookId: UUID, chapterIndex: Int, bodyURL: URL, packageURL: URL) {
         guard
             let body = try? cachedText(at: bodyURL),
             !body.isEmpty,
@@ -632,6 +725,7 @@ struct ChapterCacheRepository: Sendable {
             rawHTMLFilename: rawFilename,
             normalizedHTMLFilename: normalizedFilename,
             renderArtifactVersion: OnlineChapterRenderArtifact.currentVersion,
+            subContent: package.subContent,
             savedAt: package.savedAt
         )
         let data = try JSONEncoder().encode(artifact)

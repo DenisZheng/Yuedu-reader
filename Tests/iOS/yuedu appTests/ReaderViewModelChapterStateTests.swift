@@ -323,6 +323,101 @@ struct ReaderViewModelChapterStateTests {
         await retry.value
     }
 
+    @Test("主动刷新等待磁盘清完再登记替换和抓取，同章重复点按合并")
+    func sameChapterRefetchWaitsAndCoalesces() async throws {
+        let fetcher = MockChapterFetcher(), book = makeBook()
+        let removing = AsyncStream<Int>.makeStream()
+        let gate = SwitchGate()
+        let bookSourceFetcher = StubBookSourceFetcher(onClear: { _, index in
+            removing.continuation.yield(index)
+            await gate.wait()
+        })
+        let model = ReaderViewModel(chapterFetcher: fetcher, bookSourceFetcher: bookSourceFetcher)
+        var replacements: [Int] = []
+        let start = {
+            model.refetchChapter(book: book, chapterIndex: 0, store: nil, resetFailureBudget: true,
+                currentBook: { book }, didClear: { replacements.append(0) }, discard: { Issue.record("当前章不应被丢弃") })
+        }
+        await fetcher.enqueuePackage(chapterIndex: 0, package: makePackage(bookId: book.id, chapterIndex: 0, content: "刷新正文"))
+        let first = try #require(start())
+        var events = removing.stream.makeAsyncIterator()
+        #expect(await events.next() == 0)
+        let second = try #require(start())
+        await model.ensureChapterReady(book: book, chapterIndex: 0, priority: .jump, store: nil)
+        #expect(replacements.isEmpty)
+        #expect(await fetcher.fetchCount(for: 0) == 0)
+        await gate.open()
+        await first.value
+        await second.value
+        #expect(replacements == [0])
+        #expect(await fetcher.priorities(for: 0) == [.jump])
+        #expect(model.chapterState(for: 0) == .ready)
+    }
+
+    @Test("清理期间目录换章，同书同源的旧任务也不登记替换")
+    func changedChapterDropsRefetchResult() async throws {
+        let fetcher = MockChapterFetcher(), book = makeBook()
+        var current = book
+        let removing = AsyncStream<Void>.makeStream()
+        let gate = SwitchGate()
+        let bookSourceFetcher = StubBookSourceFetcher(onClear: { _, _ in
+            removing.continuation.yield(())
+            await gate.wait()
+        })
+        let model = ReaderViewModel(chapterFetcher: fetcher, bookSourceFetcher: bookSourceFetcher)
+        var discarded = false
+        let request = model.refetchChapter(book: book, chapterIndex: 0, store: nil, resetFailureBudget: false,
+            currentBook: { current }, didClear: { Issue.record("晚到的旧章不能登记替换") }, discard: { discarded = true })
+        let task = try #require(request)
+        var events = removing.stream.makeAsyncIterator()
+        _ = await events.next()
+        current.onlineChapters = [.init(index: 0, title: "另一章", url: "https://example.invalid/new")]
+        await gate.open()
+        await task.value
+        #expect(discarded)
+        #expect(await fetcher.fetchCount(for: 0) == 0)
+        #expect(model.chapterState(for: 0) == .idle)
+    }
+
+    @Test("退出时取消正在清理的刷新，不再起网络请求")
+    func leavingReaderCancelsPendingRefetch() async throws {
+        let fetcher = MockChapterFetcher(), book = makeBook()
+        let entered = AsyncStream<Void>.makeStream()
+        let cancellation = AsyncStream<Bool>.makeStream()
+        let gate = SwitchGate()
+        let bookSourceFetcher = StubBookSourceFetcher(onClear: { _, _ in
+            entered.continuation.yield(())
+            await gate.wait()
+            cancellation.continuation.yield(Task.isCancelled)
+        })
+        let model = ReaderViewModel(chapterFetcher: fetcher, bookSourceFetcher: bookSourceFetcher)
+        let request = model.refetchChapter(book: book, chapterIndex: 0, store: nil, resetFailureBudget: false,
+            currentBook: { book }, didClear: { Issue.record("退出后不登记替换") }, discard: { Issue.record("已拆除，不更新视图状态") })
+        let task = try #require(request)
+        var events = entered.stream.makeAsyncIterator()
+        _ = await events.next()
+        model.cancelChapterRefetches()
+        await gate.open()
+        await task.value
+        var cancellations = cancellation.stream.makeAsyncIterator()
+        #expect(await cancellations.next() == true)
+        #expect(await fetcher.fetchCount(for: 0) == 0)
+    }
+
+    @Test("清理出错不登记替换或抓取，阅读器报告失败")
+    func refetchRemovalErrorRemainsRecoverable() async throws {
+        let fetcher = MockChapterFetcher(), book = makeBook()
+        let failure = MockChapterFetcher.MockError(message: "fixture removal failure")
+        let bookSourceFetcher = StubBookSourceFetcher(onClear: { _, _ in throw failure })
+        let model = ReaderViewModel(chapterFetcher: fetcher, bookSourceFetcher: bookSourceFetcher)
+        let request = model.refetchChapter(book: book, chapterIndex: 0, store: nil, resetFailureBudget: false,
+            currentBook: { book }, didClear: { Issue.record("清理失败不能登记替换") }, discard: { Issue.record("应显示错误，而不是换章") })
+        let task = try #require(request)
+        await task.value
+        #expect(model.chapterState(for: 0) == .failed(reason: failure.localizedDescription))
+        #expect(await fetcher.fetchCount(for: 0) == 0)
+    }
+
     @Test("a tapped source switch publishes its origin and cancels cleanly")
     func pendingSourceSwitchCancels() async throws {
         let viewModel = makeViewModel(chapterFetcher: MockChapterFetcher())
@@ -731,6 +826,8 @@ actor MockChapterFetcher: ChapterFetching {
 }
 
 struct StubBookSourceFetcher: BookSourceFetching {
+    var onClear: @Sendable (UUID, Int) async throws -> Void = { _, _ in }
+
     func fetchBookInfoPackage(
         url: String,
         source: BookSource,
@@ -760,6 +857,9 @@ struct StubBookSourceFetcher: BookSourceFetching {
     }
 
     func clearChapterCache(bookId: UUID, chapterIndex: Int) {}
+    func clearChapterCacheAsync(bookId: UUID, chapterIndex: Int) async throws {
+        try await onClear(bookId, chapterIndex)
+    }
     func clearAllChapterCache(bookId: UUID) {}
     func search(query: String, in source: BookSource) async throws -> [OnlineBook] { [] }
 

@@ -35,6 +35,7 @@ struct VideoPlayerView: View {
     /// Bumped by every interaction; the controls hide a while after the last one.
     @State private var interaction = 0
     @State private var showsEpisodes = false
+    @State private var subContentSelection: ChapterSubContentSelection?
     /// The time under the finger while the timeline is dragged.
     @State private var scrubTime: Double?
     /// A drag on the picture in progress.
@@ -106,6 +107,12 @@ struct VideoPlayerView: View {
         .onDisappear {
             controller?.close()
             if turnsWindow { ReaderOrientationController.shared.restoreDefault(in: window.windowScene) }
+        }
+        .sheet(item: $subContentSelection) { selection in
+            ChapterSubContentView(selection: selection) { seconds in
+                guard controller?.chapterIndex == selection.chapterIndex else { return }
+                controller?.seek(to: seconds)
+            }
         }
         .sheet(isPresented: $showsEpisodes) {
             if let controller {
@@ -275,6 +282,17 @@ struct VideoPlayerView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
             speedMenu(controller)
+            if controller.book.isOnline {
+                Button {
+                    subContentSelection = .init(bookID: controller.book.id, chapterIndex: controller.chapterIndex, kind: .danmaku)
+                    touched()
+                } label: {
+                    Image(systemName: "text.bubble")
+                        .font(DSFont.toolbarIcon)
+                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                }
+                .accessibilityLabel(localized("彈幕"))
+            }
             // The system's button names itself to VoiceOver.
             AirPlayButton()
                 .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)

@@ -270,7 +270,7 @@ struct BookSourceRow: View {
             } label: {
                 Label(localized("編輯"), systemImage: "pencil")
             }
-            if !source.loginUrl.isEmpty {
+            if source.hasLoginEntry {
                 Button {
                     actions.login(source)
                 } label: {
@@ -420,7 +420,7 @@ struct BookSourceRow: View {
         Button(localized("複製 JSON")) {
             actions.copyJSON(source)
         }
-        if !source.loginUrl.isEmpty {
+        if source.hasLoginEntry {
             Button(localized("Cookie 驗證登入")) {
                 actions.login(source)
             }

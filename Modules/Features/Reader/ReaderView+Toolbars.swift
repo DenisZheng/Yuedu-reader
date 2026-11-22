@@ -331,8 +331,7 @@ extension ReaderView {
             )
         }
 
-        if let source = readerSource,
-           !source.loginUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let source = readerSource, source.hasLoginEntry {
             actions.append(
                 ReaderSecondaryAction(
                     id: .sourceLogin,
@@ -352,6 +351,13 @@ extension ReaderView {
                     action: { openCurrentChapterWebPage() }
                 )
             )
+        }
+
+        if let book, let chapter = currentOnlineChapter, let source = readerSource,
+           source.isJsSource || source.ruleReview.hasSummary {
+            actions.append(ReaderSecondaryAction(id: .nativeReviews, icon: "text.bubble", label: localized("原生段評")) {
+                nativeReviewSelection = .init(book: book, source: source, chapter: chapter)
+            })
         }
 
         if SourceCallBackService.showsCustomButton(readerSource) {

@@ -53,6 +53,7 @@ struct AudiobookReaderView: View {
     @State private var showsCustomSleep = false
     @State private var showChapterList = false
     @State private var showSkipCredits = false
+    @State private var subContentSelection: ChapterSubContentSelection?
     @State private var showsAddToGroup = false
     @State private var confirmsRemoval = false
     @State private var workDetail: AudiobookWorkDetail?
@@ -124,6 +125,12 @@ struct AudiobookReaderView: View {
         }
         .sheet(isPresented: $showChapterList) {
             AudiobookChapterListView(player: player)
+        }
+        .sheet(item: $subContentSelection) { selection in
+            ChapterSubContentView(selection: selection) { seconds in
+                guard player.bookId == selection.bookID else { return }
+                player.seek(to: seconds, inChapter: selection.chapterIndex)
+            }
         }
         .sheet(isPresented: $showSkipCredits) {
             AudiobookSkipCreditsView(player: player)
@@ -500,8 +507,9 @@ struct AudiobookReaderView: View {
     }
 
     private var sourceMoreRoutes: [AudiobookMoreRoute] {
-        guard let source = callBackSource else { return [] }
-        var routes: [AudiobookMoreRoute] = []
+        // 歌词是普通在线章节能力，不依赖源的事件监听或自订按钮。
+        var routes: [AudiobookMoreRoute] = shelfRecord?.isOnline == true ? [.lyric] : []
+        guard let source = callBackSource else { return routes }
         if SourceCallBackService.showsCustomButton(source) { routes.append(.customButton) }
         if player.currentAudioURL != nil { routes.append(.copyPlayURL) }
         return routes
@@ -574,6 +582,8 @@ struct AudiobookReaderView: View {
             forwardButton = button
             player.applyForwardButton(button)
             AccessibilityNotification.Announcement(button.localizedTitle).post()
+        case .lyric:
+            subContentSelection = .init(bookID: currentBookId, chapterIndex: player.chapterIndex, kind: .lyric)
         case .skipCredits:
             showSkipCredits = true
         case .customButton:
@@ -1007,6 +1017,7 @@ enum AudiobookMoreRoute: Hashable {
     case playMode(AudiobookPlayMode)
     case forwardButton(AudiobookForwardButton)
     case skipCredits
+    case lyric
     case customButton
     case copyPlayURL
     case removeFromShelf
@@ -1023,6 +1034,7 @@ enum AudiobookMoreRoute: Hashable {
         case .playMode(let mode): mode.localizedTitle
         case .forwardButton(let button): button.localizedTitle
         case .skipCredits: localized("跳過片頭片尾")
+        case .lyric: localized("歌詞")
         case .customButton: localized("自訂按鈕")
         case .copyPlayURL: localized("複製播放網址")
         case .removeFromShelf: localized("移除書架…")
@@ -1041,6 +1053,7 @@ enum AudiobookMoreRoute: Hashable {
         case .playMode(let mode): mode.systemImage
         case .forwardButton(let button): button.systemImage
         case .skipCredits: "forward"
+        case .lyric: "text.bubble"
         case .customButton: "hand.tap"
         case .copyPlayURL: "link"
         case .removeFromShelf: "trash"

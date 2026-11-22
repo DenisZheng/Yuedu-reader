@@ -30,6 +30,7 @@ import os
 final class BookSourceSession: Sendable {
 
     let source: BookSource
+    let requestSession: URLSession
     let host: SourceScriptHost<ModernParserBridge>
     let runtimeOverrides: SourceRuntimeOverrides?
     private let localAccess: OSAllocatedUnfairLock<Bool>
@@ -53,6 +54,7 @@ final class BookSourceSession: Sendable {
     init(source: BookSource, requestSession: URLSession = LegadoJSBridge.requestSession,
          runtimeOverrides: SourceRuntimeOverrides? = nil, metadataOnly: Bool = false) {
         self.source = source
+        self.requestSession = requestSession
         self.runtimeOverrides = runtimeOverrides
         let access = OSAllocatedUnfairLock(initialState: true)
         self.localAccess = access
@@ -67,7 +69,8 @@ final class BookSourceSession: Sendable {
             ),
             label: runtimeOverrides?.identity ?? source.bookSourceName
         )
-        if source.isJsSource || source.contentBatchSize > 1 {
+        if source.isJsSource || source.contentBatchSize > 1 || !source.ruleContent.subContent.isEmpty || source.ruleReview.hasSummary
+            || LoginUiV2.isCandidate(source.loginUi) {
             _ = Self.variableObserver
             Self.cacheLock.lock()
             Self.activeMainJsSessions = Self.activeMainJsSessions.filter { $0.value.session != nil }
@@ -100,7 +103,8 @@ final class BookSourceSession: Sendable {
         defer { gate.release() }
         guard isActive else { throw SessionFailure.invalidated }
         let result = try await host.run(body)
-        if source.isJsSource {
+        if source.isJsSource || !source.ruleContent.subContent.isEmpty || source.ruleReview.hasSummary
+            || LoginUiV2.isCandidate(source.loginUi) {
             try Task.checkCancellation()
             guard isActive else { throw SessionFailure.invalidated }
         }
@@ -233,14 +237,17 @@ final class BookSourceSession: Sendable {
     /// capacity almost immediately.
     private static let cacheLimit = 32
 
-    /// 只检查仍存活的主脚本宿主，不全量扫描源包，不让被驱逐的在途请求逃过失效。
+    /// 只检查仍存活的主脚本／副文／原生段评宿主，不全量扫描源包。
     static func invalidateMainJsSessions(previous: [UUID: Int], current: [BookSource], positions: [UUID: Int]) {
         cacheLock.lock()
         let sessions = activeMainJsSessions.values.compactMap(\.session)
         cacheLock.unlock()
-        for session in sessions where session.source.isJsSource && previous[session.source.id] != nil {
+        for session in sessions where previous[session.source.id] != nil {
             let source = positions[session.source.id].map { current[$0] }
-            if source?.lastUpdateTime != session.source.lastUpdateTime || source?.mainJs != session.source.mainJs {
+            if source?.lastUpdateTime != session.source.lastUpdateTime || source?.mainJs != session.source.mainJs
+                || source?.bookSourceUrl != session.source.bookSourceUrl || source?.ruleContent.subContent != session.source.ruleContent.subContent
+                || source?.ruleReview != session.source.ruleReview || source?.loginUi != session.source.loginUi
+                || source?.loginUrl != session.source.loginUrl {
                 session.invalidate()
             }
         }
@@ -254,7 +261,12 @@ final class BookSourceSession: Sendable {
         cacheLock.lock()
         let sessions = activeMainJsSessions.values.compactMap(\.session)
         cacheLock.unlock()
-        for session in sessions where session.source.isJsSource && session.source.bookSourceUrl == url { session.invalidate() }
+        for session in sessions where session.source.bookSourceUrl == url { session.invalidate() }
+    }
+
+    private static func matchesLogin(_ left: BookSource, _ right: BookSource) -> Bool {
+        guard LoginUiV2.isCandidate(left.loginUi) || LoginUiV2.isCandidate(right.loginUi) else { return true }
+        return left.loginUi == right.loginUi && left.loginUrl == right.loginUrl
     }
 
     static func session(for source: BookSource, runtimeOverrides: SourceRuntimeOverrides? = nil,
@@ -263,8 +275,8 @@ final class BookSourceSession: Sendable {
         let key: CacheKey = runtimeOverrides.map { .scoped($0.identity, ObjectIdentifier(requestSession)) }
             ?? .book("\(source.bookSourceUrl)#\(source.lastUpdateTime)")
         cacheLock.lock()
-        if let existing = cache[key], existing.session.isActive,
-           !source.isJsSource || (existing.session.source.mainJs == source.mainJs && existing.session.source.id == source.id) {
+        if let existing = cache[key], existing.session.isActive, existing.session.source.ruleReview == source.ruleReview,
+           Self.matchesLogin(source, existing.session.source), !source.isJsSource || (existing.session.source.mainJs == source.mainJs && existing.session.source.id == source.id) {
             accessClock += 1
             cache[key]?.lastUsed = accessClock
             cacheLock.unlock()
@@ -280,8 +292,8 @@ final class BookSourceSession: Sendable {
 
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        if let raced = cache[key], raced.session.isActive,
-           !source.isJsSource || (raced.session.source.mainJs == source.mainJs && raced.session.source.id == source.id) {
+        if let raced = cache[key], raced.session.isActive, raced.session.source.ruleReview == source.ruleReview,
+           Self.matchesLogin(source, raced.session.source), !source.isJsSource || (raced.session.source.mainJs == source.mainJs && raced.session.source.id == source.id) {
             // Another thread built the same source's session first; use theirs
             // so every caller converges on one bridge.
             return raced.session

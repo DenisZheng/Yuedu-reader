@@ -175,6 +175,7 @@ extension ReaderView {
 
         guard newState == .ready, contentAvailable else { return }
         guard epubRenderer.engine != nil || epubRenderer.scrollEngine != nil else {
+            pendingChapterContentReplacements.remove(chapterIndex)
             if chapterIndex == currentChapterIndex {
                 rebuildPages()
                 if manuallyRefreshingChapterIndex == chapterIndex {
@@ -184,6 +185,7 @@ extension ReaderView {
             return
         }
         if effectiveScrollMode, let scrollEngine = epubRenderer.scrollEngine {
+            pendingChapterContentReplacements.remove(chapterIndex)
             // A chapter arriving is a data event: each chapter is independent and none
             // supersedes another. Feed the engine directly so it can never be cancelled
             // by the next chapter's refresh — that is what left the visible chapter
@@ -285,7 +287,8 @@ extension ReaderView {
         ])
         // 目錄 reads the cache again when it next opens, instead of first showing the old marks.
         tocUncachedChapters = nil
-        pendingChapterContentReplacements.formUnion(0..<(book?.onlineChapters?.count ?? 0))
+        manuallyRefreshingChapterIndex = nil
+        pendingChapterContentReplacements = Set(0..<(book?.onlineChapters?.count ?? 0))
         readerViewModel.resetAllChapterStates()
         chapterConsistencyRecoveryAttempts.removeAll()
         // Resetting alone would leave the overlay spinning forever: nothing else refetches
@@ -416,13 +419,7 @@ extension ReaderView {
         // success, so a book that once failed five times carries that verdict forever. An
         // explicit tap says the verdict is stale. Only the manual button does this — the
         // automatic recovery below must not, or the threshold would never mean anything.
-        if let bookId = book?.id {
-            Task { @MainActor in
-                await dependencies.chapterFetcher.resetFailureBudget(for: bookId)
-                store.clearAutomaticQuarantine(bookId: bookId)
-            }
-        }
-        refetchChapter(at: currentChapterIndex)
+        refetchChapter(at: currentChapterIndex, resetFailureBudget: true)
     }
 
     /// `.ready` with nothing readable on disk means the load state and the cache disagree —
@@ -446,17 +443,20 @@ extension ReaderView {
         refetchChapter(at: chapterIndex)
     }
 
-    private func refetchChapter(at idx: Int) {
-        guard let currentBook = book else { return }
-        pendingChapterContentReplacements.insert(idx)
-        let fetcher = dependencies.bookSourceFetcher
-        Task { @MainActor in
-            await fetcher.clearChapterCacheAsync(bookId: currentBook.id, chapterIndex: idx)
-            guard !Task.isCancelled, book?.id == currentBook.id, book?.bookSourceId == currentBook.bookSourceId else { return }
-            store.clearCachedChapter(bookId: currentBook.id, chapterIndex: idx)
-            readerViewModel.resetChapterState(for: idx)
-            // 清理真实完成后才启动新请求，不以延时等待；旧批量票据已失效。
-            ensureChapterReady(chapterIndex: idx, priority: .jump)
+    private func refetchChapter(at idx: Int, resetFailureBudget: Bool = false) {
+        let discard: @MainActor () -> Void = {
+            pendingChapterContentReplacements.remove(idx)
+            if manuallyRefreshingChapterIndex == idx { manuallyRefreshingChapterIndex = nil }
+        }
+        guard let currentBook = book,
+              readerViewModel.refetchChapter(
+                book: currentBook, chapterIndex: idx, store: store, resetFailureBudget: resetFailureBudget,
+                currentBook: { book },
+                didClear: { pendingChapterContentReplacements.insert(idx) },
+                discard: discard
+              ) != nil else {
+            discard()
+            return
         }
     }
 
