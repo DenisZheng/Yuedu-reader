@@ -1,5 +1,7 @@
 # LegadoPro 3.0.2（7）发布记录
 
+> 2026-11-23 后续状态：用户报告书架封面开书自动退回后，已按授权把本 Release 改回草稿下架；`isDraft=true`、`isLatest=false`，原 Tag 和两个附件保持不变。下文是当时成功构建/发布的历史记录，不代表该版仍可公开安装或覆盖当前修复。[故障与修复证据](bookshelf-reader-return-2026-11-23.md)。
+
 ## 授权与固定范围
 
 用户于 2026-11-22 明确选择：先提交并 Push 书架搜索 Bug 修复；清理所有旧 IPA；将 `3.0.1（6）` 升为 `3.0.2（7）`；重新使用 GitHub Actions 构建 Release 配置未签名 IPA，发布正式 GitHub Release 并标为 Latest。该授权不包括 Apple 签名、TestFlight / App Store、安装手机、删除用户书库或把 S8 未验收项改为通过。
