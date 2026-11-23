@@ -19,13 +19,13 @@ git diff --check
 
 ## 构建与交接约定
 
-发布 Tag 为 `legadopro-v3.0.3`，必须指向包含修复和本次升版的固定 commit。触发前检查该 Tag / workflow run 不存在；随后只调用一次：
+发布 Tag 为 `legadopro-v3.0.3`，固定指向版本提交 `a070e2c07d0105a6100c41630dd819fbeeaf68c8`，包含修复 `ead78adb`。Tag 已 Push，触发前检查该 Tag 没有既有 workflow run；随后只调用一次：
 
 ```bash
 gh workflow run build-ios.yml --ref legadopro-v3.0.3 --repo DenisZheng/Yuedu-reader
 ```
 
-使用既有 `workflow_dispatch`、`Reader-Fork-Dev` scheme、Release 真机归档、关闭 Apple 签名；不添加自动触发或新签名配置。按用户明确要求，**触发后不 watch、不轮询、不重触发 CI**。请求返回的 URL / 固定提交写入 `.artifacts/release-3.0.3-6NbeZt/handoff.json`，构建本身不写通过。
+使用既有 `workflow_dispatch`、`Reader-Fork-Dev` scheme、Release 真机归档、关闭 Apple 签名；不添加自动触发或新签名配置。请求已接受，返回 [run 45087172602](https://github.com/DenisZheng/Yuedu-reader/actions/runs/45087172602)。按用户明确要求，**触发后没有 watch、轮询或查询 CI 最终状态，也没有重触发**。URL、固定提交和等待通知的约定已保存到 `.artifacts/release-3.0.3-6NbeZt/handoff.json`；请求成功不表示构建成功。
 
 待用户通知完成后，只检查现有 run 的最终结论和 head SHA，下载该 run 的 IPA / checksum，核对 App与两个扩展的 `3.0.3（8）`、Release身份、arm64/iPhoneOS、ZIP、hash 和签名包状态，再决定正式Release/Latest交付。此时没有创建或发布 `3.0.3` Release，不称旧IPA含本修复。
 
