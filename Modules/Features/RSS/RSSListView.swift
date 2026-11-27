@@ -43,7 +43,7 @@ struct RSSListView: View {
     @AppStorage(RSSSourceBrowse.layoutKey) private var showsSourceGrid = false
     @State private var selectedGroup = RSSSourceBrowse.allGroups
     @State private var gridSources: [RSSSource] = []
-    @State private var isLoadingGrid = true
+    @State private var appliedGridKey: RSSGridRefreshKey?
     @State private var showManagement = false
 
     init(isTabRoot: Bool = false, store: RSSStore = .shared) {
@@ -56,8 +56,8 @@ struct RSSListView: View {
     @AppStorage("rss_main_feed_smart_feeds_expanded") private var smartFeedsExpanded = true
     @AppStorage("rss_main_feed_local_expanded") private var localFeedsExpanded = true
 
-    @State private var expandedFolderIDs: Set<String> = []
-    @State private var didSeedExpandedFolders = false
+    // 新分组默认展开；返回首页不重新写入用户的折叠选择。
+    @State private var collapsedFolderIDs: Set<String> = []
     @State private var showAddSheet = false
     @State private var showAddFolderSheet = false
     @State private var showOPMLImportSheet = false
@@ -104,6 +104,10 @@ struct RSSListView: View {
 
     /// RSS訂閱Tab根頁；其他推入入口仍使用inline標題。
     var body: some View {
+        let gridKey = showsSourceGrid ? RSSGridRefreshKey(
+            revision: hideReadFeeds ? store.sourceBrowseRevision : store.configurationRevision,
+            group: selectedGroup, hideRead: hideReadFeeds
+        ) : nil
         Group {
             ZStack {
                 PageBackgroundView(scope: .rss)
@@ -358,25 +362,21 @@ struct RSSListView: View {
             } message: { target in
                 Text(target.message)
             }
-            .task(id: RSSGridRefreshKey(revision: store.sourceBrowseRevision, group: selectedGroup, hideRead: hideReadFeeds)) {
-                isLoadingGrid = true
+            .task(id: gridKey) {
+                guard let gridKey, gridKey != appliedGridKey else { return }
                 let sources = store.sources
                 let groups = store.orderedFolders()
-                let unread = hideReadFeeds ? Set(sources.filter { store.unreadCount(for: $0.id) > 0 }.map(\.id)) : nil
-                let group = selectedGroup
+                let unread = gridKey.hideRead ? Set(sources.filter { store.unreadCount(for: $0.id) > 0 }.map(\.id)) : nil
+                let group = gridKey.group
                 let result = await Task.detached(priority: .userInitiated) {
                     RSSSourceBrowse.sources(sources, folders: groups, group: group, unreadIDs: unread)
                 }.value
                 guard !Task.isCancelled else { return }
                 gridSources = result
-                isLoadingGrid = false
+                appliedGridKey = gridKey
             }
-            .task {
-                seedExpandedFoldersIfNeeded()
-                await backfillMissingSourceMetadata()
-            }
+            .task { await backfillMissingSourceMetadata() }
             .onChange(of: store.folders) { _, _ in
-                seedExpandedFoldersIfNeeded()
                 if selectedGroup != RSSSourceBrowse.allGroups && selectedGroup != RSSSourceBrowse.ungrouped,
                    !store.folders.contains(where: { RSSSourceBrowse.folder($0.id) == selectedGroup }) {
                     selectedGroup = RSSSourceBrowse.allGroups
@@ -388,7 +388,8 @@ struct RSSListView: View {
     private var sourceGridSection: some View {
         VStack(alignment: .leading, spacing: DSSpacing.md) {
             RSSSourceGroupPicker(folders: folders, selection: $selectedGroup)
-            if isLoadingGrid {
+            // 同一筛选条件下保留已显示的方格。导航返回或已读变化不应把滚动内容换成进度圈。
+            if appliedGridKey?.group != selectedGroup || appliedGridKey?.hideRead != hideReadFeeds {
                 ProgressView().accessibilityLabel(localized("載入中…"))
             } else if gridSources.isEmpty {
                 ContentUnavailableView(localized(hideReadFeeds && !store.sources.isEmpty ? "沒有未讀訂閱" : "沒有訂閱源"),
@@ -458,7 +459,7 @@ struct RSSListView: View {
                         RSSHomeDivider()
                     }
 
-                if expandedFolderIDs.contains(folder.id) {
+                if !collapsedFolderIDs.contains(folder.id) {
                     ForEach(visibleSources(store.sources(in: folder))) { source in
                         sourceRow(source, indent: 36)
                             .overlay(alignment: .bottom) {
@@ -478,7 +479,7 @@ struct RSSListView: View {
     }
 
     private func folderRow(_ folder: RSSFolder) -> some View {
-        let isExpanded = expandedFolderIDs.contains(folder.id)
+        let isExpanded = !collapsedFolderIDs.contains(folder.id)
         let unreadCount = store.unreadCount(for: folder)
 
         return Button {
@@ -650,20 +651,9 @@ struct RSSListView: View {
     }
 
     private func toggleFolder(_ folder: RSSFolder) {
-        if expandedFolderIDs.contains(folder.id) {
-            expandedFolderIDs.remove(folder.id)
-        } else {
-            expandedFolderIDs.insert(folder.id)
+        if collapsedFolderIDs.remove(folder.id) == nil {
+            collapsedFolderIDs.insert(folder.id)
         }
-    }
-
-    private func seedExpandedFoldersIfNeeded() {
-        guard !didSeedExpandedFolders else {
-            expandedFolderIDs.formUnion(store.folders.map(\.id))
-            return
-        }
-        didSeedExpandedFolders = true
-        expandedFolderIDs = Set(store.folders.map(\.id))
     }
 
     private func performDelete(_ target: RSSDeleteTarget) {
@@ -671,6 +661,7 @@ struct RSSListView: View {
         case .source(let source):
             store.removeSources(ids: [source.id])
         case .folder(let folder):
+            collapsedFolderIDs.remove(folder.id)
             store.removeFolder(folder, deleteSources: true)
         }
         deleteTarget = nil

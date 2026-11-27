@@ -80,6 +80,81 @@ final class S8RepresentativeSourceTests: XCTestCase {
         try requirePreflight(RSSPoCTestHost.isEnabled, "实源S8验收必须使用Reader-Fork-RSS-PoC隔离宿主，禁止主页后台请求")
     }
     @MainActor
+    func testPreScreenedRSSAvailabilityTypes() async throws {
+        guard ProcessInfo.processInfo.environment["RSS_REAL_HEALTH_CHECK"] == "1" else {
+            throw XCTSkip("实源活性抽查需要操作员明确开启")
+        }
+        let ordinals = [48, 50, 55, 111, 112, 115, 122, 128, 181, 217]
+        let root = URL.temporaryDirectory.appendingPathComponent("RSSRealHealth-" + UUID().uuidString)
+        let store = RSSStore(storageDirectory: root)
+        defer {
+            if FileManager.default.fileExists(atPath: root.path) {
+                do { try FileManager.default.removeItem(at: root) } catch { XCTFail("清理隔离活性测试目录失败") }
+            }
+        }
+        let checker = RSSSourceHealthChecker()
+        var measuredIDs: Set<String> = []
+        var restricted = 0
+        for ordinal in ordinals {
+            let source = try await source(at: ordinal, additionalApprovedOrdinals: Set(ordinals))
+            let sort = source.sortUrl ?? ""
+            try requirePreflight(!source.enabledCookieJar && source.startHtml?.isEmpty != false
+                                 && !LegadoSortURLParser.needsJSEvaluation(sort)
+                                 && (!source.singleUrl || sort.isEmpty),
+                                 "活性抽查只允许静态入口、静态分类、禁用CookieJar的预审源")
+            let base = try XCTUnwrap(URL(string: source.url))
+            let target = source.isLegadoRuleBased && !source.singleUrl
+                ? LegadoSortURLParser.entries(from: sort, fallbackURL: source.url).first?.url ?? source.url
+                : source.url
+            let url = try XCTUnwrap(URL(string: target, relativeTo: base)?.absoluteURL)
+            try requirePreflight(!target.contains("{") && AnalyzeUrl.stripOptions(from: target) == target
+                                 && url.scheme == "https" && url.user == nil && url.password == nil
+                                 && url.query == nil && url.fragment == nil
+                                 && S8RequestMeter.origin(of: url) == S8RequestMeter.origin(of: base),
+                                 "只准入预审的同源公开HTTPS首地址")
+            guard CookieStore.shared.get(url: url.absoluteString).isEmpty,
+                  HTTPCookieStorage.shared.cookies(for: url)?.isEmpty != false else {
+                restricted += 1
+                print("RSS_REAL_HEALTH ordinal=\(ordinal) limited=true reason=cookie-state")
+                continue
+            }
+            let (_, session, meter) = try makeFetcher(urls: [url.absoluteString], expectedOrigin: S8RequestMeter.origin(of: url))
+            defer { session.invalidateAndCancel(); meter.boundary?.close() }
+            store.addSource(source)
+            checker.start(sources: [source], owner: store, session: session)
+            await checker.waitForCompletion()
+            let outcome = try XCTUnwrap(checker.results[source.id])
+            let requests = meter.snapshot()
+            let boundary = try XCTUnwrap(meter.boundary).counts
+            XCTAssertLessThanOrEqual(boundary.approved, 1)
+            XCTAssertLessThanOrEqual(requests.transactions, 1)
+            XCTAssertTrue(requests.requestMethods.allSatisfy { $0 == "GET" })
+            XCTAssertEqual(requests.credentialHeadersSent, 0)
+            XCTAssertEqual(requests.transactionsOutsideExpectedOrigin, 0)
+            XCTAssertTrue(store.articles(for: source.id).isEmpty)
+            let limited = boundary.approved == 0 || boundary.rejected > 0 || requests.redirectsBlocked > 0
+                || requests.statusCodes.contains { (300..<400).contains($0) }
+            if limited { restricted += 1 } else { measuredIDs.insert(source.id) }
+            let status = requests.statusCodes.map(String.init).joined(separator: ",")
+            print("RSS_REAL_HEALTH ordinal=\(ordinal) outcome=\(outcome.kind.rawValue) approvals=\(boundary.approved) requests=\(requests.transactions) http=\(status.isEmpty ? "none" : status) limited=\(limited)")
+        }
+        let revisions = try XCTUnwrap(store.requestRevisions)
+        let groups = await checker.selectionGroups(in: store.sources, revisions: revisions)
+        let measured = groups.compactMap { group -> String? in
+            let count = group.sourceIDs.intersection(measuredIDs).count
+            return count == 0 ? nil : "\(group.kind.rawValue)=\(count)"
+        }
+        XCTAssertEqual(groups.reduce(0) { $0 + $1.sourceIDs.count }, store.sources.count)
+        let failedIDs = (groups.first { $0.kind == .failed }?.sourceIDs ?? []).intersection(measuredIDs)
+        let kept = Set(store.sources.map(\.id)).subtracting(failedIDs)
+        if !failedIDs.isEmpty { store.removeSources(ids: Array(failedIDs)) }
+        try await store.flushPersistence()
+        let reloaded = RSSStore(storageDirectory: root)
+        XCTAssertEqual(Set(reloaded.sources.map(\.id)), kept, "临时库只删除明确选中的失败来源")
+        print("RSS_REAL_HEALTH_SUMMARY planned=\(ordinals.count) measured=\(measuredIDs.count) limited=\(restricted) kinds=\(measured.count) \(measured.joined(separator: " ")) isolatedDeleted=\(failedIDs.count)")
+    }
+
+    @MainActor
     func testPreScreenedPublicXMLFeedUsesProductionFetcher() async throws {
         let source = try await source(at: 181)
         XCTAssertFalse(source.singleUrl)
@@ -1105,7 +1180,7 @@ final class S8RepresentativeSourceTests: XCTestCase {
         return (decoded, search)
     }
 
-    private func source(at ordinal: Int) async throws -> RSSSource {
+    private func source(at ordinal: Int, additionalApprovedOrdinals: Set<Int> = []) async throws -> RSSSource {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let url = root.appendingPathComponent("docs/rssSources-valid.json")
@@ -1114,7 +1189,8 @@ final class S8RepresentativeSourceTests: XCTestCase {
                              == "0e30301c85fb511961be7542212ee63b8d4173a9b6c33bb5a4f88eb6d3795f45",
                              "实源抽查仅适用已经静态审计过的固定包")
         let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
-        try requirePreflight(rows.count == 307 && [14, 128, 141, 146, 181, 217, 265].contains(ordinal),
+        try requirePreflight(rows.count == 307 && rows.indices.contains(ordinal - 1)
+                             && ([14, 128, 141, 146, 181, 217, 265].contains(ordinal) || additionalApprovedOrdinals.contains(ordinal)),
                              "未预审的RSS条目，拒绝联网")
         let raw = rows[ordinal - 1]
         let candidateData = try JSONSerialization.data(withJSONObject: [raw], options: [.sortedKeys])

@@ -190,6 +190,7 @@ struct RSSFeedView: View {
     @State private var submittedSearch: String?
     @State private var selectedSortEntry: RSSSortEntry?
     @State private var selectedArticleID: String?
+    @State private var handledLoadKey: LoadKey?
     private struct PagePresentation: Identifiable {
         let id = UUID()
         var target: RSSOpenTarget
@@ -213,13 +214,15 @@ struct RSSFeedView: View {
         return formatter
     }()
 
-    private struct LoadKey: Hashable {
+    private struct LoadKey: Equatable {
         var revision: UInt64
+        var authenticationRevision: UInt64
         var category: String?
         var search: String?
     }
     private var loadKey: LoadKey {
-        .init(revision: store.runtimeRevision(for: source.id), category: selectedSortEntry?.id, search: submittedSearch)
+        .init(revision: store.runtimeRevision(for: source.id), authenticationRevision: store.authenticationRevision(for: source.id),
+              category: selectedSortEntry?.id, search: submittedSearch)
     }
     private var currentSource: RSSSource { store.source(id: source.id) ?? source }
     private var supportsRemoteSearch: Bool {
@@ -282,7 +285,12 @@ struct RSSFeedView: View {
             }
         }
         .task(id: loadKey) {
-            if currentSource.usesLegadoRuntime || articles.isEmpty || submittedSearch != nil { await refresh() }
+            // 正文返回会再次启动 .task，但仍在同一次浏览会话内，不应重抓第 1 页。
+            let key = loadKey
+            guard key != handledLoadKey else { return }
+            let needsRefresh = handledLoadKey != nil || submittedSearch != nil || currentSource.usesLegadoRuntime || articles.isEmpty
+            handledLoadKey = key
+            if needsRefresh { await refresh() }
         }
         .onChange(of: session.openTarget) { _, target in
             if let target, !autoOpenedWebPage { autoOpenedWebPage = true; show(target) }

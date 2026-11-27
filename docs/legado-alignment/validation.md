@@ -2,6 +2,115 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 订阅验活按结果切页（2026-11-27）
+
+订阅管理参考书源管理的按结果切页与本页批选，**在 RSS 内独立实现**，未改变书源界面、检查器或组件。验证结束可直接点结果类型及数量，不再打开结果多选弹层。切换结果页清空旧勾选；结果页「全选／反选」只处理当前源分组和搜索范围。普通「全部」的全选仍可跨源分组保留勾选。删源仍从当前勾选发起并确认；若结果范围、配置或登录修订在确认期间变化，旧选择不能删除来源。
+
+继续用 [RSS 活性检查器](../../Modules/Services/RSS/RSSSourceHealthChecker.swift) 检查启动入口或首列表。首页有条目、空列表、网页可达、仅生成启动页、媒体入口、需登录或人工验证、失败和已取消仍分开。未验证或过期的源不进结果页；一次失败不等于永久失效。没有再次请求实源，也没有改源包、数据格式或发布门槛。
+
+使用 Xcode 27.2 和 iOS 27.2 串行验证，测试使用隔离库和合成源。iPhone 18 Pro Max 的 `iphone.log` 输出 `Test run with 20 tests in 3 suites passed` 与 `Executed 2 tests, with 0 failures (0 unexpected)`；iPad Pro 13-inch (M5) 的 `ipad.log` 输出 `Executed 1 test, with 0 failures (0 unexpected)`。两端均有 `** TEST SUCCEEDED **`。UI 覆盖切页清空勾选、失败页不混入其他结果、页内全选／反选、缩小源分组后排除范围外的勾选、取消删除和仅删确认的失败源。逻辑回归覆盖过期和取消结果、原有跨分组全选与书源管理。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+d=.artifacts/rss-health-pages-hRlPEe
+pick='yuedu appUITests/RSSSourceHomeUITests/testHealthResultPagesOnlySelectAndDeleteCurrentPage'
+bash scripts/xctest.sh -l "$d/iphone.log" -- \
+  -only-testing:'yuedu appTests/RSSSourceBrowseTests' \
+  -only-testing:'yuedu appTests/RSSSourceHealthCheckerTests' \
+  -only-testing:'yuedu appTests/BookSourceManagementModelTests' \
+  -only-testing:"$pick" \
+  -only-testing:'yuedu appUITests/RSSSourceHomeUITests/testMultiselectCancelDeleteAndDeleteAll' \
+  -resultBundlePath "$d/iphone.xcresult"
+YUEDU_DEST="$(bash scripts/sim.sh dest iPad)" bash scripts/xctest.sh -l "$d/ipad.log" -- \
+  -only-testing:"$pick" -resultBundlePath "$d/ipad.xcresult"
+```
+
+`ruby scripts/check_localizations.rb` 输出 `Localization OK`（主文案 5 份、4387 键），`git diff --check` 无错误。未验证最低 iOS 17、真机或发布构建。回滚时只撤回本轮 RSS 结果页、修订通知及相关测试和文案，不需要迁移或还原订阅数据。
+
+## 历史：管理订阅源按活性结果多选（2026-11-27）
+
+下面记录上一版结果多选弹层的历史验证与实源抽查；当前界面已改为上面的结果切页。
+
+[管理页](../../Modules/Features/RSS/RSSSourceManagementView.swift) 验证结束后可点「按验证结果选取」，在原生多选列表里组合结果类型并查看各组数量。「完成」只勾选当前源分组及搜索范围内匹配的来源，**替换原勾选**；取消保持原样。普通「全选」仍保留跨分组勾选。删除沿用原有确认，不自动停用或删除。再次确认验证时按原勾选确定检查范围，再清空上一次按结果生成的勾选。
+
+[活性检查](../../Modules/Services/RSS/RSSSourceHealthChecker.swift) 有 7 种检查结论（首页有条目、首页为空、启动网页可达、仅生成启动页、媒体入口、需登录或人工验证、失败），另有「已取消」，共 8 种可选结果。未验证不属于任何结果。重查一批时先撤回该批旧结果，取消后未轮到的源不入组。分组在后台从检查结果与源/登录修订快照生成，应用前再次核对范围与修订；不新建存储或改请求、解析规则。一次失败、空列表、网页可达和真正可播放分别对待。
+
+### 实源抽查
+
+用户授权用项目内测试源包。`docs/rssSources-valid.json` 固定 307 项中抽取 10 条，含静态启动网页、规则首列表和标准 Feed；先筛查脚本、凭据/登录配置、CookieJar、URL 选项与首站地址。用 `Reader-Fork-RSS-PoC` 隔离宿主驱动生产 `RSSSourceHealthChecker` 串行验证；每条只准入一个精确公开 HTTPS GET，不跟跳转，不抓子资源、正文或媒体，不用账号。测试不运行原包脚本、没有写文章。只记录序号、类型和 HTTP 状态，不记录请求凭据、URL 或正文。
+
+| 结果 | 实测数量 | 原包序号（1 起始） |
+| --- | ---: | --- |
+| 首页有条目 | 4 | R112、R122、R128、R181 |
+| 首页解析成功但为空 | 2 | R111、R217 |
+| 启动网页可达 | 4 | R048、R050、R055、R115 |
+
+10 次 GET 全部 HTTP 200，未遇准入限制；`real.log` 输出 `RSS_REAL_HEALTH_SUMMARY planned=10 measured=10 limited=0 kinds=3 list=4 emptyList=2 webReachable=4 isolatedDeleted=0`，1 项通过、`** TEST SUCCEEDED **`。失败组无实源候选，所以没删除实源。其余类型由合成用例覆盖，不冒充站点实测；不外推整包、永久失效、需要个人登录的来源或媒体播放。两份项目内源包的 SHA-256 与抽查前一致。
+
+### 自动回归与命令
+
+iOS 27.2、Xcode 27.2，串行，证据在 `.artifacts/rss-health-XoRRTp/`。真实 UI 覆盖取消保留 3 个原勾选、组合两个类型后只留 2 个、缩小源分组后只选失败组、删除取消与确认只删失败来源。首轮用开关，UI 层级出现双节点且点行后 `value: 0`；改用和管理页一致的原生 `List` 多选。最终 `iphone-picker-list.log`、`ipad-picker.log` 各 `Executed 1 test, with 0 failures (0 unexpected)` 与 `** TEST SUCCEEDED **`。`iphone.log` 中 `RSSSourceHealthCheckerTests` 与 `RSSSourceBrowseTests` 12 项、2 suites 通过，旧全选/取消删除 UI 单项也通过；该轮新弹层 UI 失败，不算整轮通过。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+d=.artifacts/rss-health-XoRRTp
+pick='yuedu appUITests/RSSSourceHomeUITests/testSelectByHealthReplacesSelectionAndDeletesOnlyChosenResult'
+YUEDU_SCHEME=Reader-Fork-Dev bash scripts/xctest.sh -l "$d/iphone-picker-list.log" -- \
+  -only-testing:"$pick" -resultBundlePath "$d/iphone-picker-list.xcresult"
+YUEDU_DEST="$(bash scripts/sim.sh dest iPad)" YUEDU_SCHEME=Reader-Fork-Dev \
+  bash scripts/xctest.sh -l "$d/ipad-picker.log" -- -only-testing:"$pick" -resultBundlePath "$d/ipad-picker.xcresult"
+TEST_RUNNER_RSS_REAL_HEALTH_CHECK=1 YUEDU_SCHEME=Reader-Fork-RSS-PoC \
+  bash scripts/xctest.sh -l "$d/real.log" -- \
+  -only-testing:'yuedu appTests/S8RepresentativeSourceTests/testPreScreenedRSSAvailabilityTypes' -resultBundlePath "$d/real.xcresult"
+```
+
+五语言表通过 `ruby scripts/check_localizations.rb`（主文案 4389 键）。独立活性实源抽查与上轮独立资源规则回归不混入固定 S8 通过集；`bash -n scripts/validate_reader_fork_s8.sh` 无错误，`python3 -I scripts/tests/test_s8_regression_verdict.py` 输出 `Ran 11 tests`／`OK`。用 `scripts/xctest.sh` 聚焦重放这两项 `-skip-testing` 参数（`s8-selection.log`），只运行原有 `RSSImageServiceTests` 3 项，`** TEST SUCCEEDED **`，未追加实源请求。`git diff --check` 无错误。
+
+未执行完整 S8、未覆盖最低 iOS 17、真机及发布门槛。可只回滚本轮结果选取、修订校验及相关测试和文案；无数据迁移，不改原始源包、用户订阅数据或签名。
+
+## 订阅返回位置、分页与资源规则修复（2026-11-27）
+
+本次以 `cd2960c2` 为起点，使用隔离订阅库、自建网页和本机 HTTP 响应，不执行原包脚本、不修改用户源或文章。
+
+- **订阅首页**：[RSSListView](../../Modules/Features/RSS/RSSListView.swift) 返回时保留已显示的同一筛选方格，不再先清空给进度圈；树形只记用户折叠了哪些分组，不在每次出现时重新展开。修复前，方格与部分折叠的树返回后都看不到刚才的来源（`red-navigation.log`）。全展开的树在本模拟器上仍见原行，但返回时有 54 点位移；三种布局保留原生导航栏，回归要求原来源仍在视野、没有回顶，并允许导航栏显示状态造成的一行位移。
+- **来源分页**：[RSSFeedView](../../Modules/Features/RSS/RSSFeedView.swift) 同一个来源、配置/登录修订、分类和查询返回时不触发第 1 页刷新，保留当前浏览会话已加载的页面。改配置、切分类/查询和手动刷新仍走原刷新逻辑，取消和旧响应校验仍由 `RSSFeedSession` 负责。修复前本机请求顺序是 `1 → 2 → 1`；最终用首次第 3 页返回 503 暂停自动预取，打开第 2 页正文并验证已渲染，返回后从真实「重试」按钮续载，确认三个条目仍在，实际顺序为 `1 → 2 → 3 → 3`。初期托管测试对程序化滚动触发第 3 页的假设不可靠，这两轮未记为整体通过。
+- **规则网页**：[RSSResourceRules](../../Modules/Services/RSS/RSSResourceRules.swift) 原样交给 WebKit 的 `.*(?:a|b).*` 被拒绝，`red.log` 中实际出现 `Disjunctions are not supported yet.` 和「此来源的资源规则无法安全执行」。本地样本 `docs/rssSources-valid.json` 第 24 项有同类写法（仅静态核对）。按固定 Android `330e606c4` 合同拆逗号后去空白、黑名单优先、保留前缀或全串匹配。将可等价拆分的简单分支分别交给 WebKit；仍使用原过滤和条数预算，不跳过不支持的规则，不扩大网页能力。生产 WebKit 回归确认正文和允许的 CSS 加载，匹配两个分支的请求都未发出；另检查白名单、原生图片阻断和超量/复杂表达式仍拒绝。
+
+环境：macOS、Xcode 27.2（27B52）、iOS 27.2，`Reader-Fork-Dev`，串行使用既有 DerivedData。日志与 xcresult 保存在 `.artifacts/rss-return-tqXgUQ/`。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+d=.artifacts/rss-return-tqXgUQ
+bash scripts/xctest.sh -l "$d/final-iphone.log" -- \
+  -only-testing:'yuedu appUITests/RSSSourceHomeUITests/testGridReturnsToSameScrollPosition' \
+  -only-testing:'yuedu appUITests/RSSSourceHomeUITests/testExpandedTreeReturnsToSameScrollPosition' \
+  -only-testing:'yuedu appUITests/RSSSourceHomeUITests/testPartiallyCollapsedTreeReturnsToSameScrollPosition' \
+  -only-testing:'yuedu appTests/RSSOpeningViewTests/feedLoadMoreAction()' \
+  -only-testing:'yuedu appTests/RSSOpeningViewTests/resourceRegexAlternation()' \
+  -only-testing:'yuedu appTests/RSSImageServiceTests/filterParity()' \
+  -only-testing:'yuedu appTests/RSSImageServiceTests/boundedResourceAlternation()' \
+  -only-testing:'yuedu appTests/RSSWebImageTests/filteredImage()' \
+  -resultBundlePath "$d/final-iphone.xcresult"
+```
+
+iPhone 18 Pro Max：`Executed 3 tests, with 0 failures (0 unexpected)`、`Test run with 5 tests in 3 suites passed`、`** TEST SUCCEEDED **`。UI 分别走原生返回按钮和屏幕边缘返回，验证方格及全开/部分折叠的树。补充 `pagination-confirm.log`：同一脚本选 `feedLoadMoreAction()`、`remoteSearchAction()`、`paginationRetryAndDuplicate()` 与 `categorySwitchCancelsOldPage()`，4 项、2 suites 通过，覆盖原生搜索提交、同页重试和分类切换拒绝旧请求。此前方格切分类/重启用例单项在 `navigation.log` 中通过（该轮整体失败，未把它记为整轮通过）。
+
+iPad mini（A20 Pro）：同一工具链，方格和部分折叠树两项 `Executed 2 tests, with 0 failures (0 unexpected)`、`** TEST SUCCEEDED **`。
+
+```bash
+YUEDU_DEST="$(bash scripts/sim.sh dest 'iPad mini')" bash scripts/xctest.sh -l "$d/final-ipad.log" -- \
+  -only-testing:'yuedu appUITests/RSSSourceHomeUITests/testGridReturnsToSameScrollPosition' \
+  -only-testing:'yuedu appUITests/RSSSourceHomeUITests/testPartiallyCollapsedTreeReturnsToSameScrollPosition' \
+  -resultBundlePath "$d/final-ipad.xcresult"
+```
+
+没有新增面向用户的文案；`ruby scripts/check_localizations.rb` 输出主文案 5 个语言、4383 个键 `Localization OK`，`git diff --check` 无错误。未识别用户报错的具体订阅源，未联测原站、真机媒体或 iOS 17，不宣称所有资源规则都兼容。回滚仅反向撤销本轮页面状态和规则转换、以及对应回归，不改订阅库、进度、源包、签名和 S8 发布门槛。
+
 ## LegadoPro 3.0.3（8）修复构建交接（2026-11-23）
 
 开书回退修复 `ead78adb` 已提交并Push，iPhone4项及iPad2项真实UI全部通过。旧 `3.0.2` Release 已按用户要求改草稿下架并取消Latest，两个附件和Tag保留；共享版本备份后递增至 `3.0.3（8）`，24项工作流/合成打包及9项Fork配置检查均OK。固定版本 `a070e2c0` / Tag `legadopro-v3.0.3` 已仅手动触发一次 [run 45087172602](https://github.com/DenisZheng/Yuedu-reader/actions/runs/45087172602)，**没有监视或查询CI最终状态**；由用户通知后再检查/交付，未把构建请求或旧产物写成新版通过。命令、边界和交接信息见[3.0.3构建记录](release-3.0.3.md)。

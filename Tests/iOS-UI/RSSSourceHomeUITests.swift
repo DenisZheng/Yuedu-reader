@@ -111,6 +111,77 @@ final class RSSSourceHomeUITests: XCTestCase {
         app.terminate()
     }
 
+    @MainActor func testGridReturnsToSameScrollPosition() throws {
+        try verifySourceReturn(grid: true, collapseFirstFolder: false, swipeBack: false)
+    }
+
+    @MainActor func testExpandedTreeReturnsToSameScrollPosition() throws {
+        try verifySourceReturn(grid: false, collapseFirstFolder: false, swipeBack: true)
+    }
+
+    @MainActor func testPartiallyCollapsedTreeReturnsToSameScrollPosition() throws {
+        try verifySourceReturn(grid: false, collapseFirstFolder: true, swipeBack: false)
+    }
+
+    @MainActor private func verifySourceReturn(grid: Bool, collapseFirstFolder: Bool, swipeBack: Bool) throws {
+        let directory = try fixture()
+        defer { do { try FileManager.default.removeItem(at: directory) } catch { XCTFail("测试目录清理失败") } }
+        let targetIndex = grid ? 78 : 34
+        let file = directory.appendingPathComponent("rss_sources.json")
+        let seed = try XCTUnwrap((try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [[String: Any]])?.first)
+        let sources = (0..<105).map { index -> [String: Any] in
+            seed.merging([
+                "id": "return-\(index)", "name": "Return Source \(index)",
+                "url": "http://127.0.0.1:9/return-\(index)", "faviconURL": "http://127.0.0.1:9/fixture.png",
+                "sortOrder": index, "sourceGroup": index < 22 ? "News" : "Media",
+                "enabled": index == targetIndex, "startHtml": "<p>Opened return fixture</p>"
+            ]) { _, new in new }
+        }
+        try JSONSerialization.data(withJSONObject: sources).write(to: file)
+        let app = launch(directory, extra: [
+            "-rss_main_feed_local_expanded", "YES", "-rss_main_feed_hide_read_feeds", "NO",
+            "-rss_source_home_grid", grid ? "YES" : "NO"
+        ])
+        defer { app.terminate() }
+        XCTAssertTrue(app.rootTab("訂閱").waitForExistence(timeout: 25))
+        app.rootTab("訂閱").tap()
+        let scroll = app.scrollViews.firstMatch
+        let news = app.buttons["News"].firstMatch
+        let first = app.buttons["rss.source.return-0"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        if grid { XCTAssertTrue(app.buttons["rss.sourceGroup"].firstMatch.exists) }
+        if collapseFirstFolder {
+            news.tap()
+            XCTAssertTrue(first.waitForNonExistence(timeout: 5))
+        }
+
+        let target = app.buttons["rss.source.return-\(targetIndex)"].firstMatch
+        for _ in 0..<14 where !target.exists || !target.isHittable { scroll.swipeUp(velocity: .slow) }
+        XCTAssertTrue(target.exists && target.isHittable, "测试必须从首页中间点开来源")
+        XCTAssertFalse(first.exists && first.isHittable, "点开之前必须已离开首页顶端")
+        let before = target.frame
+        target.tap()
+        XCTAssertTrue(app.webViews.staticTexts["Opened return fixture"].firstMatch.waitForExistence(timeout: 12))
+        app.buttons["rss.web.close"].tap()
+        XCTAssertTrue(app.buttons["開啟網頁"].firstMatch.waitForExistence(timeout: 8))
+        if swipeBack {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.55))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.55)))
+        } else {
+            app.navigationBars.buttons["BackButton"].firstMatch.tap()
+        }
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        XCTAssertTrue(target.exists && target.isHittable, "返回订阅首页后应仍看到刚才打开的来源")
+        // iOS 的原生导航栏可在返回时重新展开；允许一行的可视位移，但不能回到列表顶部。
+        XCTAssertEqual(target.frame.minY, before.minY, accuracy: before.height, "返回后应留在原来的来源附近")
+        XCTAssertFalse(first.exists && first.isHittable)
+        if collapseFirstFolder {
+            for _ in 0..<14 where !news.exists || !news.isHittable { scroll.swipeDown(velocity: .slow) }
+            XCTAssertTrue(news.exists && news.isHittable)
+            XCTAssertFalse(first.exists, "导航返回后用户折叠的分组不能自行展开")
+        }
+    }
+
     @MainActor func testAvailabilityCheckAndConfirmation() throws {
         let directory = try fixture()
         defer { do { try FileManager.default.removeItem(at: directory) } catch { XCTFail("测试目录清理失败") } }
@@ -129,6 +200,86 @@ final class RSSSourceHomeUITests: XCTestCase {
         app.terminate()
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("rss_articles.json").path),
                        "检查不能将文章抓取结果写入持久缓存")
+    }
+
+    @MainActor func testHealthResultPagesOnlySelectAndDeleteCurrentPage() throws {
+        let directory = try fixture()
+        defer { do { try FileManager.default.removeItem(at: directory) } catch { XCTFail("测试目录清理失败") } }
+        let file = directory.appendingPathComponent("rss_sources.json")
+        var sources = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [[String: Any]])
+        let sample = try XCTUnwrap(sources.first).merging([
+            "id": "d", "name": "Delta", "url": "http://127.0.0.1:9/d", "sourceGroup": "Media", "sortOrder": 3
+        ]) { _, new in new }
+        sources.append(sample)
+        try JSONSerialization.data(withJSONObject: sources).write(to: file)
+
+        let app = launch(directory)
+        defer { app.terminate() }
+        XCTAssertTrue(app.rootTab("訂閱").waitForExistence(timeout: 25)); app.rootTab("訂閱").tap()
+        menu("管理訂閱源", app: app)
+        let rows = app.descendants(matching: .any)
+        let a = rows.matching(identifier: "rss.manage.source.a").firstMatch
+        let b = rows.matching(identifier: "rss.manage.source.b").firstMatch
+        let c = rows.matching(identifier: "rss.manage.source.c").firstMatch
+        let d = rows.matching(identifier: "rss.manage.source.d").firstMatch
+        let failures = app.buttons["rss.manage.health.failed"].firstMatch
+        let generated = app.buttons["rss.manage.health.generatedPage"].firstMatch
+        let all = app.buttons["rss.manage.health.all"].firstMatch
+        let selectAll = app.buttons["rss.manage.selectAll"]
+        let invert = app.buttons["rss.manage.invertSelection"]
+        let delete = app.buttons["rss.manage.delete"]
+
+        XCTAssertTrue(a.waitForExistence(timeout: 10))
+        XCTAssertFalse(failures.exists)
+        a.tap(); b.tap(); d.tap()
+        app.buttons["rss.manage.check"].tap()
+        app.alerts.firstMatch.buttons["開始驗證"].tap()
+        XCTAssertTrue(failures.waitForExistence(timeout: 12), app.debugDescription)
+        XCTAssertTrue(generated.exists)
+        XCTAssertTrue(failures.label.hasSuffix(" 2"))
+        c.tap()
+        XCTAssertTrue(app.staticTexts["已選 4 個"].exists)
+
+        failures.tap()
+        XCTAssertTrue(app.staticTexts["已選 0 個"].waitForExistence(timeout: 5), "切结果页清空原勾选")
+        XCTAssertTrue(a.exists && d.exists)
+        XCTAssertFalse(b.exists || c.exists, "成功和未验证的源不能混入失败页")
+        XCTAssertFalse(delete.isEnabled)
+        selectAll.tap()
+        XCTAssertTrue(app.staticTexts["已選 2 個"].exists)
+        invert.tap()
+        XCTAssertTrue(app.staticTexts["已選 0 個"].exists)
+        invert.tap()
+        XCTAssertTrue(app.staticTexts["已選 2 個"].exists)
+
+        generated.tap()
+        XCTAssertTrue(b.waitForExistence(timeout: 5))
+        XCTAssertFalse(a.exists || c.exists || d.exists)
+        XCTAssertTrue(app.staticTexts["已選 0 個"].exists)
+        failures.tap()
+        selectAll.tap()
+        let group = app.buttons["rss.sourceGroup"].firstMatch
+        group.tap(); app.buttons["News"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["已選 1 個"].waitForExistence(timeout: 8), "失败页内缩小分组会排除其他组的选择")
+        XCTAssertTrue(a.exists)
+        XCTAssertFalse(d.exists)
+        XCTAssertTrue(failures.label.hasSuffix(" 1"))
+
+        delete.tap()
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "選取的 1 個")).firstMatch.exists)
+        alert.buttons["取消"].tap()
+        XCTAssertTrue(a.exists)
+        delete.tap(); alert.buttons["刪除"].tap()
+        XCTAssertTrue(a.waitForNonExistence(timeout: 5))
+
+        group.tap(); app.buttons["全部分類"].firstMatch.tap()
+        XCTAssertTrue(failures.waitForExistence(timeout: 5))
+        all.tap()
+        XCTAssertTrue(b.waitForExistence(timeout: 5))
+        XCTAssertTrue(c.exists && d.exists, "其他结果和其他分组的失败源均不得删除")
+        XCTAssertFalse(a.exists)
     }
 
     @MainActor func testMultiselectCancelDeleteAndDeleteAll() throws {

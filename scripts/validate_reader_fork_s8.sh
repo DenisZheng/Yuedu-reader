@@ -39,6 +39,9 @@ while IFS= read -r suite; do
   args+=("-only-testing:yuedu appTests/$suite")
 done < "$EVIDENCE/suites.txt"
 (( ${#args[@]} > 0 )) || { echo "没有选择任何S8 suite" >&2; exit 1; }
+# 手工实源活性抽样和独立资源规则回归走各自命令，不改变固定 S8 通过集。
+args+=("-skip-testing:yuedu appTests/S8RepresentativeSourceTests/testPreScreenedRSSAvailabilityTypes")
+args+=("-skip-testing:yuedu appTests/RSSImageServiceTests/boundedResourceAlternation()")
 # R146图片是外部证书链前置条件（-1202/-9814）：任何模式都不运行、不计通过，verifier单列。
 args+=("-skip-testing:yuedu appTests/S8RepresentativeSourceTests/testReviewedR146ImageRequiresSystemTrustAndNativeDecode")
 if [[ "$MODE" == nonmedia ]]; then

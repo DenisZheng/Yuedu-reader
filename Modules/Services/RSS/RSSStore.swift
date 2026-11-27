@@ -45,6 +45,9 @@ final class RSSStore: ObservableObject {
     func runtimeRevision(for sourceID: String) -> UInt64 {
         max(globalRuntimeRevision, sourceRuntimeRevisions[sourceID, default: 0])
     }
+    func authenticationRevision(for sourceID: String) -> UInt64 {
+        authenticationRevisions[sourceID, default: 0]
+    }
     private var authenticationRevisions: [String: UInt64] = [:]
     private var sourceVariables: [String: [String: String]] = [:]
     private var sourceOptionJSON: [String: String] = [:]
@@ -620,10 +623,27 @@ final class RSSStore: ObservableObject {
         sources.first { $0.id == sourceID }
     }
 
+    /// 生成验活结果页时，在后台校验每条结果是否仍属于当前请求修订。
+    struct RequestRevisions: Equatable, Sendable {
+        let global: UInt64
+        let sources: [String: UInt64]
+        let authentication: [String: UInt64]
+
+        func matches(_ ticket: RSSRequestTicket) -> Bool {
+            ticket.configurationRevision == max(global, sources[ticket.sourceID, default: 0])
+                && ticket.authenticationRevision == authentication[ticket.sourceID, default: 0]
+        }
+    }
+
+    var requestRevisions: RequestRevisions? {
+        guard restoreTransaction == nil else { return nil }
+        return .init(global: globalRuntimeRevision, sources: sourceRuntimeRevisions, authentication: authenticationRevisions)
+    }
+
     func requestTicket(for sourceID: String, allowsDisabledDiagnostic: Bool = false) -> RSSRequestTicket? {
         guard restoreTransaction == nil, source(id: sourceID) != nil else { return nil }
         return .init(sourceID: sourceID, configurationRevision: runtimeRevision(for: sourceID),
-                     authenticationRevision: authenticationRevisions[sourceID, default: 0], allowsDisabledDiagnostic: allowsDisabledDiagnostic)
+                     authenticationRevision: authenticationRevision(for: sourceID), allowsDisabledDiagnostic: allowsDisabledDiagnostic)
     }
 
     func accepts(_ ticket: RSSRequestTicket) -> Bool {
@@ -632,6 +652,7 @@ final class RSSStore: ObservableObject {
     }
 
     func authenticationChanged(for sourceID: String) {
+        objectWillChange.send()
         clearFeedMetadata(for: sourceID)
         authenticationRevisions[sourceID, default: 0] &+= 1
         invalidateRuntimes(for: sourceID)
@@ -665,6 +686,7 @@ final class RSSStore: ObservableObject {
         guard !unreadableFiles.contains("rss_runtime_variables.json") else { throw ScraperError.runtimeStateUnavailable }
         guard source(id: sourceID) != nil else { throw CancellationError() }
         guard sourceOptionJSON[sourceID] != value else { return }
+        objectWillChange.send()
         sourceOptionJSON[sourceID] = value
         clearFeedMetadata(for: sourceID)
         configurationRevision &+= 1
@@ -675,6 +697,7 @@ final class RSSStore: ObservableObject {
 
     func setVariables(_ values: [String: String], for sourceID: String) {
         guard source(id: sourceID) != nil, (sourceVariables[sourceID] ?? [:]) != values else { return }
+        objectWillChange.send()
         sourceVariables[sourceID] = values
         clearFeedMetadata(for: sourceID)
         configurationRevision &+= 1

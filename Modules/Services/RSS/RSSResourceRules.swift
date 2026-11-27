@@ -5,6 +5,7 @@ import WebKit
 /// WebKit不能表达的Java正则显式拒绝，原生资源匹配另有ICU进度预算，不能卡住JS执行器。
 struct RSSResourceRules: Sendable {
     struct Blocked: Error { }
+    private static let maxEntries = 64
     private struct Entry: Sendable {
         var prefix: String
         var regex: NSRegularExpression?
@@ -16,30 +17,56 @@ struct RSSResourceRules: Sendable {
 
     init(source: RSSSource) throws {
         dispatchPrecondition(condition: .notOnQueue(.main))
-        let black = (source.contentBlacklist ?? "").split(separator: ",").map(String.init).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        let white = (source.contentWhitelist ?? "").split(separator: ",").map(String.init).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        let values = black.isEmpty ? white : black
-        guard values.count <= 64, values.reduce(0, { $0 + $1.utf8.count }) <= 32_768 else { throw RSSWebFailure.resourceRuleUnsupported }
+        func splitRules(_ raw: String?) -> [String] {
+            (raw ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }
+        let black = splitRules(source.contentBlacklist)
+        let values = black.isEmpty ? splitRules(source.contentWhitelist) : black
+        guard values.count <= Self.maxEntries, values.reduce(0, { $0 + $1.utf8.count }) <= 32_768 else {
+            throw RSSWebFailure.resourceRuleUnsupported
+        }
         blacklist = !black.isEmpty
+        let maxWebRules = Self.maxEntries * 2 + (blacklist ? 0 : 1)
         entries = []
         var rules: [[String: Any]] = []
         func rule(_ pattern: String, _ action: String) -> [String: Any] {
             ["trigger": ["url-filter": pattern, "url-filter-is-case-sensitive": true], "action": ["type": action]]
         }
-        if black.isEmpty && !white.isEmpty { rules.append(rule(".*", "block")) }
+        if !blacklist && !values.isEmpty { rules.append(rule(".*", "block")) }
+        let action = blacklist ? "block" : "ignore-previous-rules"
         for value in values {
             let regex: NSRegularExpression?
             do { regex = try NSRegularExpression(pattern: "^(?:" + value + ")$") }
             catch { regex = nil } // Android正则无效时仍保留合法的字面量前缀分支。
+            let patterns = regex == nil ? [] : try Self.webPatterns(for: value)
+            // 展开后仍按原有编译条数上限；不能只安装其中一部分。
+            guard rules.count + 1 + patterns.count <= maxWebRules else { throw RSSWebFailure.resourceRuleUnsupported }
             entries.append(.init(prefix: value, regex: regex))
-            let action = blacklist ? "block" : "ignore-previous-rules"
             rules.append(rule("^" + NSRegularExpression.escapedPattern(for: value), action))
-            if regex != nil { rules.append(rule("^(" + value + ")$", action)) }
+            rules.append(contentsOf: patterns.map { rule($0, action) })
         }
         if !rules.isEmpty { rules.append(rule("^reader-rss-image://", "ignore-previous-rules")) }
         encoded = rules.isEmpty ? nil : String(decoding: try JSONSerialization.data(withJSONObject: rules), as: UTF8.self)
-        identifier = "rss-resource-" + RSSIdentity.digest(["v1", source.id, source.contentBlacklist ?? "", source.contentWhitelist ?? ""])
+        identifier = "rss-resource-" + RSSIdentity.digest(["v2", source.id, source.contentBlacklist ?? "", source.contentWhitelist ?? ""])
     }
+
+    private static func webPatterns(for value: String) throws -> [String] {
+        let whole = ["^(\(value))$"]
+        let prefix = ".*(?:", suffix = ").*"
+        guard value.hasPrefix(prefix), value.hasSuffix(suffix) else { return whole }
+        let body = value.dropFirst(prefix.count).dropLast(suffix.count)
+        let branches = body.split(separator: "|", maxSplits: maxEntries, omittingEmptySubsequences: false)
+        guard branches.count <= maxEntries else { throw RSSWebFailure.resourceRuleUnsupported }
+        // WebKit 不支持 |。只展开可等价拆分的平坦分支；复杂语法仍由编译器严格检查。
+        let unsupported = Set(#"()[]{}^$\"#.utf8)
+        guard branches.count > 1, branches.allSatisfy({ branch in
+            !branch.isEmpty && branch.replacingOccurrences(of: #"\."#, with: "").utf8.allSatisfy {
+                $0 < 128 && !unsupported.contains($0)
+            }
+        }) else { return whole }
+        return branches.map { "^.*\($0).*$" }
+    }
+
     func allows(_ url: URL) throws -> Bool {
         guard !entries.isEmpty else { return true }
         let value = url.absoluteString

@@ -1136,6 +1136,10 @@
 "全選只選取目前列表；跨分類選取會保留。" = "Select All applies to the current list. Selections across groups are kept.";
 "確定刪除選取的 %d 個訂閱源及其文章、收藏和閱讀狀態嗎？此操作無法復原。" = "Delete the %d selected feed sources, their articles, favorites, and reading state? This cannot be undone.";
 "驗證活性" = "Check Availability";
+"驗證失敗" = "Check Failed";
+"首頁有條目" = "First Page Has Items";
+"一次驗證失敗不代表永久失效。" = "A failed check does not mean the source is permanently unavailable.";
+"列表已變更，請重新選取" = "The list changed. Select again.";
 "開始驗證" = "Start Check";
 "取消驗證" = "Cancel Check";
 "驗證進度" = "Check Progress";

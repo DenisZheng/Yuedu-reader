@@ -160,37 +160,108 @@ struct RSSOpeningViewTests {
         try await store.flushPersistence()
     }
 
-    @Test("实际Feed页面的加载更多按钮追加第二页，而不是重复第一页")
+    @Test("实际Feed页面加载第二页、打开内容后返回，应保留条目并继续第三页")
     func feedLoadMoreAction() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = RSSStore(storageDirectory: directory)
         let server = try VideoStillFixtureServer(directory: directory, routes: [
-            "/list/1": .init(body: Data("<div class='item'><a href='/one'>One</a></div>".utf8)),
-            "/list/2": .init(body: Data("<div class='item'><a href='/two'>Two</a></div>".utf8))
+            "/list/1": .init(body: Data("<div class='item'><a href='/one'>One</a></div><a class='next' href='/list/2'>Next</a>".utf8)),
+            "/list/2": .init(body: Data("<div class='item'><a href='/two'>Two</a></div><a class='next' href='/list/3'>Next</a>".utf8)),
+            "/list/3": .init(body: Data("<div class='item'><a href='/three'>Three</a></div>".utf8)),
+            "/two": .init(body: Data("<p id='watch'>Page two content</p>".utf8))
         ])
+        // 第一次预取第3页收到503，暂停自动预取，返回后必须能从原页重试。
+        server.route { [weak server] request in
+            guard request.path == "/list/3", server?.requests.filter({ $0.path == "/list/3" }).count == 1 else { return nil }
+            return .init(body: Data(), status: "503 Service Unavailable")
+        }
         let base = try await server.start()
         defer {
             server.stop()
             do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) }
         }
         var source = RSSSource(name: "UI pages", url: base.absoluteString + "list/{{page}}")
-        source.ruleArticles = "class.item"; source.ruleTitle = "a@text"; source.ruleLink = "a@href"; source.ruleNextPage = "PAGE"
+        source.ruleArticles = "class.item"; source.ruleTitle = "a@text"; source.ruleLink = "a@href"; source.ruleNextPage = "class.next@href"
         store.addSource(source)
         let snapshot = source
         try await withAutomation {
             let window = try host(NavigationStack { RSSFeedView(source: snapshot, store: store) })
             defer { window.isHidden = true; window.rootViewController = nil }
             let deadline = ContinuousClock.now + .seconds(8)
-            while element("rss.page.next", in: window) == nil, ContinuousClock.now < deadline { await Task.yield() }
-            #expect(store.articles(for: source.id).count == 1)
-            #expect(server.requests.map(\.path) == ["/list/1"])
-            let button = try #require(element("rss.page.next", in: window))
-            #expect(button.accessibilityActivate())
-            while store.articles(for: source.id).count < 2, ContinuousClock.now < deadline { await Task.yield() }
-            #expect(Set(store.articles(for: source.id).map(\.title)) == ["One", "Two"])
-            #expect(server.requests.filter { $0.path.hasPrefix("/list/") }.map(\.path) == ["/list/1", "/list/2"])
+            while element("rss.page.retry", in: window) == nil, ContinuousClock.now < deadline {
+                if let button = element("rss.page.next", in: window) { _ = button.accessibilityActivate() }
+                await Task.yield()
+            }
+            try #require(element("rss.page.retry", in: window) != nil)
+            try #require(server.requests.filter { $0.path.hasPrefix("/list/") }.map(\.path) == ["/list/1", "/list/2", "/list/3"])
+
+            let second = try #require(store.articles(for: source.id).first { $0.title == "Two" })
+            let id = "rss.article.\(second.id)"
+            let openDeadline = ContinuousClock.now + .seconds(8)
+            while element(id, in: window) == nil, ContinuousClock.now < openDeadline { await Task.yield() }
+            #expect(try #require(element(id, in: window)).accessibilityActivate())
+            while find(WKWebView.self, in: window)?.url?.path != "/two", ContinuousClock.now < openDeadline { await Task.yield() }
+            let web = try #require(find(WKWebView.self, in: window))
+            while web.isLoading, ContinuousClock.now < openDeadline { await Task.yield() }
+            #expect(try await web.evaluateJavaScript("document.getElementById('watch').textContent") as? String == "Page two content")
+            let navigation = try #require(findNavigation(in: window.rootViewController))
+            try #require(navigation.popViewController(animated: false) != nil)
+
+            let returnDeadline = ContinuousClock.now + .seconds(8)
+            while element("rss.page.retry", in: window) == nil, ContinuousClock.now < returnDeadline { await Task.yield() }
+            #expect(element(id, in: window) != nil, "返回后第2页的条目必须仍然可见")
+            let retry = try #require(element("rss.page.retry", in: window))
+            #expect(retry.accessibilityActivate())
+            while !store.articles(for: source.id).contains(where: { $0.title == "Three" }), ContinuousClock.now < returnDeadline {
+                await Task.yield()
+            }
+            #expect(Set(store.articles(for: source.id).map(\.title)) == ["One", "Two", "Three"])
+            #expect(server.requests.filter { $0.path.hasPrefix("/list/") }.map(\.path) == ["/list/1", "/list/2", "/list/3", "/list/3"],
+                    "返回不应重抓第一页，应直接重试第三页")
         }
         try await store.flushPersistence()
+    }
+
+    @Test("WebKit资源黑名单含非捕获分支时，正文和允许资源照常加载，命中的子资源不发送请求")
+    func resourceRegexAlternation() async throws {
+        let allowed = Data("#value{color:rgb(1, 2, 3)}".utf8)
+        let blocked = Data("#value{color:red}".utf8)
+        let body = """
+            <link rel='stylesheet' href='/allowed.css'>
+            <link rel='stylesheet' href='/blocked-one.css'>
+            <link rel='stylesheet' href='/blocked-two-extra.css'>
+            <p id='value'>Rendered fixture</p>
+            """
+        let server = try VideoStillFixtureServer(directory: .temporaryDirectory, routes: [
+            "/page": .init(body: Data(body.utf8)),
+            "/allowed.css": .init(body: allowed, type: "text/css"),
+            "/blocked-one.css": .init(body: blocked, type: "text/css"),
+            "/blocked-two-extra.css": .init(body: blocked, type: "text/css")
+        ])
+        let url = try await server.start().appendingPathComponent("page")
+        defer { server.stop() }
+        var source = RSSSource(name: "Safe filter fixture", url: url.absoluteString)
+        source.importedFromLegado = true
+        source.singleUrl = true
+        source.contentBlacklist = #".*(?:blocked-one\.css|blocked-two.*\.css).*"#
+        let target = try #require(try await RSSOpenTarget.resolve(source: source))
+        var loading = true
+        var error: String?
+        let window = try host(RSSSourcePageWebView(source: source, target: target,
+            error: Binding(get: { error }, set: { error = $0 }), loading: Binding(get: { loading }, set: { loading = $0 })))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let deadline = ContinuousClock.now + .seconds(8)
+        while loading, ContinuousClock.now < deadline { await Task.yield() }
+        try #require(!loading && error == nil, "\(error ?? "WebKit未加载")")
+        let web = try #require(find(WKWebView.self, in: window))
+        let rendered = try await web.evaluateJavaScript("[document.getElementById('value').textContent, getComputedStyle(document.getElementById('value')).color]") as? [String]
+        #expect(rendered == ["Rendered fixture", "rgb(1, 2, 3)"])
+        #expect(server.requests.map(\.path) == ["/page", "/allowed.css"])
+    }
+
+    private func findNavigation(in controller: UIViewController?) -> UINavigationController? {
+        if let navigation = controller as? UINavigationController { return navigation }
+        return controller?.children.lazy.compactMap { findNavigation(in: $0) }.first
     }
 
     private func host(_ view: some View) throws -> UIWindow {

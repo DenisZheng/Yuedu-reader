@@ -13,32 +13,77 @@ final class RSSSourceHealthChecker {
         case interactionRequired
         case failed(String)
         case cancelled
+        var kind: Kind {
+            switch self {
+            case .list: .list
+            case .emptyList: .emptyList
+            case .webReachable: .webReachable
+            case .generatedPage: .generatedPage
+            case .mediaEntry: .mediaEntry
+            case .interactionRequired: .interactionRequired
+            case .failed: .failed
+            case .cancelled: .cancelled
+            }
+        }
+
         var title: String {
             switch self {
-            case .list(let count): return String(format: localized("首頁可用：%d 個條目"), count)
-            case .emptyList: return localized("首頁解析成功，列表為空")
-            case .webReachable: return localized("啟動網頁可達（未驗證媒體）")
-            case .generatedPage: return localized("啟動頁已生成（未驗證網路）")
-            case .mediaEntry: return localized("媒體入口（需人工播放驗證）")
-            case .interactionRequired: return localized("需要登入或人工驗證")
-            case .failed(let reason): return reason
-            case .cancelled: return localized("已取消")
+            case .list(let count): String(format: localized("首頁可用：%d 個條目"), count)
+            case .failed(let reason): reason
+            default: kind.title
+            }
+        }
+
+        enum Kind: String, CaseIterable, Sendable {
+            case failed, list, emptyList, webReachable, generatedPage, mediaEntry, interactionRequired, cancelled
+
+            var title: String {
+                switch self {
+                case .failed: localized("驗證失敗")
+                case .list: localized("首頁有條目")
+                case .emptyList: localized("首頁解析成功，列表為空")
+                case .webReachable: localized("啟動網頁可達（未驗證媒體）")
+                case .generatedPage: localized("啟動頁已生成（未驗證網路）")
+                case .mediaEntry: localized("媒體入口（需人工播放驗證）")
+                case .interactionRequired: localized("需要登入或人工驗證")
+                case .cancelled: localized("已取消")
+                }
             }
         }
     }
+
+    struct SelectionGroup: Identifiable, Sendable {
+        let kind: Outcome.Kind
+        let sourceIDs: Set<String>
+        var id: Outcome.Kind { kind }
+    }
+
+    private struct CheckedSource: Sendable {
+        let source: RSSSource
+        let ticket: RSSRequestTicket
+    }
+
     private(set) var results: [String: Outcome] = [:]
     private(set) var isRunning = false
     private(set) var completed = 0
     private(set) var total = 0
+    /// 结果页只在一批完成或停止后重建，不随每条进度重新筛选整库。
+    private(set) var resultVersion: UInt64 = 0
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var currentID: String?
-    @ObservationIgnored private var checkedSources: [String: RSSSource] = [:]
+    @ObservationIgnored private var checkedSources: [String: CheckedSource] = [:]
 
     func start(sources: [RSSSource], owner: RSSStore, session: URLSession? = nil) {
         cancel()
         total = sources.count; completed = 0
         guard !sources.isEmpty else { return }
+        // 整批排队时先撤回旧结果；取消后未轮到的源不冒充本次已验证。
+        if !checkedSources.isEmpty {
+            for source in sources where checkedSources.removeValue(forKey: source.id) != nil {
+                results[source.id] = nil
+            }
+        }
         isRunning = true
         let version = generation
         let config = URLSessionConfiguration.ephemeral
@@ -54,8 +99,7 @@ final class RSSSourceHealthChecker {
                 guard !Task.isCancelled, generation == version else { return }
                 guard let ticket = owner.requestTicket(for: source.id, allowsDisabledDiagnostic: true), owner.source(id: source.id) == source else { continue }
                 currentID = source.id
-                results[source.id] = nil
-                checkedSources[source.id] = source
+                checkedSources[source.id] = .init(source: source, ticket: ticket)
                 let outcome = await Self.check(source: source, owner: owner, session: requests)
                 guard !Task.isCancelled, generation == version else { return }
                 // 删除、改配置或登录变化后，不把晚到检查结果贴到新源上。
@@ -63,11 +107,13 @@ final class RSSSourceHealthChecker {
                 completed += 1
             }
             currentID = nil; isRunning = false; task = nil
+            resultVersion &+= 1
         }
     }
 
     func cancel() {
         generation &+= 1
+        if isRunning { resultVersion &+= 1 }
         // 保留已取消的Task句柄供调用者等待真正收口；下一次start会替换它。
         task?.cancel()
         if let currentID { results[currentID] = .cancelled }
@@ -78,10 +124,29 @@ final class RSSSourceHealthChecker {
     func waitForCompletion() async { await task?.value }
 
     func retainResults(for sources: [RSSSource]) {
+        guard !checkedSources.isEmpty else { return }
         let current = Dictionary(sources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for id in Array(checkedSources.keys) where checkedSources[id] != current[id] {
+        for id in Array(checkedSources.keys) where checkedSources[id]?.source != current[id] {
             results[id] = nil; checkedSources[id] = nil
         }
+    }
+
+    func selectionGroups(in sources: [RSSSource], revisions: RSSStore.RequestRevisions) async -> [SelectionGroup] {
+        guard !isRunning else { return [] }
+        let outcomes = results, checks = checkedSources
+        return await Task.detached(priority: .userInitiated) {
+            SourcePerfTrace.span("rss.health.selection", "main=\(Thread.isMainThread) sources=\(sources.count)") {
+                var idsByKind: [Outcome.Kind: Set<String>] = [:]
+                for source in sources {
+                    guard let outcome = outcomes[source.id], let check = checks[source.id],
+                          check.source == source, revisions.matches(check.ticket) else { continue }
+                    idsByKind[outcome.kind, default: []].insert(source.id)
+                }
+                return Outcome.Kind.allCases.compactMap { kind in
+                    idsByKind[kind].map { SelectionGroup(kind: kind, sourceIDs: $0) }
+                }
+            }
+        }.value
     }
 
     private struct Deadline: Error {}

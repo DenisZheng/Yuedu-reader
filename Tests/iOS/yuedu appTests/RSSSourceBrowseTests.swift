@@ -31,13 +31,13 @@ struct RSSSourceBrowseTests {
         let aTicket = try #require(store.requestTicket(for: a.id))
         let bTicket = try #require(store.requestTicket(for: b.id))
         var selection = RSSSourceSelection(ids: [b.id])
-        selection.toggleAll([a, c])
+        selection.toggleAll([a.id, c.id])
         #expect(selection.ids == [a.id, b.id, c.id])
-        selection.toggleAll([a, c])
+        selection.toggleAll([a.id, c.id])
         #expect(selection.ids == [b.id])
         selection.ids.insert(a.id)
         store.removeSources(ids: Array(selection.ids))
-        selection.retain(store.sources)
+        selection.retain(Set(store.sources.map(\.id)))
         #expect(selection.ids.isEmpty)
         #expect(store.sources.map(\.id) == [c.id])
         #expect(!store.accepts(aTicket) && !store.accepts(bTicket))
@@ -46,6 +46,19 @@ struct RSSSourceBrowseTests {
         try await store.flushPersistence()
         let reloaded = RSSStore(storageDirectory: folder)
         #expect(reloaded.sources.map(\.id) == [c.id])
+    }
+
+    @Test("结果页全选和反选不会带入当前列表外的源")
+    func resultPageSelection() {
+        var selection = RSSSourceSelection(ids: ["hidden", "first"])
+        let page: Set<String> = ["first", "second"]
+        selection.toggleAll(page, onlyPage: true)
+        #expect(selection.ids == page)
+        selection.toggleAll(page, onlyPage: true)
+        #expect(selection.ids.isEmpty)
+        selection.ids = ["hidden", "first"]
+        selection.invert(page)
+        #expect(selection.ids == ["second"])
     }
 }
 
@@ -187,6 +200,69 @@ struct RSSSourceBrowseTests {
             checker.retainResults(for: store.sources)
             #expect(checker.results[first.id] == nil)
             #expect(store.articles(for: first.id).isEmpty)
+        }
+    }
+
+    @Test("只汇总当前列表的有效结果，成功、失败、未检查以及过期结果不混用")
+    func selectionGroupsAreScopedAndCurrent() async throws {
+        try await fixture { store, session, host in
+            RSSPageFixtureProtocol.serve(host: host, sequences: [
+                "/failed": [.init(body: Data(), status: 503)],
+                "/empty": [.init(body: Data("<main>Empty</main>".utf8))],
+                "/login": [.init(body: Data(), status: 401)]
+            ])
+            let failed = RSSSource(id: "failure", name: "Failure", url: "https://\(host)/failed")
+            var empty = RSSSource(id: "empty", name: "Empty", url: "https://\(host)/empty")
+            empty.ruleArticles = "class.item"
+            let login = RSSSource(id: "login", name: "Login", url: "https://\(host)/login")
+            let unchecked = RSSSource(id: "unchecked", name: "Unchecked", url: "https://\(host)/unchecked")
+            for source in [failed, empty, login, unchecked] { store.addSource(source) }
+            let checker = RSSSourceHealthChecker()
+            checker.start(sources: [failed, empty, login], owner: store, session: session)
+            await checker.waitForCompletion()
+            let revisions = try #require(store.requestRevisions)
+            let groups = await checker.selectionGroups(in: [failed, empty, unchecked], revisions: revisions)
+            #expect(groups.map(\.kind) == [.failed, .emptyList])
+            #expect(groups.map(\.sourceIDs) == [[failed.id], [empty.id]])
+
+            store.authenticationChanged(for: failed.id)
+            try store.setSourceVariableJSON("{}", for: empty.id)
+            let fresh = try #require(store.requestRevisions)
+            let remaining = await checker.selectionGroups(in: store.sources, revisions: fresh)
+            #expect(remaining.map(\.kind) == [.interactionRequired])
+            #expect(remaining.map(\.sourceIDs) == [[login.id]])
+        }
+    }
+
+    @Test("重查后取消，尚未轮到的源不沿用上次失败结果")
+    func cancelledRecheckDoesNotOfferOldFailures() async throws {
+        try await fixture { store, session, host in
+            RSSPageFixtureProtocol.serve(host: host, sequences: [
+                "/first": [.init(body: Data(), status: 503)],
+                "/later": [.init(body: Data(), status: 503)]
+            ])
+            let first = RSSSource(id: "first", name: "First", url: "https://\(host)/first")
+            let later = RSSSource(id: "later", name: "Later", url: "https://\(host)/later")
+            store.addSource(first); store.addSource(later)
+            let checker = RSSSourceHealthChecker()
+            checker.start(sources: [first, later], owner: store, session: session)
+            await checker.waitForCompletion()
+            #expect(checker.results[later.id]?.kind == .failed)
+
+            let (events, continuation) = AsyncStream<URLRequest>.makeStream()
+            defer { continuation.finish() }
+            RSSPageFixtureProtocol.serve(host: host, sequences: [
+                "/first": [.init(body: Data(), held: true)]
+            ], events: continuation)
+            checker.start(sources: [first, later], owner: store, session: session)
+            var iterator = events.makeAsyncIterator()
+            try #require(await iterator.next() != nil)
+            checker.cancel()
+            await checker.waitForCompletion()
+            #expect(checker.results[first.id] == .cancelled)
+            #expect(checker.results[later.id] == nil)
+            let groups = await checker.selectionGroups(in: store.sources, revisions: try #require(store.requestRevisions))
+            #expect(groups.map(\.kind) == [.cancelled])
         }
     }
 

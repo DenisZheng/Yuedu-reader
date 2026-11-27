@@ -83,4 +83,30 @@ import Testing
         do { _ = try await limited.compiled(); Issue.record("Java lookbehind不能假装已映射到WebKit") }
         catch { #expect(error is RSSWebFailure) }
     }
+
+    @Test("简单白名单分支可以编译；复杂分支和超量展开不能放行")
+    func boundedResourceAlternation() async throws {
+        var source = RSSSource(name: "Alternative filter", url: "https://fixture.invalid")
+        source.contentWhitelist = #"  .*(?:one\.css|two\.css).* ,  https://fixture.invalid/static/  "#
+        let flat = source
+        let policy = try await SourceScriptThread.run { try RSSResourceRules(source: flat) }
+        #expect(try policy.allows(URL(string: "https://fixture.invalid/one.css")!))
+        #expect(try policy.allows(URL(string: "https://fixture.invalid/two.css")!))
+        #expect(try policy.allows(URL(string: "https://fixture.invalid/static/three")!))
+        #expect(try !policy.allows(URL(string: "https://fixture.invalid/onexcss")!))
+        #expect(try await policy.compiled() != nil)
+
+        source.contentWhitelist = #".*(?:one\|two|three).*"#
+        let escaped = source
+        let unsupported = try await SourceScriptThread.run { try RSSResourceRules(source: escaped) }
+        await #expect(throws: RSSWebFailure.resourceRuleUnsupported) {
+            _ = try await unsupported.compiled()
+        }
+
+        source.contentWhitelist = ".*(?:" + (0...64).map { "asset\($0)" }.joined(separator: "|") + ").*"
+        let tooMany = source
+        await #expect(throws: RSSWebFailure.resourceRuleUnsupported) {
+            _ = try await SourceScriptThread.run { try RSSResourceRules(source: tooMany) }
+        }
+    }
 }
