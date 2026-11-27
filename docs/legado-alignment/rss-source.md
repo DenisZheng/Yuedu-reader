@@ -158,6 +158,8 @@ RssArticlesViewModel.loadArticles / loadMore
 | `cacheFirst` | WebView cacheMode | 页面缓存策略，不是源规则缓存 |
 | `showWebLog` | 网页日志配置相关路径 | 调试能力，不表示页面能否执行 |
 
+符合原生 WebKit 会话条件、且不附加源请求头的单页源，普通 HTTP(S) 主框架 GET 跳转（含 302）在当前 WebView 中继续。只接收已准入导航对应 origin 的响应，不把 CookieStore 的绑定扩到目标站，不开启源脚本桥；子窗、跨域表单、下载及非 HTTP(S) 动作不走这个跨域分支。带源头或响应规则的请求保留原有执行与隔离策略。
+
 资源过滤不能套到所有导航上：主文档与预注入资源在前面的专门分支处理；普通子资源才继续走上述黑/白名单。把它改成“同时执行两张名单”也会改变基准行为。
 
 页面桥接有多条路径：`WebJsExtensions` 提供网页请求等能力，`RssJsExtensions` 提供 RSS 导航动作；接口安装还受预注入配置影响。**不要把解析脚本的 `java` 对象不加区分地暴露给所有远程页面。**

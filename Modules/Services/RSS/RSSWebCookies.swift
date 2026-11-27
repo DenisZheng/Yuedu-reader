@@ -19,6 +19,14 @@ final class RSSWebCookies: NSObject, WKHTTPCookieStoreObserver {
 
     init(_ store: WKHTTPCookieStore) { self.store = store }
 
+    /// 导航切换可能取消旧同步。等待串行收口，但不把它的取消传给仍有效的新调用。
+    private static func waitForPrevious(_ previous: Task<Void, Error>?) async throws {
+        if let previous, case .failure(let failure) = await previous.result, !(failure is CancellationError) {
+            throw failure
+        }
+        try Task.checkCancellation()
+    }
+
     func bind(runtime: RSSRuntime, url: URL?, explicit: String?) async throws {
         generation &+= 1
         let id = generation
@@ -62,8 +70,7 @@ final class RSSWebCookies: NSObject, WKHTTPCookieStoreObserver {
         let id = generation
         let previous = operation
         let work = Task { [self] in
-            if let previous { try await previous.value }
-            try Task.checkCancellation()
+            try await Self.waitForPrevious(previous)
             guard id == generation, runtime.state.isCurrent else { throw CancellationError() }
             let cookies = await store.allCookies()
             guard id == generation, runtime.state.isCurrent else { throw CancellationError() }
@@ -95,8 +102,7 @@ final class RSSWebCookies: NSObject, WKHTTPCookieStoreObserver {
         guard let runtime, let url = urls.first else { return }
         let id = generation, previous = operation, explicit = explicitCookie
         let work = Task { [self] in
-            if let previous { try await previous.value }
-            try Task.checkCancellation()
+            try await Self.waitForPrevious(previous)
             guard id == generation, runtime.state.isCurrent else { throw CancellationError() }
             let seed = await Self.seed(url: url, explicit: explicit, preferExplicit: false)
             let existing = await store.allCookies()

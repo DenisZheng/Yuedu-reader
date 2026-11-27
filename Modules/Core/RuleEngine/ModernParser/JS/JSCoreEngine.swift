@@ -694,6 +694,12 @@ class JSCoreEngine {
         }
     }
 
+    /// 开始独立的请求时不沿用上一段脚本的报错；不重建上下文，也不清除诊断计数。
+    func clearLastEvaluationError() {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        onJSQueue { lastError = nil }
+    }
+
     /// Evaluate JavaScript code and return the result as a string.
     /// Returns `nil` on JS error, timeout, or if the result is `undefined`/`null`.
     func evaluate(_ script: String) -> String? {
@@ -1582,8 +1588,26 @@ class JSCoreEngine {
                     def('available', function () { return Math.max(0, bytes.length - position); });
                     def('readAllBytes', function () { return take(bytes.length - position); });
                     def('readNBytes', function (count) { return take(Number(count) || 0); });
-                    def('read', function () {
-                        return position < bytes.length ? (Number(bytes[position++]) & 255) : -1;
+                    def('read', function (buffer, offset, length) {
+                        if (buffer === undefined) {
+                            return position < bytes.length ? (Number(bytes[position++]) & 255) : -1;
+                        }
+                        if (buffer == null) throw new TypeError('Byte buffer is required');
+                        var capacity = Number(buffer.length);
+                        var off = offset == null ? 0 : Number(offset);
+                        var len = length == null ? capacity - off : Number(length);
+                        if (!Number.isSafeInteger(capacity) || !Number.isSafeInteger(off) ||
+                            !Number.isSafeInteger(len) || off < 0 || len < 0 || len > capacity - off) {
+                            throw new RangeError('Invalid byte buffer range');
+                        }
+                        if (len === 0) return 0;
+                        if (position >= bytes.length) return -1;
+                        // Java 单字节 read 返回无符号 int；写入 byte[] 时仍用有符号字节。
+                        var count = Math.min(len, bytes.length - position);
+                        for (var i = 0; i < count; i++) {
+                            buffer[off + i] = Number(bytes[position++]) << 24 >> 24;
+                        }
+                        return count;
                     });
                     def('skip', function (count) { return take(Number(count) || 0).length; });
                     def('close', function () {});

@@ -61,3 +61,21 @@ iPhone 最终 `Executed 4 tests, with 0 failures`、`** TEST SUCCEEDED **`、退
 用户后续授权：修复验收后提交 Push，将有问题的 `3.0.2` Release 改回草稿下架（保留 Tag/历史/附件），升为 `3.0.3（8）` 后用既有工作流构建一次。**不监视 CI**，待用户通知完成再校验新产物和发布；此时不称新版 Release 已完成。
 
 真机、最低 iOS 17、真实在线书/媒体和完整无障碍未由本轮自动测试验收；不能把 TXT/模拟器结果外推为所有格式。回滚只反向撤销本次导航容器及书架挂接和新增用例，不改书库、进度、源配置或签名。恢复旧值路由+UIKit直接推入的同栈结构会重新引入此故障，不能在不了解风险时作为稳定版恢复。
+
+## 2026-11-27：核对在用旧版并重新验证
+
+用户再次报告书架开书退回而首页正常，确认设备仍为 `3.0.2`。`git merge-base --is-ancestor ead78adb <tag>` 确认 `legadopro-v3.0.2`（构建号 7）不含修复，`legadopro-v3.0.3`（构建号 8）和当前代码均包含。没有将源码 Tag 当作已经发布或安装的 IPA。
+
+在 iPhone 18 Pro Max／iOS 27.2 重新通过 `Reader-Fork-Dev` 运行：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)" YUEDU_SCHEME=Reader-Fork-Dev
+d="$(mktemp -d .artifacts/bookshelf-resume-recheck-XXXXXX)"
+bash scripts/xctest.sh -l "$d/iphone-ui.log" -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appUITests/BookshelfReaderResumeUITests' \
+  -resultBundlePath "$d/iphone-ui.xcresult"
+```
+
+实际输出 `Executed 2 tests, with 0 failures`、`** TEST SUCCEEDED **`（`.artifacts/bookshelf-resume-recheck-tO1bHV/`）。书架列表与网格均用同一本已读 TXT，实际开书、翻页、关闭、从探索继续阅读，再从搜索返回后重开。没有改动阅读器代码，没有安装或覆盖用户的 App。

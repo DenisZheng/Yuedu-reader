@@ -2,6 +2,132 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 模拟器从订阅页点开随机列表与 403 列表（2026-11-27）
+
+在 iPhone 18 Pro Max／iOS 27.2 上启动普通 `Reader-Fork-Dev` App，用简体中文 [UI 测试](../../Tests/iOS-UI/RSSRuleListOpeningUITests.swift) 从「订阅」Tab 实际点开两条隔离样本，不直接调用列表服务。地址、脚本与数据均为自建样本，[响应器](../../scripts/rss_rule_opening_fixture.py)只监听本机回环地址。未修改应用代码、原始源包或已有订阅数据。
+
+| 从订阅页的实际操作 | 屏幕和请求证据 |
+| --- | --- |
+| 点开随机分类列表 | 显示「本机随机分类条目」，未显示 RSS 脚本错误。`/stream/list` 与 `/stream/cover` 各一次 200；封面返回 Base64 文本，经脚本解码后在 `rss-fixture-random-list.png` 实际显示纯绿色图片（与样本色匹配 980374 像素）。 |
+| 返回，点开动态分类的 403 列表 | `/gate/categories` 200，`/gate/list` 403。实际显示「无法完成 RSS 请求（HTTP 403）」及「重试」「以网页打开」，没有把 403 正文显示为条目。见 `rss-fixture-http-403.png`。 |
+| 手动点「重试」 | 再次 GET 同一列表地址，页码与配置头不变；这次本机返回 200，显示「本机列表重试条目」，403 提示消失。见 `rss-fixture-http-retry.png`。 |
+
+在一端运行 `python3 -I scripts/rss_rule_opening_fixture.py` 并记下打印的 `port=…`；每次验证都启动新的响应器以重置 403／200 顺序。在另一端把端口传为 `fixture_port` 后运行：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+d="$(mktemp -d .artifacts/rss-subscription-simulator-XXXXXX)"
+TEST_RUNNER_RSS_RULE_OPENING_FIXTURE_PORT="$fixture_port" bash scripts/xctest.sh -l "$d/ui.log" -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appUITests/RSSRuleListOpeningUITests' \
+  -resultBundlePath "$d/ui.xcresult"
+```
+
+实际输出 `Executed 1 test, with 0 failures`、`** TEST SUCCEEDED **`；`requests.log` 和 `xcrun xcresulttool export attachments` 导出的三张截图保存在 `.artifacts/rss-subscription-simulator-hcC8v5/`。本次未请求「丝瓜 S」或 Jable.tv，沿用两条源的 DNS 预审限制；本地模拟器界面通过不代表实源恢复。回滚仅撤回新增 UI 测试、响应器和本段记录，不涉及数据迁移。
+
+## Jable.tv 打开列表返回 HTTP 403（2026-11-27）
+
+`docs/rssSources-valid.json` 第 186 项与 `rssSources 2.json` 第 257 项同名且相关字段一致；不是带 © 后缀的静态分类变体。这条源使用 JS 生成分类，列表请求有动态参数，不等同于打开站点首页。简中提示「无法完成 RSS 请求（HTTP 403）」来自[规则列表请求](../../Modules/Services/RSS/LegadoRSSScraper.swift)收到非成功状态后的检查，尚未进入条目解析。Android 固定基准同样先求值分类再用生成的地址获取列表；未在 Android 实机访问该站。
+
+[固定响应测试](../../Tests/iOS/yuedu%20appTests/RSSRuntimeIntegrationTests.swift)使用自建域、规则和 HTML 验证生产链：`/categories → /list?page=1 → 手动重试 /list?page=1`。首个列表的 GET、JS 声明的请求头和 Referer 均到达；即使 403 响应里有可匹配条目，也保持失败且不自动重发。用相同地址和头部重试时，只有收到 200 才显示条目。没有修改生产代码或原始源包。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+d=.artifacts/rss-jable-xo12Ta
+bash scripts/xctest.sh -l "$d/runtime.log" -- \
+  -only-testing:'yuedu appTests/RSSRuntimeIntegrationTests/dynamicCategoryHTTPForbidden()' \
+  -resultBundlePath "$d/runtime.xcresult"
+```
+
+iPhone 18 Pro Max、iOS 27.2：`Test run with 1 test in 1 suite passed`、`** TEST SUCCEEDED **`。`endpoint-preflight.log` 输出 `R186 preflight: non-public DNS result; no HTTP request`，未访问真实端点、未运行原源脚本，不能断定拒绝是站点验证、网络限制还是该源向站点提交的具体请求。若现场同设备、同网络的 Safari 能正常打开首页，只说明普通网页可达，不能证明列表入口可达。回滚仅需移除新增固定响应用例及该段记录，无数据迁移。
+
+## 丝瓜 S 的 JSON 列表与封面读取（2026-11-27）
+
+`docs/rssSources-valid.json` 第 161 项和 `rssSources 2.json` 第 225 项的相关字段一致。它是规则列表源，首分类实际叫「随机」，相对地址的 `page` 由 `Math.ceil(Math.random()*1500)` 求值，列表走 `$.rescont.data[*]`。按该结构自建地址、JSON、图片与脚本的 [生产流程用例](../../Tests/iOS/yuedu%20appTests/RSSRuleListOpeningTests.swift) 在旧代码上已通过首请求、条目和后续 URL 断言，但取得图片后抛 `resourceUnavailable`（`fixture.log`）。
+
+封面规则用的是 Java 的 `InputStream.read(buffer)`，不是单字节 `read()`。旧 [图片流适配](../../Modules/Core/RuleEngine/ModernParser/JS/JSCoreEngine.swift) 忽略传入的缓冲区，把字节值当成返回长度。`stream-before.log` 用固定 4 字节输入证实缓冲区未写入，返回值错误。现支持带缓冲区和偏移的批量读取：写回实际的有符号字节、返回实际读入数，保留原先的单字节无符号读取；`stream-after.log` 的实际值与预期均为 `[255,2,[19,-128,7,19],1,1,-1]`。没有改源规则、JavaScript 运行权限或图片预算。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+d=.artifacts/rss-r161-cILgWn
+bash scripts/xctest.sh -l "$d/green.log" -- \
+  -only-testing:'yuedu appTests/RSSRuleListOpeningTests' \
+  -only-testing:'yuedu appTests/RSSImageServiceTests' \
+  -only-testing:'yuedu appTests/JavaByteSignTests/inputStreamReads()' \
+  -only-testing:'yuedu appTests/MangaBitmapDecodeTests' \
+  -resultBundlePath "$d/green.xcresult"
+```
+
+iPhone 18 Pro Max、iOS 27.2：`Test run with 15 tests in 4 suites passed`、`** TEST SUCCEEDED **`。完整固定流程收到随机页请求、产出 1 个条目、收到封面请求并解码为 1×1 PNG；额外覆盖缓冲区偏移、短读、EOF 和既有书源／RSS 图片处理。`git diff --check` 无错误。实源请求前 `endpoint-preflight.log` 输出 `R161 preflight: non-public DNS result, no request`；未执行原包脚本、没有访问原站或加载内容媒体，也未测真机或 iOS 17。上述缺口确认影响该源使用的封面规则形态，但不能单凭通用提示断定原站首屏失败就是该原因。可单独撤回 `read(buffer, offset, length)` 调整及相应用例，无数据迁移。
+
+## RSS 列表翻页误用旧脚本错误（2026-11-27）
+
+现场是规则列表第一页正常，点「加载更多」时显示「RSS 源脚本执行失败，请查看诊断」；未指定出问题的来源。固定输入使用生产 `RSSFeedSession`、同源共用脚本宿主及 `RSSImageService.thumbnail`：第一页成功后，故意让封面解码脚本抛错。旧 `red.log` 实际只发出 `/list/1` 和 `/cover.png`，第二页及重试都在发请求前报同样的提示。原因是 RSS 新请求把共用 JS 上一次执行的错误当成了本次错误。
+
+[请求准备](../../Modules/Core/RuleEngine/ModernParser/ModernParserBridge.swift)在新 RSS 请求执行 jsLib、请求头和 URL 规则之前，仅清除上一段脚本的错误标记；保留 JS 上下文、异常历史、Cookie 和现有鉴权／取消流程。本次脚本出错仍按原分类报错，页码仍只在成功时推进。没有修改源包、解析规则、分页按钮或重试目标。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+d=.artifacts/rss-pagination-script-error-a9DSXb
+bash scripts/xctest.sh -l "$d/green.log" -- \
+  -only-testing:'yuedu appTests/RSSBrowsingContractTests' \
+  -only-testing:'yuedu appTests/RSSOpeningViewTests/feedLoadMoreAction()' \
+  -only-testing:'yuedu appTests/RSSImageServiceTests/errorsAreNotImages()' \
+  -only-testing:'yuedu appTests/RSSWebRequestTests/errorResponseRunsLoginCheck()' \
+  -resultBundlePath "$d/green.xcresult"
+```
+
+iPhone 18 Pro Max、iOS 27.2：`Test run with 20 tests in 4 suites passed`、`** TEST SUCCEEDED **`。新用例断言 `/list/1 → /cover.png → /list/2 → /list/2`，第二页本身的脚本错误仍保留第一页，重试同页成功后追加第二条。也复验了实际列表加载与返回、正常的 HTTP 错误、认证和图片失败合同。`git diff --check` 无错误。未确定用户遇到的是哪个源，未访问实源、未做真机验证；相同提示不能单独证明现场是同一原因。可单独撤回错误边界调整和新增用例，不涉及数据迁移。
+
+## 订阅网页连续导航与取消恢复（2026-11-27）
+
+现场症状是连续跳到约 30 页后任何点击无响应。本机使用有限请求的 loopback 服务器、真实 WKWebView、每页更新一次合成 Cookie；分别经过原生 WebKit 与共享规则请求两条路径，按实际加载完成信号打开 44 个不同文档，再执行 DOM 按钮及工具栏使用的网页返回动作。旧实现在两条串行路径上都完成（44／45 个主请求，返回时原生路径用历史，规则路径重取前页；最长主线程 ping 为 69／73 ms），未复现整个 App 卡死，也不依据这个用例断定现场页数、内存或站点原因。
+
+另外复现了同一导航链上的确定问题：[RSSWebCookies](../../Modules/Services/RSS/RSSWebCookies.swift) 的新同步会等待上一任务的成功结果。快速换页或网页返回能取消旧导航；被取消的 Cookie 任务让后续所有同步也抛 `CancellationError`，导航代理因而取消后续动作。`before.log` 中，用真实 WebKit CookieStore 先取消一个同步，再同步一次，后者抛 `CancellationError()`。修复只将串行等待与旧调用方取消分开；新任务自身取消、源修订、登录撤销及非取消错误仍检查，不重置 Cookie 或历史、不设新的页数上限。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+d=.artifacts/rss-navigation-hang-7vOoUt
+bash scripts/xctest.sh -l "$d/after.log" -- \
+  -only-testing:'yuedu appTests/RSSBrowserSessionTests' \
+  -only-testing:'yuedu appTests/RSSWebNavigationTests/webCookieLifecycle()' \
+  -resultBundlePath "$d/after.xcresult"
+```
+
+Xcode 27.2／iOS 27.2、iPhone 18 Pro Max 模拟器串行：`after.log` 输出 `Test run with 13 tests in 2 suites passed`、`** TEST SUCCEEDED **`。验证了取消之后新写入的合成 Cookie 真正同步，以及跨域网页、表单、历史、源撤销和 Cookie 的域／路径。不改变连续导航请求数：仍为 44／45 次，完成 44 个文档后的网页按钮和返回成功；两路主线程最长 ping 为 13／11 ms（单次测量，不宣称提速比例）。没有现场设备的冻结栈，未测真实站点、iPad 或真机；必要时用问题源、机型/iOS 和故障时刻对应的已脱敏诊断区分网页被取消和主线程卡死。回滚仅撤销 Cookie 串行取消隔离及本轮测试，无数据迁移。
+
+## 规则列表 503 与单页跨域跳转（2026-11-27）
+
+- **萌图社**：`rssSources 2.json` 第 62 项是规则列表源，「首页」实际请求 `page/{{page}}/`（首请求 `/page/1/`）；「以网页打开」加载源根地址。Android `330e606c4` 的 `Rss.getArticlesAwait` 同样使用配置的分类地址。固定用例设首分类返回 503、根地址返回 200，iOS 分别保留分类错误与可打开网页，重试仍请求原分类且不写文章。两个 URL 不同，网页可达不能证明分类也可达；未改源配置、未掩盖 HTTP 503。
+- **每日大赛-视频**：样本 `docs/rssSources-valid.json` 第 16 项和 `rssSources 2.json` 第 25 项都是启用 CookieJar、无源请求头的静态单页。Android `ReadRssActivity.handleCommonSchemes` 把 HTTP(S) 留给 WebView；iOS 原 `RSSSourcePageWebView` 把跨域导航送入外部操作确认。`red.log` 中自建 302 和 `location.assign` 两个用例均在 `state.actions.isEmpty` 与最终页面断言处失败。现在仅让满足原生 WebKit 条件、没有附加源头的会话在当前主框架继续普通 GET，不重发请求，不开放源脚本桥。响应校验使用该次准入的 origin；Cookie 绑定、页内返回、源撤销和其他原生／外部确认规则保留。
+- **真实站点验证边界**：只读预审命令在请求前发现三个测试目标（萌图社根地址、首分类、视频源入口）的 DNS 返回非公网地址，因安全边界未发送请求。没有执行远站脚本、跟踪外跳、使用登录信息或改源包。不把本机复现外推为已验证真实站点的 503 成因、跳转链或者视频播放。
+
+环境：Xcode 27.2／iOS 27.2，iPhone 18 Pro Max，串行。证据在 `.artifacts/rss-real-opening-dhVgEv/`。分类的首轮测试把 HTTP loopback 当作 HTTPS 根地址，测试服务器没有 TLS，不能算分类回归通过；改用预登记的 HTTPS 响应后，不改生产代码的 `category-baseline.log` 输出 `Test run with 1 test in 1 suite passed` 和 `** TEST SUCCEEDED **`。请求顺序断言为 `/page/1/ → / → /page/1/`。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+d=.artifacts/rss-real-opening-dhVgEv
+bash scripts/xctest.sh -l "$d/iphone.log" -- \
+  -only-testing:'yuedu appTests/RSSBrowserSessionTests' \
+  -only-testing:'yuedu appTests/RSSOpeningViewTests/unavailableCategoryDoesNotUseHomepageAsItsList()' \
+  -only-testing:'yuedu appTests/RSSWebNavigationTests/pageBridgeChecksFrame()' \
+  -resultBundlePath "$d/iphone.xcresult"
+```
+
+`iphone.log` 输出 `Test run with 12 tests in 3 suites passed` 和 `** TEST SUCCEEDED **`。两种跨域跳转都由原 WebView 发出一次 GET 并显示最终文档，无外部动作；跨 host 不带初始站 Cookie 或认证头，目标无源脚本桥，页内跳转可返回。同批验了有私有头的重定向、同站表单、源删除／退出登录撤销和 iframe 桥拦截。`ruby scripts/check_localizations.rb` 输出 `Localization OK`，`git diff --check` 无错误。未测 iPad、iOS 17、真机及实际视频播放。可单独撤回本次网页导航准入、测试和文档，无数据迁移。
+
 ## 订阅验活按结果切页（2026-11-27）
 
 订阅管理参考书源管理的按结果切页与本页批选，**在 RSS 内独立实现**，未改变书源界面、检查器或组件。验证结束可直接点结果类型及数量，不再打开结果多选弹层。切换结果页清空旧勾选；结果页「全选／反选」只处理当前源分组和搜索范围。普通「全部」的全选仍可跨源分组保留勾选。删源仍从当前勾选发起并确认；若结果范围、配置或登录修订在确认期间变化，旧选择不能删除来源。

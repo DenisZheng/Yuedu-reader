@@ -7,6 +7,45 @@ import WebKit
 @Suite("RSS opening views", .serialized)
 @MainActor
 struct RSSOpeningViewTests {
+    @Test("分类首请求 503 与可用的源根网页相互独立，重试仍请求原分类")
+    func unavailableCategoryDoesNotUseHomepageAsItsList() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = RSSStore(storageDirectory: directory)
+        let session = RSSPageFixtureProtocol.makeSession()
+        let hostname = "category-\(UUID().uuidString.lowercased()).invalid"
+        let base = try #require(URL(string: "https://\(hostname)/"))
+        let firstPage = base.appending(path: "page/1", directoryHint: .isDirectory)
+        let unavailable = RSSPageFixtureProtocol.Response(body: Data("<p>Temporarily unavailable</p>".utf8), status: 503)
+        RSSPageFixtureProtocol.serve(host: hostname, sequences: [
+            firstPage.path: [unavailable, unavailable],
+            "/": [.init(body: Data("<p>Available website</p>".utf8))]
+        ])
+        defer {
+            session.invalidateAndCancel(); RSSPageFixtureProtocol.remove(host: hostname)
+            do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) }
+        }
+        var source = RSSSource(name: "Category and website fixture", url: base.absoluteString)
+        source.importedFromLegado = true
+        source.sortUrl = "首页::page/{{page}}/\n其他::/category/"
+        source.ruleArticles = "class.item"; source.ruleTitle = "tag.a@text"; source.ruleLink = "tag.a@href"
+        store.addSource(source)
+        let feed = RSSFeedSession(source: source, store: store, session: session)
+        await feed.refresh()
+        #expect(feed.error == ScraperError.httpStatus(503).localizedDescription)
+        #expect(feed.currentPage == 0 && feed.canRetry)
+        #expect(RSSPageFixtureProtocol.requests(host: hostname).map(\.url) == [firstPage])
+
+        let fallback = try #require(feed.webPageFallbackURL)
+        #expect(fallback.url == base)
+        let document = try await RSSOpenTarget.loadDocument(URLRequest(url: fallback.url), source: source, owner: store, session: session)
+        #expect(document.statusCode == 200 && String(decoding: document.data, as: UTF8.self) == "<p>Available website</p>")
+        await feed.retry()
+        #expect(RSSPageFixtureProtocol.requests(host: hostname).map(\.url) == [firstPage, base, firstPage])
+        #expect(feed.error == ScraperError.httpStatus(503).localizedDescription)
+        #expect(store.articles(for: source.id).isEmpty)
+        try await store.flushPersistence()
+    }
+
     @Test("规则文章无description/正文规则时自动打开原网页，而非调用普通全文抓取")
     func articleOriginalPage() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -4003,6 +4003,11 @@ class ModernParserBridge {
         // get it back; this one never did, so the call evaluated to nothing and surfaced
         // as "Invalid URL: @js:getApiUrl(…)". Hash-guarded, so it is a no-op once loaded.
         guard runtimeOverrides?.state.isCurrent != false else { throw CancellationError() }
+        // RSS 复用同源脚本上下文；前一页或封面失败不能让新请求在发出前误报。
+        // 先清旧错误，再执行本次库、请求头和 URL 脚本，仍检查它们的新错误。
+        if runtimeOverrides != nil, let engine = _jsEngine, engine.lastError != nil {
+            engine.clearLastEvaluationError()
+        }
         evaluateJsLibIfNeeded()
         if interactionWasRequested { throw SourceRuntimeRequirement.interactionRequired }
         if runtimeOverrides != nil, _jsEngine?.lastError != nil { throw ModernParserBridgeError.parseError("Source JavaScript failed") }

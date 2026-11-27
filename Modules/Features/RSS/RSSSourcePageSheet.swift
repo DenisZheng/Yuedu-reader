@@ -253,6 +253,8 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         private var diagnosticAttempt: RSSWebLoadDiagnostics.Attempt?
         private var diagnosticFailureRecorded = false
         private var nativeBrowser = false
+        private var nativeBrowserAllowsCrossOrigin = false
+        private var nativeBrowserRequestOrigin: String?
         private var nativeHTTPStatus: Int?
         fileprivate var accessState: RSSRuntimeState?
         private var accessToken: UUID?
@@ -325,6 +327,8 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         func cancel() {
             diagnosticAttempt = nil
             nativeBrowser = false
+            nativeBrowserAllowsCrossOrigin = false
+            nativeBrowserRequestOrigin = nil
             nativeHTTPStatus = nil
             cancelDisplayScale()
             generation &+= 1
@@ -433,6 +437,9 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                             try await context?.validate(source: source, owner: owner)
                             // 第一请求及后续表单留在同一WebKit会话；Cookie只通过域约束的cookieStore播种。
                             nativeBrowser = true
+                            // 只有完全不附加源请求头的浏览器会话可以跨域，以免覆写的 UA 等传到别站。
+                            nativeBrowserAllowsCrossOrigin = (request.allHTTPHeaderFields ?? [:]).isEmpty
+                            nativeBrowserRequestOrigin = SourceRequestHeaderScope.origin(url)
                             sourceScriptsAllowed = false
                             // 未声明 UA 时清除旧覆盖，让首请求与后续导航都使用系统 WebKit 默认值。
                             view.customUserAgent = request.value(forHTTPHeaderField: "User-Agent")
@@ -652,9 +659,9 @@ struct RSSSourcePageWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                      decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
             guard nativeBrowser, navigationResponse.isForMainFrame else { decisionHandler(.allow); return }
-            guard !isRevoked, accessState?.isCurrent == true,
+            guard currentView === webView, !isRevoked, accessState?.isCurrent == true,
                   let http = navigationResponse.response as? HTTPURLResponse, let url = http.url,
-                  SourceRequestHeaderScope.origin(url) == pageURL.flatMap(SourceRequestHeaderScope.origin),
+                  let origin = SourceRequestHeaderScope.origin(url), origin == nativeBrowserRequestOrigin,
                   navigationResponse.canShowMIMEType else {
                 decisionHandler(.cancel)
                 fail(RSSWebFailure.navigationBlocked, phase: .browser)
@@ -917,12 +924,22 @@ struct RSSSourcePageWebView: UIViewRepresentable {
                         guard id == generation, accessState?.isCurrent == true, !Task.isCancelled else { return }
                         replied = true; decisionHandler(.allow); return
                     }
-                    if nativeBrowser, ["http", "https"].contains(scheme), url.user == nil, url.password == nil,
-                       SourceRequestHeaderScope.origin(url) == currentURL.flatMap(SourceRequestHeaderScope.origin) {
-                        try await requestContext?.validate(source: source, owner: owner)
-                        guard id == generation, accessState?.isCurrent == true, !Task.isCancelled else { return }
-                        // 原始表单body、Referer、Cookie及浏览器状态由WebKit拥有；不取消后再复制成URLSession请求。
-                        replied = true; decisionHandler(.allow); return
+                    if nativeBrowser, url.user == nil, url.password == nil,
+                       let origin = SourceRequestHeaderScope.origin(url) {
+                        let sameOrigin = origin == currentURL.flatMap(SourceRequestHeaderScope.origin)
+                        // 普通首文档重定向和页内跳转继续由同一个 WebKit 会话承载。
+                        // 子窗、跨域表单、下载和带源头的会话不进入这个跨域分支。
+                        let mayCrossOrigin = nativeBrowserAllowsCrossOrigin && isPageActive
+                            && navigationAction.targetFrame?.isMainFrame == true && !navigationAction.shouldPerformDownload
+                            && (request.httpMethod ?? "GET").uppercased() == "GET" && request.httpBody == nil && request.httpBodyStream == nil
+                            && request.value(forHTTPHeaderField: "Authorization") == nil
+                        if sameOrigin || mayCrossOrigin {
+                            try await requestContext?.validate(source: source, owner: owner)
+                            guard id == generation, accessState?.isCurrent == true, !Task.isCancelled else { return }
+                            // 只接受这次允许的导航的响应；不改变源票据或 CookieStore 的绑定域。
+                            nativeBrowserRequestOrigin = origin
+                            replied = true; decisionHandler(.allow); return
+                        }
                     }
                     if ["http", "https"].contains(scheme), SourceRequestHeaderScope.origin(url) == currentURL.flatMap(SourceRequestHeaderScope.origin) {
                         var old = currentURL.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }

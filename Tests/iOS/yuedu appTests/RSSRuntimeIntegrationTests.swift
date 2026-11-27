@@ -27,6 +27,57 @@ struct RSSRuntimeIntegrationTests {
         #expect(RSSPageFixtureProtocol.requests(host: host).first?.url?.query == "page=2&keyword=")
     }
 
+    @Test("动态分类的首个列表返回 403 时保留失败，手动重试同地址及源请求头")
+    func dynamicCategoryHTTPForbidden() async throws {
+        try await withStore { store, _ in
+            let host = hostName()
+            let root = "https://\(host)/"
+            let session = RSSPageFixtureProtocol.makeSession()
+            RSSPageFixtureProtocol.serve(host: host, sequences: [
+                "/categories": [.init(body: Data("<a href='/list'>Latest</a>".utf8))],
+                // 即使 403 响应也含可匹配条目，仍须在解析前保留失败。
+                "/list": [.init(body: html, status: 403), .init(body: html)]
+            ])
+            defer { session.invalidateAndCancel(); RSSPageFixtureProtocol.remove(host: host) }
+            var source = rules(host: host)
+            source.url = root + "#fixture-variant"
+            source.importedFromLegado = true
+            source.enabledCookieJar = true
+            source.header = #"<js>JSON.stringify({'X-Fixture':'declared', 'Referer':String(source.getKey()).split('#')[0]})</js>"#
+            source.sortUrl = """
+            @js:
+            const body = java.ajax('\(root)categories');
+            const path = org.jsoup.Jsoup.parse(body).select('a').attr('href');
+            'Latest::' + path + '?page={{page}}';
+            """
+            store.addSource(source)
+            let browser = RSSFeedSession(source: source, store: store, session: session)
+            await browser.refresh()
+
+            let requests = RSSPageFixtureProtocol.requests(host: host)
+            #expect(requests.map { $0.url?.path } == ["/categories", "/list"])
+            let denied = try #require(requests.last)
+            #expect(denied.url?.query == "page=1" && denied.url?.fragment == nil && denied.httpMethod == "GET")
+            #expect(denied.value(forHTTPHeaderField: "X-Fixture") == "declared")
+            #expect(denied.value(forHTTPHeaderField: "Referer") == root)
+            #expect(browser.entries == [.init(name: "Latest", url: "/list?page={{page}}")])
+            #expect(browser.error == ScraperError.httpStatus(403).localizedDescription)
+            #expect(browser.currentPage == 0 && browser.canRetry && browser.openTarget == nil)
+            #expect(store.articles(for: source.id).isEmpty)
+
+            await browser.preloadIfNeeded()
+            #expect(RSSPageFixtureProtocol.requests(host: host).count == 2)
+            await browser.retry()
+            let retried = RSSPageFixtureProtocol.requests(host: host)
+            #expect(retried.map { $0.url?.path } == ["/categories", "/list", "/list"])
+            #expect(retried.last?.url == denied.url && retried.last?.httpMethod == denied.httpMethod)
+            #expect(retried.last?.value(forHTTPHeaderField: "X-Fixture") == "declared")
+            #expect(retried.last?.value(forHTTPHeaderField: "Referer") == root)
+            #expect(browser.error == nil && browser.currentPage == 1 && !browser.canRetry)
+            #expect(store.articles(for: source.id, scope: browser.scope).map(\.title) == ["One"])
+        }
+    }
+
     @Test("源变量落盘/重载，JS全局连续，不变不写")
     func sourceLifetimeAndPersistence() async throws {
         try await withStore { store, directory in

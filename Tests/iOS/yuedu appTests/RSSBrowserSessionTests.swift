@@ -2,6 +2,7 @@ import SwiftUI
 import Testing
 import UIKit
 import WebKit
+import XCTest
 @testable import yuedu_app
 
 /// 自建页面检验浏览器HTTP会话连续性；不连接Cloudflare、不生成或求解真人验证。
@@ -11,6 +12,172 @@ struct RSSBrowserSessionTests {
     @Observable final class State {
         var loading = true
         var error: String?
+        var actions: [RSSWebAction] = []
+    }
+
+    @Test("无源私有头的单页站点跨域跳转留在同一个 WebView", arguments: [true, false])
+    func crossOriginNavigationStaysInBrowser(serverRedirect: Bool) async throws {
+        let cookieName = "fixture" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let destination = try VideoStillFixtureServer(directory: .temporaryDirectory, routes: [
+            "/final": .init(body: Data("<p id='page'>Destination</p>".utf8))
+        ])
+        let endpoint = try await destination.start()
+        defer { destination.stop() }
+        var address = try #require(URLComponents(url: endpoint.appendingPathComponent("final"), resolvingAgainstBaseURL: false))
+        address.host = "localhost"  // 不同 host，Cookie 不能只靠端口区分。
+        let finalURL = try #require(address.url)
+        let start = VideoStillFixtureServer.Response(
+            body: Data("<p id='page'>Entrance</p><a id='next' href='\(finalURL.absoluteString)'>Next</a>".utf8),
+            headers: ["Set-Cookie": "\(cookieName)=synthetic; Path=/; HttpOnly"])
+        let origin = try VideoStillFixtureServer(directory: .temporaryDirectory, routes: [
+            "/start": serverRedirect
+                ? .init(body: Data(), status: "302 Found", headers: [
+                    "Location": finalURL.absoluteString, "Set-Cookie": "\(cookieName)=synthetic; Path=/; HttpOnly"
+                ]) : start
+        ])
+        let base = try await origin.start()
+        defer { origin.stop(); CookieStore.shared.remove(url: base.absoluteString, key: cookieName) }
+        let startURL = base.appendingPathComponent("start")
+        var source = RSSSource(name: "Cross-origin browser fixture", url: startURL.absoluteString)
+        source.importedFromLegado = true
+        source.singleUrl = true; source.enabledCookieJar = true
+        let target = try #require(try await RSSOpenTarget.resolve(source: source))
+        let state = State(), history = RSSWebNavigationState()
+        let window = try host(RSSSourcePageWebView(source: source, target: target,
+            error: Binding(get: { state.error }, set: { state.error = $0 }),
+            loading: Binding(get: { state.loading }, set: { state.loading = $0 }), webNavigation: history,
+            onAction: { state.actions.append($0.action) }))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let deadline = ContinuousClock.now + .seconds(8)
+        while findWeb(window) == nil, ContinuousClock.now < deadline { await Task.yield() }
+        let web = try #require(findWeb(window))
+        if !serverRedirect {
+            while state.loading, ContinuousClock.now < deadline { await Task.yield() }
+            try #require(!state.loading && state.error == nil)
+            #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Entrance")
+            _ = try await web.evaluateJavaScript("location.assign(document.getElementById('next').href); void 0")
+        }
+        let finished = ContinuousClock.now + .seconds(8)
+        while state.actions.isEmpty, state.error == nil, (web.url != finalURL || state.loading),
+              ContinuousClock.now < finished { await Task.yield() }
+        #expect(state.actions.isEmpty, "HTTP 网页导航不能触发外部应用确认")
+        try #require(web.url == finalURL && !state.loading && state.error == nil)
+        #expect(findWeb(window) === web)
+        #expect(try await web.evaluateJavaScript("document.getElementById('page').textContent") as? String == "Destination")
+        #expect(try await web.evaluateJavaScript("typeof java === 'undefined' && typeof source === 'undefined'") as? Bool == true)
+        let served = try #require(destination.requests.first)
+        #expect(destination.requests.count == 1 && served.headers["sec-fetch-mode"] == "navigate")
+        let forwardedCookie = served.headers["cookie"]?.contains(cookieName + "=") == true
+        let forwardedAuthentication = served.headers["authorization"] != nil
+        #expect(!forwardedCookie && !forwardedAuthentication)
+        if !serverRedirect {
+            try #require(history.canGoBack)
+            history.goBack()
+            let back = ContinuousClock.now + .seconds(8)
+            while (web.url != startURL || state.loading || history.canGoBack), ContinuousClock.now < back { await Task.yield() }
+            #expect(web.url == startURL && !state.loading && state.error == nil)
+            #expect(state.actions.isEmpty)
+        }
+    }
+
+    @Test("连续打开 44 个文档后网页仍可操作且可原生返回", arguments: [false, true])
+    func repeatedDocumentNavigation(sharedExecutor: Bool) async throws {
+        let pageCount = 44
+        let cookieName = "rrnav" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let server = try VideoStillFixtureServer(directory: .temporaryDirectory, maximumRequests: 64)
+        server.route { request in
+            guard request.path.hasPrefix("/step/"), let number = Int(request.path.dropFirst("/step/".count)),
+                  (1...pageCount).contains(number) else { return nil }
+            let html = """
+            <p id='step'>\(number)</p><a id='next' href='/step/\(number + 1)'>Next</a>
+            <button id='probe' onclick="this.textContent='responded'">Probe</button>
+            """
+            return .init(body: Data(html.utf8), headers: ["Set-Cookie": "\(cookieName)=\(number); Path=/; HttpOnly"])
+        }
+        let base = try await server.start()
+        defer { server.stop(); CookieStore.shared.remove(url: base.absoluteString, key: cookieName) }
+        let initial = base.appendingPathComponent("step/1")
+        var source = RSSSource(name: "Navigation load fixture", url: initial.absoluteString)
+        source.importedFromLegado = true; source.singleUrl = true; source.enabledCookieJar = true
+        if sharedExecutor { source.header = #"{"X-Navigation":"fixture"}"# }
+        let target = try #require(try await RSSOpenTarget.resolve(source: source))
+        let state = State(), history = RSSWebNavigationState()
+        var finished: XCTestExpectation?
+        let loading = Binding(get: { state.loading }, set: {
+            state.loading = $0
+            if !$0 { let waiter = finished; finished = nil; waiter?.fulfill() }
+        })
+        let watchdog = MainThreadWatchdog()
+        let began = ContinuousClock.now
+        let cpu = MainThreadWatchdog.mainThreadCPUSeconds()
+        watchdog.start()
+        var lastPage = 0
+        defer {
+            print("RSS_NAVIGATION_LOAD shared=\(sharedExecutor) documents=\(lastPage) requests=\(server.requests.count) elapsed=\(ContinuousClock.now - began) mainCPUMs=\(Int((MainThreadWatchdog.mainThreadCPUSeconds() - cpu) * 1000)) longestMainPingMs=\(Int(watchdog.stop() * 1000))")
+        }
+        func wait(_ step: Int, after done: XCTestExpectation, in window: UIWindow) async throws -> WKWebView {
+            let result = await XCTWaiter.fulfillment(of: [done], timeout: 6)
+            try #require(result == .completed, "第 \(step) 页没有完成；主线程或导航回调停住")
+            try #require(state.error == nil && !state.loading)
+            let web = try #require(findWeb(window))
+            try #require(web.url?.path == "/step/\(step)")
+            try #require(try await web.evaluateJavaScript("document.getElementById('step').textContent") as? String == String(step))
+            return web
+        }
+        let first = XCTestExpectation(description: "首文档完成")
+        finished = first
+        let window = try host(RSSSourcePageWebView(source: source, target: target,
+            error: Binding(get: { state.error }, set: { state.error = $0 }), loading: loading, webNavigation: history,
+            onAction: { state.actions.append($0.action) }, displayScalePercent: 100))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let web = try await wait(1, after: first, in: window)
+        lastPage = 1
+        for step in 2...pageCount {
+            let done = XCTestExpectation(description: "第 \(step) 页完成")
+            finished = done
+            _ = try await web.evaluateJavaScript("document.getElementById('next').click(); void 0")
+            let next = try await wait(step, after: done, in: window)
+            #expect(next === web)
+            lastPage = step
+        }
+        #expect(server.requests.map(\.path) == (1...pageCount).map { "/step/\($0)" })
+        #expect(state.actions.isEmpty)
+        #expect(try await web.evaluateJavaScript("document.getElementById('probe').click();document.getElementById('probe').textContent") as? String == "responded")
+        try #require(history.canGoBack)
+        let back = XCTestExpectation(description: "原生网页返回完成")
+        finished = back
+        history.goBack()
+        _ = try await wait(pageCount - 1, after: back, in: window)
+    }
+
+    @Test("取消一次 Cookie 同步后，后续导航仍能同步")
+    func cancelledCookieFlushDoesNotPoisonSession() async throws {
+        let host = "cookie-cancel-\(UUID().uuidString.lowercased()).invalid"
+        let base = try #require(URL(string: "https://\(host)/"))
+        let source = RSSSource(name: "Cookie cancellation fixture", url: base.absoluteString)
+        let runtime = try await RSSRuntime.make(source: source, owner: nil)
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        let web = WKWebView(frame: .zero, configuration: config)
+        let jar = web.configuration.websiteDataStore.httpCookieStore
+        let cookies = RSSWebCookies(jar)
+        try await cookies.bind(runtime: runtime, url: base, explicit: nil)
+        let key = "rrRecovery"
+        defer {
+            cookies.reset()
+            CookieStore.shared.remove(url: base.absoluteString, key: key)
+        }
+        let cancelled = Task { try await cookies.flush() }
+        cancelled.cancel()
+        do {
+            try await cancelled.value
+            Issue.record("被取消的 Cookie 同步不应成功")
+        } catch is CancellationError { }
+        let cookie = try #require(HTTPCookie(properties: [.domain: host, .path: "/", .name: key, .value: "fixture"]))
+        await jar.setCookie(cookie)
+        try await cookies.flush()
+        let synced = CookieStore.shared.requestHeader(for: base).contains(key + "=fixture")
+        #expect(synced, "必须同步取消之后新增的 Cookie，不能仅返回成功")
     }
 
     @Test("明确的 CF 验证响应不显示普通 403 重试条；普通拒绝仍报错",

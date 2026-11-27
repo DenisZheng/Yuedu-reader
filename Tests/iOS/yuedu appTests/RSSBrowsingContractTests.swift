@@ -410,6 +410,58 @@ struct RSSBrowsingContractTests {
         try await store.flushPersistence()
     }
 
+    @Test("首页封面错误不阻止第二页发请求；第二页脚本出错后可重试原页")
+    func paginationDoesNotInheritPreviousScriptError() async throws {
+        let host = "rss-page-error-\(UUID().uuidString.lowercased()).invalid"
+        let session = RSSPageFixtureProtocol.makeSession()
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
+        func article(_ id: String, title: String, image: String = "") -> Data {
+            Data("<div class='item'><a href='/article/\(id)'>\(title)</a>\(image)</div>".utf8)
+        }
+        RSSPageFixtureProtocol.serve(host: host, sequences: [
+            "/list/1": [.init(body: article("one", title: "One", image: "<img src='/cover.png'>"))],
+            "/cover.png": [.init(body: png, contentType: "image/png")],
+            "/list/2": [.init(body: article("broken", title: "Broken")), .init(body: article("two", title: "Two"))]
+        ])
+        defer {
+            session.invalidateAndCancel(); RSSPageFixtureProtocol.remove(host: host)
+            do { try FileManager.default.removeItem(at: directory) } catch { Issue.record(error) }
+        }
+        let store = RSSStore(storageDirectory: directory)
+        var source = RSSSource(name: "RSS page error fixture", url: "https://\(host)/list/{{page}}")
+        source.ruleArticles = "class.item"; source.ruleLink = "a@href"; source.ruleImage = "img@src"
+        source.ruleNextPage = "PAGE"
+        source.jsLib = "function fixtureTitle(value) { if (String(value) === 'Broken') throw new Error('fixture item'); return String(value); }"
+        source.ruleTitle = "a@text@js:fixtureTitle(result)"
+        source.coverDecodeJs = "@js:throw new Error('fixture cover')"
+        store.addSource(source)
+        let browser = RSSFeedSession(source: source, store: store, session: session)
+
+        await browser.refresh()
+        try #require(browser.error == nil && browser.currentPage == 1 && browser.canLoadMore)
+        let first = try #require(store.articles(for: source.id, scope: browser.scope).first)
+        #expect(first.title == "One")
+        do {
+            _ = try await RSSImageService.thumbnail(first, source: source, owner: store, session: session)
+            Issue.record("封面解码应当明确失败")
+        } catch RSSWebFailure.resourceUnavailable { }
+        #expect(RSSPageFixtureProtocol.requests(host: host).map { $0.url?.path } == ["/list/1", "/cover.png"])
+
+        await browser.nextPage()
+        #expect(RSSPageFixtureProtocol.requests(host: host).map { $0.url?.path } == ["/list/1", "/cover.png", "/list/2"],
+                "旧封面异常不能阻止第二页发请求")
+        #expect(browser.error == ScraperError.scriptFailure.localizedDescription)
+        #expect(browser.currentPage == 1 && browser.canRetry)
+        #expect(store.articles(for: source.id, scope: browser.scope).map(\.title) == ["One"])
+
+        await browser.retry()
+        #expect(RSSPageFixtureProtocol.requests(host: host).map { $0.url?.path } == ["/list/1", "/cover.png", "/list/2", "/list/2"])
+        #expect(browser.error == nil && browser.currentPage == 2 && !browser.canRetry)
+        #expect(store.articles(for: source.id, scope: browser.scope).map(\.title) == ["One", "Two"])
+        try await store.flushPersistence()
+    }
+
     @Test("分类切换取消旧请求，空分类不会显示其他分类或提交晚到结果")
     func categorySwitchCancelsOldPage() async throws {
         let host = "rss-switch-\(UUID().uuidString.lowercased()).invalid"
