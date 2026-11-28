@@ -79,3 +79,30 @@ bash scripts/xctest.sh -l "$d/iphone-ui.log" -- \
 ```
 
 实际输出 `Executed 2 tests, with 0 failures`、`** TEST SUCCEEDED **`（`.artifacts/bookshelf-resume-recheck-tO1bHV/`）。书架列表与网格均用同一本已读 TXT，实际开书、翻页、关闭、从探索继续阅读，再从搜索返回后重开。没有改动阅读器代码，没有安装或覆盖用户的 App。
+
+## 2026-11-28：书架阅读白边与打开时的画面
+
+同一本已读 TXT、浅色 App、护眼绿阅读主题。iPhone 18 Pro Max／iOS 27.2 [同书两入口 UI 用例](../../Tests/iOS-UI/BookshelfReaderResumeUITests.swift) 实际进入、截图并对比正文与屏幕上下边缘，不使用阅读器内部的状态当作画面证据：
+
+| 入口 | 修复前 RGB（上／正文／下） | 修复后 RGB（上／正文／下） |
+| --- | --- | --- |
+| 探索「继续阅读」 | `(207,232,204)`／`(207,232,204)`／`(207,232,204)` | 三处均为 `(207,232,204)` |
+| 书架封面 | `(242,242,247)`／`(207,232,204)`／`(242,242,247)` | 三处均为 `(207,232,204)` |
+
+旧版先在书架顶部断言失败（`TEST FAILED`）；两个截图确认底部也漏出浅灰。前景是同一阅读器，但书架独立的 UIKit 导航容器原本只占 Tab 的安全区内空间，阅读器背景无法越过这个外框；探索直接在 SwiftUI 值路径打开，没有这层外框。[修复](../../Modules/Features/Bookshelf/HomeView.swift)只让外层书架导航覆盖上下系统区域，不改变内部书架与阅读器的安全区布局，不撤销分离导航所有权的修复，也不调整主题、状态栏、动画或进度存储。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_DEST="$(bash scripts/sim.sh dest)" YUEDU_SCHEME=Reader-Fork-Dev
+d="$(mktemp -d .artifacts/bookshelf-reader-edges-XXXXXX)"
+bash scripts/xctest.sh -l "$d/edges.log" -- \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  -only-testing:'yuedu appUITests/BookshelfReaderResumeUITests/testResumedReaderPaintsScreenEdgesFromBothEntrances' \
+  -resultBundlePath "$d/edges.xcresult"
+```
+
+同用例修复后 `Executed 1 test, with 0 failures`、`** TEST SUCCEEDED **`。实际日志、XCResult、导出截图和 `xcrun simctl io … recordVideo` 前后录像在 `.artifacts/bookshelf-reader-edges-ZK5047/`（`red.*` 与 `geometry.*`）。录像与定帧均证明浅灰上下边不再留在书架阅读页。录像展示了书架封面特有的展开动画；当首屏在既有等待上限内未就绪时，短暂显示当前主题的「载入中」再切正文，`reader-timing.log` 也记录到这一分支。录像没有捕捉到正文出现后整屏重新变白；未把这个观察当作所有真机瞬时闪动都已修复，也没有延长等待或禁掉动画。
+
+官方上游以 [8ed900e8](https://github.com/CHANG-JUI-LIN/Yuedu-reader/commit/8ed900e89f375e27e3aba0d30b5bc2a353f256b0) 为准：其书架仍由 `ReaderEdgeSwipeEnabler` 挂到原书架栈，探索继续阅读走独立 SwiftUI 值路径。上游有相同封面动画和首屏等待逻辑，但没有本 Fork 的独立 `BookshelfNavigationHost`，故这次定位到的容器白边不能归因于上游。只查上游源码，未启动上游构建逐帧对照。
+
+补充用同一工具链串行运行：iPhone 选既有书架列表／网格续读回归与 `SearchStreamingSelectionUITests`（使用 `python3 -I scripts/search_selection_fixture.py` 的本机响应），`iphone-regression.log` 为 4 项、0 失败；另用 `YUEDU_DEST="$(bash scripts/sim.sh dest iPad)"` 选择整个 `BookshelfReaderResumeUITests`，`ipad-regression.log` 为 3 项、0 失败。两批均 `** TEST SUCCEEDED **`；加上 iPhone 颜色用例，总计 iPhone 5 项、iPad 3 项。`ruby scripts/check_localizations.rb` 输出 `Localization OK`，`git diff --check` 无错误。未验真机或 iOS 17，未提交或重打 IPA。只撤回外层安全区修正和新增 UI 用例即可回滚本次白边修复，不涉及数据迁移。

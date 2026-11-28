@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// 隔离书库中的自建 TXT：实际翻页和退出后重开，不能把开书动画中短暂出现的正文算成功。
@@ -23,7 +24,7 @@ final class BookshelfReaderResumeUITests: XCTestCase {
     }
 
     @MainActor
-    private func launch(grid: Bool) -> XCUIApplication {
+    private func launch(grid: Bool, greenReader: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-no-official-modules", "-onboarding.completed", "YES",
@@ -34,6 +35,12 @@ final class BookshelfReaderResumeUITests: XCTestCase {
             "-auto-import-title", title, "-bookLayoutIsGrid", grid ? "YES" : "NO",
             "-bookSortOrder", "recentlyRead", "-yd_page_turn_style", "滑動", "-yd_scroll_mode", "NO",
         ]
+        if greenReader {
+            app.launchArguments += [
+                "-AppleInterfaceStyle", "Light", "-yd_reader_theme", "護眼綠", "-lastLightTheme", "護眼綠",
+                "-yd_reader_dark_mode", "NO", "-yd_reader_follow_system_theme", "NO", "-yd_appearance_bind_reader_theme", "NO",
+            ]
+        }
         app.launch()
         return app
     }
@@ -90,6 +97,59 @@ final class BookshelfReaderResumeUITests: XCTestCase {
         for _ in 0..<2 {
             openFromShelf(app)
             exerciseAndCloseReader(app)
+        }
+    }
+
+    @MainActor
+    func testResumedReaderPaintsScreenEdgesFromBothEntrances() throws {
+        let app = launch(grid: false, greenReader: true)
+        openFromShelf(app)
+        exerciseAndCloseReader(app)
+
+        app.rootTab("探索").tap()
+        let recent = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH 'home.card.library.' AND label BEGINSWITH %@", title)).firstMatch
+        XCTAssertTrue(recent.waitForExistence(timeout: 15))
+        recent.tap()
+        let home = try readerPaperColors("explore-reader-green", app: app)
+        exerciseAndCloseReader(app)
+
+        openFromShelf(app)
+        let shelf = try readerPaperColors("shelf-reader-green", app: app)
+        let green = [207, 232, 204]
+        for (route, colors) in [("首页", home), ("书架", shelf)] {
+            for (area, rgb) in colors {
+                XCTAssertTrue(zip(rgb, green).allSatisfy { abs($0.0 - $0.1) <= 8 },
+                              "\(route)\(area)：应为护眼绿，实际 RGB \(rgb)")
+            }
+        }
+        exerciseAndCloseReader(app)
+    }
+
+    @MainActor
+    private func readerPaperColors(_ name: String, app: XCUIApplication) throws -> [(String, [Int])] {
+        let page = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", bodyMarker)).firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 20), "必须实际进入正文。")
+        let shot = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: shot)
+        attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+        let pixels = try XCTUnwrap(shot.image.cgImage)
+        let samplePoints: [(String, Double, Double)] = [("顶部", 0.18, 0.015), ("正文", 0.025, 0.50), ("底部", 0.18, 0.985)]
+        return try samplePoints.map { area, x, y in
+            // 避开系统状态字、主屏幕指示条和正文，取小块平均色而非比较整张截图。
+            let patch = try XCTUnwrap(pixels.cropping(to: CGRect(x: Double(pixels.width) * x, y: Double(pixels.height) * y,
+                                                                width: 5, height: 5).integral))
+            var rgba = [UInt8](repeating: 0, count: 4)
+            let success = rgba.withUnsafeMutableBytes { data -> Bool in
+                guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+                      let context = CGContext(data: data.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                                              bytesPerRow: 4, space: colorSpace,
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                context.draw(patch, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                return true
+            }
+            XCTAssertTrue(success, "不能读取模拟器截图颜色。")
+            return (area, rgba.prefix(3).map(Int.init))
         }
     }
 

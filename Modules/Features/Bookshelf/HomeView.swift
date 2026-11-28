@@ -241,6 +241,8 @@ struct HomeView: View {
         BookshelfNavigationHost(navigator: readerNavigation.coordinator) {
             BookshelfContentView(readerCoordinator: readerNavigation.coordinator)
         }
+        // 让 UIKit 容器覆盖上下系统区域；内部书架和阅读器仍分别按自己的安全区布局。
+        .ignoresSafeArea(.container, edges: .vertical)
     }
 }
 
