@@ -49,17 +49,19 @@ final class BoundedResponseLoader: NSObject, URLSessionDataDelegate, @unchecked 
     private let transport: String
     private let savesCookies: Bool
     private let taskDelegate: (any URLSessionTaskDelegate)?
+    private let hostReservation: RequestHostReservation?
     private let state = OSAllocatedUnfairLock(initialState: State())
 
     private init(
         limit: Int, redirect: (@Sendable (URL) -> Bool)?, transport: String, savesCookies: Bool,
-        completion: Completion?, taskDelegate: (any URLSessionTaskDelegate)? = nil
+        completion: Completion?, taskDelegate: (any URLSessionTaskDelegate)? = nil, hostLimit: PerHostSemaphore? = nil
     ) {
         self.limit = limit
         self.redirect = redirect
         self.transport = transport
         self.savesCookies = savesCookies
         self.taskDelegate = taskDelegate
+        self.hostReservation = hostLimit.map(RequestHostReservation.init)
         super.init()
         state.withLock { $0.completion = completion }
     }
@@ -74,9 +76,10 @@ final class BoundedResponseLoader: NSObject, URLSessionDataDelegate, @unchecked 
         redirect: (@Sendable (URL) -> Bool)? = nil,
         transport: String = "http",
         savesCookies: Bool = false,
-        taskDelegate: (any URLSessionTaskDelegate)? = nil
+        taskDelegate: (any URLSessionTaskDelegate)? = nil,
+        hostLimit: PerHostSemaphore? = nil
     ) async throws -> (Data, URLResponse) {
-        if taskDelegate == nil, SingleWriteHTTPExchange.handles(request, on: session) {
+        if taskDelegate == nil, hostLimit == nil, SingleWriteHTTPExchange.handles(request, on: session) {
             return try await SingleWriteHTTPExchange.load(
                 request, session: session, limit: limit, redirect: redirect, transport: transport,
                 savesCookies: savesCookies
@@ -85,7 +88,8 @@ final class BoundedResponseLoader: NSObject, URLSessionDataDelegate, @unchecked 
         let first = SourceTLSFallback.session(session, for: request.url)
         do {
             let loader = BoundedResponseLoader(
-                limit: limit, redirect: redirect, transport: transport, savesCookies: savesCookies, completion: nil, taskDelegate: taskDelegate
+                limit: limit, redirect: redirect, transport: transport, savesCookies: savesCookies,
+                completion: nil, taskDelegate: taskDelegate, hostLimit: hostLimit
             )
             return try await loader.run(request, session: first)
         } catch {
@@ -94,7 +98,8 @@ final class BoundedResponseLoader: NSObject, URLSessionDataDelegate, @unchecked 
                 throw error
             }
             let loader = BoundedResponseLoader(
-                limit: limit, redirect: redirect, transport: transport, savesCookies: savesCookies, completion: nil, taskDelegate: taskDelegate
+                limit: limit, redirect: redirect, transport: transport, savesCookies: savesCookies,
+                completion: nil, taskDelegate: taskDelegate, hostLimit: hostLimit
             )
             return try await loader.run(request, session: twin)
         }
@@ -148,6 +153,17 @@ final class BoundedResponseLoader: NSObject, URLSessionDataDelegate, @unchecked 
     }
 
     private func run(_ request: URLRequest, session: URLSession) async throws -> (Data, URLResponse) {
+        guard let hostReservation else { return try await collect(request, session: session) }
+        guard let url = request.url else { throw URLError(.badURL) }
+        try await hostReservation.move(to: url)
+        let result: Result<(Data, URLResponse), any Error>
+        do { result = .success(try await collect(request, session: session)) }
+        catch { result = .failure(error) }
+        await hostReservation.finish()
+        return try result.get()
+    }
+
+    private func collect(_ request: URLRequest, session: URLSession) async throws -> (Data, URLResponse) {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let task = session.dataTask(with: request)
@@ -165,6 +181,7 @@ final class BoundedResponseLoader: NSObject, URLSessionDataDelegate, @unchecked 
                 }
             }
         } onCancel: {
+            hostReservation?.cancel()
             let task = state.withLock { state -> URLSessionDataTask? in
                 state.cancelled = true
                 return state.task
@@ -226,19 +243,25 @@ final class BoundedResponseLoader: NSObject, URLSessionDataDelegate, @unchecked 
             completionHandler(nil)
             return
         }
-        // RSS认证与导入包准入继续使用调用方已有的重定向规则，只复用有界分块收集。
-        if let callback = taskDelegate?.urlSession(_:task:willPerformHTTPRedirection:newRequest:completionHandler:) {
-            callback(session, task, response, request) { [self] forwarded in
-                if forwarded != nil {
-                    keepCookies(of: response, session: session)
-                    state.withLock { $0.redirects.append(response) }
-                }
-                completionHandler(forwarded)
+        let recordAndFollow: @Sendable (URLRequest?) -> Void = { [self] forwarded in
+            if forwarded != nil {
+                keepCookies(of: response, session: session)
+                state.withLock { $0.redirects.append(response) }
             }
+            completionHandler(forwarded)
+        }
+        let follow: @Sendable (URLRequest?) -> Void = { [self] forwarded in
+            guard let hostReservation, let forwarded, let target = forwarded.url else {
+                recordAndFollow(forwarded)
+                return
+            }
+            hostReservation.redirect(to: target) { admitted in recordAndFollow(admitted ? forwarded : nil) }
+        }
+        // 仍先应用调用方的重定向和认证规则，再等待目标主机的请求槽。
+        if let callback = taskDelegate?.urlSession(_:task:willPerformHTTPRedirection:newRequest:completionHandler:) {
+            callback(session, task, response, request, follow)
         } else {
-            keepCookies(of: response, session: session)
-            state.withLock { $0.redirects.append(response) }
-            completionHandler(request)
+            follow(request)
         }
     }
 
@@ -280,6 +303,79 @@ final class BoundedResponseLoader: NSObject, URLSessionDataDelegate, @unchecked 
             WebFetcher.logOversized(url: url, bytes: oversized, limit: limit, transport: transport)
         }
         completion?(result)
+    }
+}
+
+/// 一个网络任务持有当前实际主机的槽；重定向交接不重发请求，也不同时占两个主机。
+private final class RequestHostReservation: Sendable {
+    private struct State {
+        var host: String?
+        var redirect: Task<Void, Never>?
+        var closed = false
+    }
+
+    private let limit: PerHostSemaphore
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    init(_ limit: PerHostSemaphore) { self.limit = limit }
+
+    func move(to url: URL) async throws {
+        try Task.checkCancellation()
+        guard let host = PerHostSemaphore.hostKey(for: url) else { throw URLError(.badURL) }
+        let previous = try state.withLock { state -> String? in
+            guard !state.closed else { throw CancellationError() }
+            let previous = state.host
+            if previous != host { state.host = nil }
+            return previous
+        }
+        if previous == host { return }
+        // 先释放旧槽再等新槽，A→B 和 B→A 也不会互相卡住。
+        if let previous { await limit.release(host: previous) }
+        try await limit.acquire(host: host, maxConcurrent: 1)
+        let accepted = state.withLock { state in
+            guard !state.closed, !Task.isCancelled else { return false }
+            state.host = host
+            return true
+        }
+        if !accepted {
+            await limit.release(host: host)
+            throw CancellationError()
+        }
+    }
+
+    func redirect(to url: URL, completion: @escaping @Sendable (Bool) -> Void) {
+        let started = state.withLock { state in
+            guard !state.closed else { return false }
+            state.redirect = Task {
+                do {
+                    try await move(to: url)
+                    let canFollow = self.state.withLock { !$0.closed && !Task.isCancelled }
+                    completion(canFollow)
+                } catch {
+                    completion(false)
+                }
+            }
+            return true
+        }
+        if !started { completion(false) }
+    }
+
+    func cancel() {
+        let redirect = state.withLock { state in
+            state.closed = true
+            return state.redirect
+        }
+        redirect?.cancel()
+    }
+
+    func finish() async {
+        cancel()
+        let (host, redirect) = state.withLock { state in
+            defer { state.host = nil; state.redirect = nil }
+            return (state.host, state.redirect)
+        }
+        if let host { await limit.release(host: host) }
+        await redirect?.value
     }
 }
 

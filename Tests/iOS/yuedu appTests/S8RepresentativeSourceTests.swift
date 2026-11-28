@@ -136,16 +136,18 @@ final class S8RepresentativeSourceTests: XCTestCase {
                 || requests.statusCodes.contains { (300..<400).contains($0) }
             if limited { restricted += 1 } else { measuredIDs.insert(source.id) }
             let status = requests.statusCodes.map(String.init).joined(separator: ",")
-            print("RSS_REAL_HEALTH ordinal=\(ordinal) outcome=\(outcome.kind.rawValue) approvals=\(boundary.approved) requests=\(requests.transactions) http=\(status.isEmpty ? "none" : status) limited=\(limited)")
+            print("RSS_REAL_HEALTH ordinal=\(ordinal) outcome=\(outcome.kind.identifier) approvals=\(boundary.approved) requests=\(requests.transactions) http=\(status.isEmpty ? "none" : status) limited=\(limited)")
         }
         let revisions = try XCTUnwrap(store.requestRevisions)
         let groups = await checker.selectionGroups(in: store.sources, revisions: revisions)
         let measured = groups.compactMap { group -> String? in
             let count = group.sourceIDs.intersection(measuredIDs).count
-            return count == 0 ? nil : "\(group.kind.rawValue)=\(count)"
+            return count == 0 ? nil : "\(group.kind.identifier)=\(count)"
         }
         XCTAssertEqual(groups.reduce(0) { $0 + $1.sourceIDs.count }, store.sources.count)
-        let failedIDs = (groups.first { $0.kind == .failed }?.sourceIDs ?? []).intersection(measuredIDs)
+        let failedIDs = groups.filter { $0.kind.isFailure }.reduce(into: Set<String>()) {
+            $0.formUnion($1.sourceIDs.intersection(measuredIDs))
+        }
         let kept = Set(store.sources.map(\.id)).subtracting(failedIDs)
         if !failedIDs.isEmpty { store.removeSources(ids: Array(failedIDs)) }
         try await store.flushPersistence()

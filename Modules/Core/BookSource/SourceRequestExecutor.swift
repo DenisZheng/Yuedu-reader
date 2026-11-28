@@ -37,6 +37,9 @@ final class SourceRequestHeaderScope: @unchecked Sendable {
 
 /// 原生请求和java.*共用的网络边界。构造/脚本仍在原AnalyzeUrl；此处只处理执行、限流、Cookie与重定向。
 struct SourceRequestExecutor: Sendable {
+    /// 仅并行RSS验活批次设置；不影响普通读取、刷新或其他会话的网络配额。
+    @TaskLocal static var serialHosts: PerHostSemaphore?
+
     let session: URLSession
     let rate: String
     let rateKey: String
@@ -88,7 +91,7 @@ struct SourceRequestExecutor: Sendable {
                     guard limit > 0 else { throw URLError(.dataLengthExceedsMaximum) }
                     do {
                         return try await BoundedResponseLoader.load(configuredRequest, session: session, limit: limit,
-                            transport: "sourceExecutor", taskDelegate: redirect)
+                            transport: "sourceExecutor", taskDelegate: redirect, hostLimit: Self.serialHosts)
                     } catch FetchError.responseTooLarge {
                         // 保留SourceRequestExecutor已有的大小错误合同，调用者不必依赖底层收集器类型。
                         throw URLError(.dataLengthExceedsMaximum)

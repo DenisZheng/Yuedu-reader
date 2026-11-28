@@ -24,7 +24,7 @@ final class BookshelfReaderResumeUITests: XCTestCase {
     }
 
     @MainActor
-    private func launch(grid: Bool, greenReader: Bool = false) -> XCUIApplication {
+    private func launch(grid: Bool, readerPaper: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-no-official-modules", "-onboarding.completed", "YES",
@@ -35,9 +35,9 @@ final class BookshelfReaderResumeUITests: XCTestCase {
             "-auto-import-title", title, "-bookLayoutIsGrid", grid ? "YES" : "NO",
             "-bookSortOrder", "recentlyRead", "-yd_page_turn_style", "滑動", "-yd_scroll_mode", "NO",
         ]
-        if greenReader {
+        if let readerPaper {
             app.launchArguments += [
-                "-AppleInterfaceStyle", "Light", "-yd_reader_theme", "護眼綠", "-lastLightTheme", "護眼綠",
+                "-AppleInterfaceStyle", "Light", "-yd_reader_theme", readerPaper, "-lastLightTheme", readerPaper,
                 "-yd_reader_dark_mode", "NO", "-yd_reader_follow_system_theme", "NO", "-yd_appearance_bind_reader_theme", "NO",
             ]
         }
@@ -102,7 +102,45 @@ final class BookshelfReaderResumeUITests: XCTestCase {
 
     @MainActor
     func testResumedReaderPaintsScreenEdgesFromBothEntrances() throws {
-        let app = launch(grid: false, greenReader: true)
+        try verifyReaderEdges(theme: "護眼綠", attachmentSuffix: "green", expected: [207, 232, 204])
+    }
+
+    @MainActor
+    func testParchmentReaderPaintsScreenEdgesFromBothEntrances() throws {
+        try verifyReaderEdges(theme: "parchment", attachmentSuffix: "parchment", expected: [222, 194, 142])
+    }
+
+    @MainActor
+    func testParchmentCanBeSelectedFromReadingBackground() throws {
+        let app = launch(grid: false)
+        openFromShelf(app)
+        let page = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", bodyMarker)).firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 20))
+        let themes = app.buttons["reader_tool_settings"].firstMatch
+        if !themes.isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(themes.waitForExistence(timeout: 5), app.debugDescription)
+        themes.tap()
+        XCTAssertTrue(app.staticTexts["閱讀背景"].waitForExistence(timeout: 5), app.debugDescription)
+
+        let brown = app.buttons["棕色"].firstMatch
+        let parchment = app.buttons["羊皮紙"].firstMatch
+        if !parchment.isHittable {
+            let strips = app.scrollViews.containing(.button, identifier: "棕色").allElementsBoundByIndex
+            let backgrounds = try XCTUnwrap(strips.min { $0.frame.height < $1.frame.height }, app.debugDescription)
+            backgrounds.swipeLeft()
+        }
+        XCTAssertTrue(brown.isHittable && parchment.isHittable, app.debugDescription)
+        brown.tap()
+        XCTAssertTrue(brown.isSelected && !parchment.isSelected)
+        parchment.tap()
+        XCTAssertTrue(parchment.isSelected && !brown.isSelected, "羊皮纸必须能像原有棕色一样实际选中")
+    }
+
+    @MainActor
+    private func verifyReaderEdges(theme: String, attachmentSuffix: String, expected: [Int]) throws {
+        let app = launch(grid: false, readerPaper: theme)
         openFromShelf(app)
         exerciseAndCloseReader(app)
 
@@ -111,16 +149,15 @@ final class BookshelfReaderResumeUITests: XCTestCase {
             format: "identifier BEGINSWITH 'home.card.library.' AND label BEGINSWITH %@", title)).firstMatch
         XCTAssertTrue(recent.waitForExistence(timeout: 15))
         recent.tap()
-        let home = try readerPaperColors("explore-reader-green", app: app)
+        let home = try readerPaperColors("explore-reader-\(attachmentSuffix)", app: app)
         exerciseAndCloseReader(app)
 
         openFromShelf(app)
-        let shelf = try readerPaperColors("shelf-reader-green", app: app)
-        let green = [207, 232, 204]
+        let shelf = try readerPaperColors("shelf-reader-\(attachmentSuffix)", app: app)
         for (route, colors) in [("首页", home), ("书架", shelf)] {
             for (area, rgb) in colors {
-                XCTAssertTrue(zip(rgb, green).allSatisfy { abs($0.0 - $0.1) <= 8 },
-                              "\(route)\(area)：应为护眼绿，实际 RGB \(rgb)")
+                XCTAssertTrue(zip(rgb, expected).allSatisfy { abs($0.0 - $0.1) <= 8 },
+                              "\(route)\(area)：\(theme)预期 RGB \(expected)，实际 \(rgb)")
             }
         }
         exerciseAndCloseReader(app)

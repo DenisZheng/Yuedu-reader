@@ -2,6 +2,42 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 提交前组合回归（2026-11-28）
+
+用同一份待提交代码，在 `Reader-Fork-Dev` 下串行执行 `bash scripts/xctest.sh -- -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile`，沿用下方 RSS 回环 fixture，使用原 DerivedData。运行后核对了源码差异指纹，待提交代码与受测代码一致。
+
+| 环境 | 选择运行的范围 | 实际结果 |
+| --- | --- | --- |
+| iPhone 18 Pro Max／iOS 27.2 | `ReaderBackgroundBindingTests`、`RSSSourceHealthCheckerTests`、`RSSSourceBrowseTests`、`RSSCookieAuthorizationTests`、`RSSRuntimeIntegrationTests`；另测在阅读器主题面板点选羊皮纸、羊皮纸／护眼绿双入口续读取色、普通失败和 HTTP 404 两种结果页的批选及确认删除 | `75 tests in 5 suites passed`；`Executed 5 tests, with 0 failures`；`** TEST SUCCEEDED **`，共 80 项通过、0 失败、0 跳过 |
+| iPad Pro 13-inch (M5)／iOS 27.2 | `testParchmentCanBeSelectedFromReadingBackground`、`testParchmentReaderPaintsScreenEdgesFromBothEntrances`、`testSelectAndDeleteOnlyHTTP404InCurrentGroup` | `Executed 3 tests, with 0 failures`；`** TEST SUCCEEDED **`，0 跳过 |
+
+日志和结果包位于 `.artifacts/pre-push-verify-vEQyMC/`。本机 fixture 两端各收到 5 次预期请求。未运行全 App 测试、真机、iOS 17 或实源测试；本机没有 iOS 17 模拟器运行时。本轮未构建 IPA，不改变下方改动的回滚方式。
+
+## RSS 验活提速与 HTTP 状态码筛选（2026-11-28）
+
+- [验活调度](../../Modules/Services/RSS/RSSSourceHealthChecker.swift)：仅可确认的静态标准 Feed 使用两个槽，沿原顺序启动。同主机、规则和登录源仍串行。回环 302 测试用不同主机名发起两条请求，证明跳转到已有请求的主机时会等待，入口和目标各发一次；取消时没有启动排队源，改登录和删除后的晚到结果不进入结果页。
+- 6 个不同合成主机的单次批量验活，每个响应固定等待 500 ms。旧版第二个主机在第一个未响应时无法开始（`baseline.log` 仅发 `[1, 0, 0]`，预期重叠断言失败），整批 **3.126 秒、6 次请求**；改后整批 **1.562 秒、6 次请求**（`scheduler-verified.log`），合入状态码筛选后为 1.545 秒、6 次请求（`final.log`）。这是固定延迟下的结果，不是实源提速承诺。
+- [管理页](../../Modules/Features/RSS/RSSSourceManagementView.swift)：固定响应的 404、423、503 旧版混在「验证失败」，只得到两种结果（`status-red.log`）；改后按实际 HTTP 码分组，401／403 仍需交互，非 HTTP 错误留在「验证失败」。[UI 流程](../../Tests/iOS-UI/RSSSourceHomeUITests.swift) 实际请求本机 5 个固定响应，切到「HTTP 404」并缩小到 News 分组后，一次全选正好 2 条；取消删除保留两条，确认后仅移除这两条，423、503 和另一分组的 404 均保留。没有自动删除行为。
+
+环境：iPhone 18 Pro Max／iOS 27.2 模拟器、`Reader-Fork-Dev`、隔离测试书库。通过 `bash scripts/sim.sh xcode` 解析 Xcode，用同一模拟器和 DerivedData。实际执行 `bash scripts/xctest.sh -- -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile`，选择：
+
+| 执行 | `-only-testing` 范围（日志） | 决定性输出 |
+| --- | --- | --- |
+| 调度回归 | `yuedu appTests/RSSSourceHealthCheckerTests`、`RSSCookieAuthorizationTests`、`RSSRuntimeIntegrationTests`（`scheduler-verified.log`） | `42 tests in 3 suites passed`；`** TEST SUCCEEDED **` |
+| 合并后的验活与筛选 | `yuedu appTests/RSSSourceHealthCheckerTests`、`RSSSourceBrowseTests`，及 `yuedu appUITests/RSSSourceHomeUITests` 的 `testHealthResultPagesOnlySelectAndDeleteCurrentPage`、`testSelectAndDeleteOnlyHTTP404InCurrentGroup`（`final.log`） | `19 tests in 2 suites passed`；`Executed 2 tests, with 0 failures`；`** TEST SUCCEEDED **` |
+
+UI 测试先运行 [本机 fixture](../../scripts/rss_rule_opening_fixture.py)，将打印的端口传给 `TEST_RUNNER_RSS_RULE_OPENING_FIXTURE_PORT`。两次通过的结果包均为 0 失败、0 跳过；19 个单测与调度回归有重叠，不相加。日志、结果包、`http-404-selected.png` 见 `.artifacts/rss-health-parallel-rnpbfe/`。`ruby scripts/check_localizations.rb` 输出 `Localization OK`（5 种语言）。
+
+未访问真实源，未验真机或 iOS 17 运行时；未改后台刷新、依赖、权限或持久化格式。回滚可撤回本次调度、结果分类与对应测试／文案，保留原订阅数据和既有羊皮纸改动。
+
+## 羊皮纸阅读背景与屏幕边缘（2026-11-28）
+
+参考 [Android 固定基准的暖黄色预设](https://github.com/LegadoTeam/legado/blob/330e606c4d57e08adc056ff8ab7a4132c784da9a/app/src/main/assets/defaultData/readConfig.json)，[iOS 阅读主题](../../Targets/Yuedu/SharedApp/GlobalSettings.swift) 单独新增纯色「羊皮纸」：暖黄 `#DEC28E`，正文深棕 `#433225`（默认色对比度约 7.09:1）。保留原棕色和用户当前选择，不搬 Android 纹理、排版或预设配置。新项走原阅读背景列表和外观绑定菜单；书架容器和主题绘制路径不变。
+
+用新的 iPhone 18 Pro Max／iOS 27.2 模拟器，自建 TXT、隔离书库，分别注入已选的护眼绿和羊皮纸设置。改前羊皮纸测试退回白色，首页顶部实际为 `[244,245,247]`，没有达到预期的 `[222,194,142]`（`** TEST FAILED **`）。改后[两项 UI 测试](../../Tests/iOS-UI/BookshelfReaderResumeUITests.swift)均实际开书、翻页、退出、从探索和书架复读并取色；两种背景的顶部、正文、底部在规定容差内分别匹配各自颜色。主题绑定菜单与保存值的往返测试也通过。
+
+实际在 `Reader-Fork-Dev` 下，用 `bash scripts/xctest.sh -- -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile` 选择 `ReaderBackgroundBindingTests/aBoundPickSurvivesItsStorageRoundTrip()`、`BookshelfReaderResumeUITests/testResumedReaderPaintsScreenEdgesFromBothEntrances` 和 `BookshelfReaderResumeUITests/testParchmentReaderPaintsScreenEdgesFromBothEntrances`。输出 `** TEST SUCCEEDED **`，结果包 3 通过、0 失败／跳过。`ruby scripts/check_localizations.rb` 输出 `Localization OK`。日志、结果包及四个截图见 `.artifacts/reader-parchment-MRNqO4/`。未验真机或 iOS 17 运行时；未改 RSS 验活、依赖、权限或用户数据。回滚仅撤回新增主题、文案和测试，不清除现有阅读背景或书库。
+
 ## 上游精选修复与排版依赖（2026-11-28）
 
 [分支验收记录](upstream-integration-2026-11-28.md)：两批修复分别通过 44、16 项回归；`YueduCoreText 0.30.1` 在 iPhone／iPad 通过 82／6 项。覆盖共享脚本、EPUB 续读、RSS 原生媒体和书架操作，不替代实源或 S8 验收。

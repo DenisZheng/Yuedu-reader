@@ -64,7 +64,7 @@ struct RSSSourceManagementView: View {
                 }
                 if resultFilter == nil {
                     Text(localized("全選只選取目前列表；跨分類選取會保留。")).dsSectionFooter()
-                } else if resultFilter == .failed {
+                } else if resultFilter?.isFailure == true {
                     Text(localized("一次驗證失敗不代表永久失效。")).dsSectionFooter()
                 }
                 Text(localized("驗證結果只在本次管理頁面保留，不會自動停用或刪除源。"))
@@ -184,7 +184,9 @@ struct RSSSourceManagementView: View {
     }
 
     private var resultPages: some View {
-        let kinds = RSSManagementPages.Kind.allCases.filter { pages.byKind[$0] != nil || resultFilter == $0 }
+        var visibleKinds = Set(pages.byKind.keys)
+        if let resultFilter { visibleKinds.insert(resultFilter) }
+        let kinds = RSSManagementPages.Kind.ordered(visibleKinds)
         return ScrollView(.horizontal) {
             HStack(spacing: DSSpacing.sm) {
                 resultButton(nil, title: localized("全部"))
@@ -216,7 +218,7 @@ struct RSSSourceManagementView: View {
             }
             .font(DSFont.subheadline)
         }
-        .accessibilityIdentifier("rss.manage.health.\(kind?.rawValue ?? "all")")
+        .accessibilityIdentifier("rss.manage.health.\(kind?.identifier ?? "all")")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .buttonBorderShape(.capsule)
         .controlSize(.large)

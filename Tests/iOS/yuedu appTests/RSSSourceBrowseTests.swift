@@ -108,7 +108,7 @@ struct RSSSourceBrowseTests {
             store.addSource(source)
             #expect(await RSSSourceHealthChecker.check(source: source, owner: store, session: session) == .list(1))
             let failed = await RSSSourceHealthChecker.check(source: source, owner: store, session: session)
-            if case .failed = failed {} else { Issue.record("503必须报告失败") }
+            #expect(failed == .httpFailure(503))
             #expect(await RSSSourceHealthChecker.check(source: source, owner: store, session: session) == .interactionRequired)
         }
     }
@@ -153,7 +153,7 @@ struct RSSSourceBrowseTests {
             store.addSource(source)
             #expect(await RSSSourceHealthChecker.check(source: source, owner: store, session: session) == .webReachable)
             let next = await RSSSourceHealthChecker.check(source: source, owner: store, session: session)
-            if case .failed = next {} else { Issue.record("缓存不能掩盖第二次入口503") }
+            #expect(next == .httpFailure(503), "缓存不能掩盖第二次入口503")
             #expect(RSSPageFixtureProtocol.requests(host: host).count == 2)
         }
     }
@@ -222,7 +222,7 @@ struct RSSSourceBrowseTests {
             await checker.waitForCompletion()
             let revisions = try #require(store.requestRevisions)
             let groups = await checker.selectionGroups(in: [failed, empty, unchecked], revisions: revisions)
-            #expect(groups.map(\.kind) == [.failed, .emptyList])
+            #expect(groups.map(\.kind) == [.httpFailure(503), .emptyList])
             #expect(groups.map(\.sourceIDs) == [[failed.id], [empty.id]])
 
             store.authenticationChanged(for: failed.id)
@@ -231,6 +231,40 @@ struct RSSSourceBrowseTests {
             let remaining = await checker.selectionGroups(in: store.sources, revisions: fresh)
             #expect(remaining.map(\.kind) == [.interactionRequired])
             #expect(remaining.map(\.sourceIDs) == [[login.id]])
+        }
+    }
+
+    @Test("真实HTTP响应码分组，404的全选范围不混入423、503或其他失败")
+    func httpFailuresHaveTheirOwnScopedGroups() async throws {
+        try await fixture { store, session, host in
+            let routes = [("gone-a", 404), ("locked", 423), ("gone-b", 404), ("busy", 503),
+                          ("not-a-feed", 200), ("auth", 401), ("forbidden", 403)]
+            RSSPageFixtureProtocol.serve(host: host, sequences: Dictionary(uniqueKeysWithValues: routes.map { route, code in
+                ("/" + route, [.init(body: Data("Fixture response".utf8), status: code)])
+            }))
+            let sources = store.addSourcesReturningAdded(routes.map { route, _ in
+                RSSSource(name: route, url: "https://\(host)/\(route)")
+            })
+            try #require(sources.count == routes.count)
+            let checker = RSSSourceHealthChecker()
+            checker.start(sources: sources, owner: store, session: session)
+            await checker.waitForCompletion()
+
+            let revisions = try #require(store.requestRevisions)
+            let groups = await checker.selectionGroups(in: sources, revisions: revisions)
+            #expect(groups.first { $0.kind.title == "HTTP 404" }?.sourceIDs == [sources[0].id, sources[2].id])
+            #expect(groups.first { $0.kind.title == "HTTP 423" }?.sourceIDs == [sources[1].id])
+            #expect(groups.first { $0.kind.title == "HTTP 503" }?.sourceIDs == [sources[3].id])
+            #expect(groups.first { $0.kind == .failed }?.sourceIDs == [sources[4].id])
+            #expect(groups.first { $0.kind == .interactionRequired }?.sourceIDs == [sources[5].id, sources[6].id])
+            #expect(groups.count == 5)
+
+            let scoped = RSSSourceBrowse.sources(sources, folders: [], query: "gone-a")
+            let visible = await checker.selectionGroups(in: scoped, revisions: revisions)
+            var selection = RSSSourceSelection(ids: [sources[1].id])
+            let matches404 = visible.first { $0.kind.title == "HTTP 404" }?.sourceIDs ?? []
+            selection.toggleAll(matches404, onlyPage: true)
+            #expect(selection.ids == [sources[0].id], "结果页的全选只取当前搜索范围内的404")
         }
     }
 
@@ -247,7 +281,7 @@ struct RSSSourceBrowseTests {
             let checker = RSSSourceHealthChecker()
             checker.start(sources: [first, later], owner: store, session: session)
             await checker.waitForCompletion()
-            #expect(checker.results[later.id]?.kind == .failed)
+            #expect(checker.results[later.id]?.kind == .httpFailure(503))
 
             let (events, continuation) = AsyncStream<URLRequest>.makeStream()
             defer { continuation.finish() }
@@ -263,6 +297,239 @@ struct RSSSourceBrowseTests {
             #expect(checker.results[later.id] == nil)
             let groups = await checker.selectionGroups(in: store.sources, revisions: try #require(store.requestRevisions))
             #expect(groups.map(\.kind) == [.cancelled])
+        }
+    }
+
+    @Test("两个不同主机的普通Feed同时在途，取消时第三个不发送")
+    func differentFeedHostsOverlapAndCancelAllActive() async throws {
+        try await fixture { store, session, host in
+            let hosts = [host, "second-" + host, "queued-" + host]
+            let (events, continuation) = AsyncStream<URLRequest>.makeStream()
+            defer {
+                continuation.finish()
+                for host in hosts { RSSPageFixtureProtocol.remove(host: host) }
+            }
+            let sources = store.addSourcesReturningAdded(hosts.map { RSSSource(name: "Held feed", url: "https://\($0)/feed") })
+            try #require(sources.count == hosts.count)
+            for host in hosts {
+                RSSPageFixtureProtocol.serve(host: host, sequences: ["/feed": [.init(body: Self.feedBody, held: true)]], events: continuation)
+            }
+            let checker = RSSSourceHealthChecker()
+            checker.start(sources: sources, owner: store, session: session)
+            let started = await Self.startedHosts(in: events, count: 2)
+            checker.cancel()
+            await checker.waitForCompletion()
+            for host in hosts { RSSPageFixtureProtocol.release(host: host) }
+
+            #expect(started == Set(hosts.prefix(2)), "第二个主机须在第一个未响应时就收到请求")
+            #expect(checker.results[sources[0].id] == .cancelled)
+            #expect(checker.results[sources[1].id] == .cancelled)
+            #expect(checker.results[sources[2].id] == nil)
+            #expect(!checker.isRunning && checker.completed == 0)
+            #expect(hosts.map { RSSPageFixtureProtocol.requests(host: $0).count } == [1, 1, 0])
+        }
+    }
+
+    enum SerialBoundary: CaseIterable, Sendable { case sameHost, discoveredHost, rule, login, scriptInDiscoveredURL }
+
+    @Test("同一目标主机、规则、登录和动态URL都不能带着下一源一起开始", arguments: SerialBoundary.allCases)
+    func aSerialBoundaryDoesNotStartTheNextSource(_ boundary: SerialBoundary) async throws {
+        try await fixture { store, session, host in
+            let alias = "alias-" + host
+            var first = RSSSource(name: "First", url: "https://\(host)/feed")
+            let nextHost: String
+            switch boundary {
+            case .sameHost: nextHost = host
+            case .discoveredHost:
+                first.url = "https://\(alias)/landing"
+                first.resolvedFeedURL = "https://\(host)/feed"
+                nextHost = host
+            case .rule: first.ruleArticles = "item"; nextHost = alias
+            case .login: first.loginUrl = "https://\(host)/sign-in"; nextHost = alias
+            case .scriptInDiscoveredURL:
+                first.resolvedFeedURL = "https://\(host)/feed<js>result</js>"
+                nextHost = alias
+            }
+            let next = RSSSource(name: "Next", url: "https://\(nextHost)/next")
+            store.addSource(first); store.addSource(next)
+            let (events, continuation) = AsyncStream<URLRequest>.makeStream()
+            defer { continuation.finish(); RSSPageFixtureProtocol.remove(host: alias) }
+            RSSPageFixtureProtocol.serve(host: host, sequences: [
+                "/feed": [.init(body: Self.feedBody, held: true)], "/next": [.init(body: Self.feedBody, held: true)]
+            ], events: continuation)
+            RSSPageFixtureProtocol.serve(host: alias, sequences: [
+                "/next": [.init(body: Self.feedBody, held: true)]
+            ], events: continuation)
+            let checker = RSSSourceHealthChecker()
+            checker.start(sources: [first, next], owner: store, session: session)
+            let started = await Self.startedHosts(in: events, count: 1)
+            checker.cancel()
+            await checker.waitForCompletion()
+
+            #expect(started == [host])
+            #expect(checker.results[first.id] == .cancelled)
+            #expect(checker.results[next.id] == nil)
+            #expect(RSSPageFixtureProtocol.requests(host: host).map { $0.url?.path } == ["/feed"])
+            #expect(RSSPageFixtureProtocol.requests(host: alias).isEmpty)
+        }
+    }
+
+    @Test("并行检查中改登录或删源，晚到结果不进入结果页")
+    func changingLoginAndDeletingDuringParallelCheck() async throws {
+        try await fixture { store, session, host in
+            let secondHost = "deleted-" + host
+            let (events, continuation) = AsyncStream<URLRequest>.makeStream()
+            defer { continuation.finish(); RSSPageFixtureProtocol.remove(host: secondHost) }
+            for host in [host, secondHost] {
+                RSSPageFixtureProtocol.serve(host: host, sequences: [
+                    "/feed": [.init(body: Self.feedBody, held: true)]
+                ], events: continuation)
+            }
+            let first = RSSSource(name: "Login changed", url: "https://\(host)/feed")
+            let second = RSSSource(name: "Deleted", url: "https://\(secondHost)/feed")
+            store.addSource(first); store.addSource(second)
+            let checker = RSSSourceHealthChecker()
+            checker.start(sources: [first, second], owner: store, session: session)
+            let started = await Self.startedHosts(in: events, count: 2)
+            if started != [host, secondHost] { checker.cancel() }
+            store.authenticationChanged(for: first.id)
+            store.removeSources(ids: [second.id])
+            RSSPageFixtureProtocol.release(host: host)
+            RSSPageFixtureProtocol.release(host: secondHost)
+            await checker.waitForCompletion()
+
+            #expect(started == [host, secondHost])
+            #expect(checker.results.isEmpty)
+            #expect(!checker.isRunning)
+            let revisions = try #require(store.requestRevisions)
+            #expect(await checker.selectionGroups(in: [first, second], revisions: revisions).isEmpty)
+        }
+    }
+
+    @Test("不同主机启动后，跨主机重定向在已有请求结束后继续，不重发入口")
+    func redirectWaitsForTheActualHost() async throws {
+        try await fixture { store, session, _ in
+            let server = try VideoStillFixtureServer(directory: .temporaryDirectory, maximumRequests: 3)
+            let base = try await server.start()
+            defer { server.stop() }
+            let direct = base.appendingPathComponent("slow")
+            let final = base.appendingPathComponent("final")
+            var alias = URLComponents(url: base.appendingPathComponent("redirect"), resolvingAgainstBaseURL: false)
+            alias?.host = "localhost"
+            let redirected = try #require(alias?.url)
+
+            let delay = Duration.seconds(1)
+            let clock = ContinuousClock()
+            let (waitingForDirect, directStarted) = AsyncStream<Void>.makeStream()
+            let (events, arrival) = AsyncStream<(String, ContinuousClock.Instant)>.makeStream()
+            defer { directStarted.finish(); arrival.finish() }
+            server.observeRequests { request in
+                arrival.yield((request.path, clock.now))
+                if request.path == "/slow" { directStarted.yield(()) }
+            }
+            let feed = Self.feedBody
+            server.route { request in
+                switch request.path {
+                case "/slow":
+                    return .init(body: feed, beforeSending: { try await Task.sleep(for: delay) })
+                case "/redirect":
+                    return .init(body: Data(), status: "302 Found", headers: ["Location": final.absoluteString], beforeSending: {
+                        var iterator = waitingForDirect.makeAsyncIterator()
+                        guard await iterator.next() != nil else { throw CancellationError() }
+                    })
+                case "/final": return .init(body: feed)
+                default: return .init(body: Data(), status: "404 Not Found")
+                }
+            }
+
+            let a = RSSSource(name: "Direct", url: direct.absoluteString)
+            let b = RSSSource(name: "Redirected", url: redirected.absoluteString)
+            store.addSource(a); store.addSource(b)
+            let checker = RSSSourceHealthChecker()
+            checker.start(sources: [a, b], owner: store, session: session)
+            await checker.waitForCompletion()
+            arrival.finish()
+            var times: [String: ContinuousClock.Instant] = [:]
+            for await (path, time) in events { times[path] = time }
+
+            let directAt = try #require(times["/slow"])
+            let redirectAt = try #require(times["/redirect"])
+            let finalAt = try #require(times["/final"])
+            #expect(redirectAt < directAt.advanced(by: delay), "另一个主机的入口应可并行发出")
+            #expect(directAt.duration(to: finalAt) >= delay, "跳转后的请求必须等待目标主机空出")
+            #expect(server.requests.map(\.path).sorted() == ["/final", "/redirect", "/slow"])
+            #expect(checker.results[a.id] == .list(1) && checker.results[b.id] == .list(1))
+        }
+    }
+
+    @Test("六个不同主机的等候响应：验证结果和请求数，记录批次耗时")
+    func plainFeedBatchTiming() async throws {
+        try await fixture { store, session, host in
+            let hosts = (1...6).map { "feed\($0)-" + host }
+            let (events, continuation) = AsyncStream<URLRequest>.makeStream()
+            defer {
+                continuation.finish()
+                for host in hosts { RSSPageFixtureProtocol.remove(host: host) }
+            }
+            let sources = store.addSourcesReturningAdded(hosts.map { RSSSource(name: "Timed feed", url: "https://\($0)/feed") })
+            try #require(sources.count == hosts.count)
+            for host in hosts {
+                RSSPageFixtureProtocol.serve(host: host, sequences: ["/feed": [.init(body: Self.feedBody, held: true)]], events: continuation)
+            }
+            let responder = Task {
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    for await request in events {
+                        guard let host = request.url?.host else { continue }
+                        group.addTask {
+                            // 固定模拟服务器响应耗时；不是等待被测状态稳定。
+                            try await Task.sleep(for: .milliseconds(500))
+                            RSSPageFixtureProtocol.release(host: host)
+                        }
+                    }
+                    try await group.waitForAll()
+                }
+            }
+            let checker = RSSSourceHealthChecker()
+            let clock = ContinuousClock()
+            let start = clock.now
+            checker.start(sources: sources, owner: store, session: session)
+            await checker.waitForCompletion()
+            let elapsed = start.duration(to: clock.now)
+            continuation.finish()
+            try await responder.value
+
+            let requestCount = hosts.map { RSSPageFixtureProtocol.requests(host: $0).count }.reduce(0, +)
+            print("RSS fixture: sources=\(sources.count) delay=500ms requests=\(requestCount) elapsed=\(elapsed)")
+            #expect(checker.completed == sources.count)
+            #expect(sources.allSatisfy { checker.results[$0.id] == .list(1) && store.articles(for: $0.id).isEmpty })
+            #expect(hosts.allSatisfy { RSSPageFixtureProtocol.requests(host: $0).count == 1 })
+        }
+    }
+
+    private static let feedBody = Data("""
+        <rss version="2.0"><channel><title>Fixture</title><link>https://fixture.invalid/</link>
+        <description>Local response</description><item><title>One</title><link>/one</link><guid>one</guid></item>
+        </channel></rss>
+        """.utf8)
+
+    private nonisolated static func startedHosts(in events: AsyncStream<URLRequest>, count: Int) async -> Set<String>? {
+        await withTaskGroup(of: Set<String>?.self) { group in
+            group.addTask {
+                var hosts: Set<String> = []
+                for await request in events {
+                    if let host = request.url?.host { hosts.insert(host) }
+                    if hosts.count == count { return hosts }
+                }
+                return nil
+            }
+            group.addTask {
+                // 限定回归失败的等待时间，不用延时判断正常顺序。
+                do { try await Task.sleep(for: .seconds(5)) } catch { return nil }
+                return nil
+            }
+            let result = await group.next() ?? nil
+            group.cancelAll()
+            return result
         }
     }
 

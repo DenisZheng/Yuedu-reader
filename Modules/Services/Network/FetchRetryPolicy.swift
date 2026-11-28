@@ -22,7 +22,14 @@ actor PerHostSemaphore {
     private var cancelledWaiterIDs: Set<UUID> = []
     private var registeringWaiterIDs: Set<UUID> = []
 
-    private init() {}
+    // 单独的实例可限定在一次任务内，不改变其他请求共用的配额。
+    init() {}
+
+    static func hostKey(for url: URL) -> String? {
+        guard var host = url.host?.lowercased() else { return nil }
+        if host.hasSuffix(".") { host.removeLast() }
+        return host.isEmpty ? nil : host
+    }
 
     /// Acquires a lock for the given host, executes the body, then releases.
     /// - Parameters:

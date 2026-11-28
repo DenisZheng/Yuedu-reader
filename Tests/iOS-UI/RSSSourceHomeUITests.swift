@@ -282,6 +282,74 @@ final class RSSSourceHomeUITests: XCTestCase {
         XCTAssertFalse(a.exists)
     }
 
+    @MainActor func testSelectAndDeleteOnlyHTTP404InCurrentGroup() throws {
+        guard let port = ProcessInfo.processInfo.environment["RSS_RULE_OPENING_FIXTURE_PORT"].flatMap(UInt16.init), port != 0 else {
+            throw XCTSkip("需要启动 scripts/rss_rule_opening_fixture.py 并传入本机端口")
+        }
+        let directory = try fixture()
+        defer { do { try FileManager.default.removeItem(at: directory) } catch { XCTFail("测试目录清理失败") } }
+        let file = directory.appendingPathComponent("rss_sources.json")
+        let seed = try XCTUnwrap((try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [[String: Any]])?.first)
+        let fixtures = [
+            ("a", "Missing A", "404-a", "News"), ("b", "Missing B", "404-b", "News"),
+            ("c", "Locked", "423", "News"), ("d", "Busy", "503", "Media"),
+            ("other", "Missing in Media", "404-other", "Media")
+        ]
+        let sources = fixtures.enumerated().map { index, entry in
+            seed.merging(["id": entry.0, "name": entry.1, "url": "http://127.0.0.1:\(port)/health/\(entry.2)",
+                          "sourceGroup": entry.3, "sortOrder": index]) { _, new in new }
+        }
+        try JSONSerialization.data(withJSONObject: sources).write(to: file)
+
+        let app = launch(directory)
+        defer { app.terminate() }
+        XCTAssertTrue(app.rootTab("訂閱").waitForExistence(timeout: 25)); app.rootTab("訂閱").tap()
+        menu("管理訂閱源", app: app)
+        let rows = app.descendants(matching: .any)
+        let a = rows.matching(identifier: "rss.manage.source.a").firstMatch
+        let b = rows.matching(identifier: "rss.manage.source.b").firstMatch
+        let locked = rows.matching(identifier: "rss.manage.source.c").firstMatch
+        let busy = rows.matching(identifier: "rss.manage.source.d").firstMatch
+        let other = rows.matching(identifier: "rss.manage.source.other").firstMatch
+        let missing = app.buttons["rss.manage.health.http-404"].firstMatch
+        let all = app.buttons["rss.manage.health.all"].firstMatch
+        let group = app.buttons["rss.sourceGroup"].firstMatch
+        let delete = app.buttons["rss.manage.delete"]
+        XCTAssertTrue(a.waitForExistence(timeout: 10))
+        app.buttons["rss.manage.check"].tap()
+        app.alerts.firstMatch.buttons["開始驗證"].tap()
+        XCTAssertTrue(missing.waitForExistence(timeout: 12), app.debugDescription)
+        XCTAssertTrue(app.buttons["rss.manage.health.http-423"].exists)
+        XCTAssertTrue(app.buttons["rss.manage.health.http-503"].exists)
+        XCTAssertTrue(missing.label.hasSuffix(" 3"))
+
+        missing.tap()
+        XCTAssertTrue(a.exists && b.exists && other.exists)
+        XCTAssertFalse(locked.exists || busy.exists)
+        group.tap(); app.buttons["News"].firstMatch.tap()
+        XCTAssertTrue(other.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(a.waitForExistence(timeout: 5) && b.exists)
+        XCTAssertTrue(missing.label.hasSuffix(" 2"))
+        app.buttons["rss.manage.selectAll"].tap()
+        XCTAssertTrue(app.staticTexts["已選 2 個"].exists)
+
+        let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "rss-health-404-selected"; shot.lifetime = .keepAlways; add(shot)
+        delete.tap()
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "選取的 2 個")).firstMatch.exists)
+        alert.buttons["取消"].tap()
+        XCTAssertTrue(a.exists && b.exists)
+        delete.tap(); alert.buttons["刪除"].tap()
+        XCTAssertTrue(a.waitForNonExistence(timeout: 5))
+
+        group.tap(); app.buttons["全部分類"].firstMatch.tap()
+        all.tap()
+        XCTAssertTrue(other.waitForExistence(timeout: 5))
+        XCTAssertTrue(locked.exists && busy.exists, "删除404不能删掉423与503")
+        XCTAssertFalse(a.exists || b.exists)
+    }
+
     @MainActor func testMultiselectCancelDeleteAndDeleteAll() throws {
         let directory = try fixture()
         defer { do { try FileManager.default.removeItem(at: directory) } catch { XCTFail("测试目录清理失败") } }

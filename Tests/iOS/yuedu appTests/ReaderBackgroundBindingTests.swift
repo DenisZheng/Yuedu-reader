@@ -73,6 +73,9 @@ struct ReaderBackgroundBindingTests {
         let id = UUID()
         #expect(ReaderBoundTheme(storageValue: ReaderBoundTheme.custom(id).storageValue) == .custom(id))
         #expect(ReaderBoundTheme(storageValue: ReaderTheme.sepia.rawValue) == .reading(.sepia))
+        let parchment = ReaderBoundTheme.reading(.parchment)
+        #expect(ReaderBoundTheme.builtInMenuOptions.contains(parchment))
+        #expect(ReaderBoundTheme(storageValue: parchment.storageValue) == parchment)
         #expect(ReaderBoundTheme(storageValue: "custom:not-a-uuid") == .followAppearanceTheme)
     }
 

@@ -80,10 +80,12 @@ enum ReaderTheme: String, CaseIterable {
     case white = "白天"
     case green = "護眼綠"
     case sepia = "護眼"
+    case parchment = "parchment"
 
     private static let userDefaultsKey = "yd_reader_theme"
     private static let lastLightThemeKey = "lastLightTheme"
     private static let weChatAccent = UIColor(red: 56 / 255, green: 151 / 255, blue: 241 / 255, alpha: 1)
+    private static let parchmentAccent = UIColor(red: 116 / 255, green: 81 / 255, blue: 28 / 255, alpha: 1)
     private static let weChatDayBackground = UIColor(red: 244 / 255, green: 245 / 255, blue: 247 / 255, alpha: 1)
     private static let weChatNightBackground = UIColor.black
     private static let weChatNightBarBackground = UIColor(red: 26 / 255, green: 26 / 255, blue: 26 / 255, alpha: 1)
@@ -100,6 +102,7 @@ enum ReaderTheme: String, CaseIterable {
         case .white: return "白色"
         case .green: return "護眼綠"
         case .sepia: return "棕色"
+        case .parchment: return "羊皮紙"
         }
     }
 
@@ -176,6 +179,7 @@ enum ReaderTheme: String, CaseIterable {
         case .white: return Self.weChatDayBackground
         case .green: return Self.eyeComfortGreenBackground
         case .sepia: return UIColor(red: 244 / 255, green: 236 / 255, blue: 216 / 255, alpha: 1)
+        case .parchment: return UIColor(red: 222 / 255, green: 194 / 255, blue: 142 / 255, alpha: 1)
         case .night: return Self.weChatNightBackground
         }
     }
@@ -201,23 +205,23 @@ enum ReaderTheme: String, CaseIterable {
         case .white: return UIColor(red: 51 / 255, green: 51 / 255, blue: 51 / 255, alpha: 1)
         case .green: return UIColor(red: 47 / 255, green: 61 / 255, blue: 47 / 255, alpha: 1)
         case .sepia: return UIColor(red: 91 / 255, green: 70 / 255, blue: 54 / 255, alpha: 1)
+        case .parchment: return UIColor(red: 67 / 255, green: 50 / 255, blue: 37 / 255, alpha: 1)
         case .night: return UIColor(red: 217 / 255, green: 217 / 255, blue: 217 / 255, alpha: 1)
         }
     }
 
     var uiAccentColor: UIColor {
         if let preset = activeAppearancePreset { return preset.accent }
-        return Self.weChatAccent
+        return self == .parchment ? Self.parchmentAccent : Self.weChatAccent
     }
 
-    /// The fill of 起點's 神評論 tag, white text on it, on this background: red on 白色 and
-    /// 黑色, the background's own hue on 護眼綠 and 棕色 (棕色's is 起點's, read off its
-    /// parchment). A comment card template's `${accent}`.
+    /// 「神評論」标签用白字；白色和黑色背景沿用红色，其他背景用对应的深色点缀。
     var commentCardAccent: UIColor {
         switch self {
         case .white, .night: return UIColor(red: 217 / 255, green: 58 / 255, blue: 53 / 255, alpha: 1)
         case .green: return UIColor(red: 63 / 255, green: 125 / 255, blue: 76 / 255, alpha: 1)
         case .sepia: return UIColor(red: 151 / 255, green: 106 / 255, blue: 5 / 255, alpha: 1)
+        case .parchment: return Self.parchmentAccent
         }
     }
 
@@ -232,6 +236,7 @@ enum ReaderTheme: String, CaseIterable {
         case .green:
             return UIColor(red: 191 / 255, green: 218 / 255, blue: 188 / 255, alpha: 1)
         case .sepia: return UIColor(red: 0.93, green: 0.91, blue: 0.83, alpha: 1)
+        case .parchment: return UIColor(red: 209 / 255, green: 179 / 255, blue: 119 / 255, alpha: 1)
         case .night: return Self.weChatNightBarBackground
         }
     }
@@ -241,6 +246,7 @@ enum ReaderTheme: String, CaseIterable {
         case .white: return "white"
         case .green: return "green"
         case .sepia: return "sepia"
+        case .parchment: return rawValue
         case .night: return "night"
         }
     }
@@ -268,6 +274,7 @@ enum ReaderBoundTheme: Hashable, Identifiable {
         .reading(.white),
         .reading(.green),
         .reading(.sepia),
+        .reading(.parchment),
         .reading(.night),
     ]
 

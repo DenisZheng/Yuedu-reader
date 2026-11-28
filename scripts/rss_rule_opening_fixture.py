@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""仅在 loopback 提供 RSSRuleListOpeningUITests 的合成列表和封面。"""
+"""仅在 loopback 提供 RSS UI 测试的合成列表、封面和验活响应。"""
 
 import base64
 import json
@@ -47,6 +47,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(url.path, 200, body, "application/json; charset=utf-8")
         elif url.path == "/stream/cover":
             self.reply(url.path, 200, sample_cover(), "text/plain")
+        elif url.path in ("/health/404-a", "/health/404-b", "/health/404-other", "/health/423", "/health/503"):
+            self.reply(url.path, int(url.path.split("/")[-1][:3]), "Fixture health check")
         elif url.path == "/icon.png":
             self.reply(url.path, 204, b"")
         else:

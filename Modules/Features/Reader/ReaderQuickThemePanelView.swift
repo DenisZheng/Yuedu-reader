@@ -288,8 +288,7 @@ struct ReaderQuickThemePanelView: View {
 
     // MARK: - Reading backgrounds
 
-    /// One scrolling row, not the 3×2 paged grid this replaced: the four built-in
-    /// backgrounds, then every saved one, each by name, then 自定義 to make another.
+    /// 横向排列内建背景和用户保存的背景，末尾保留自定义入口。
     private var readingBackgroundRow: some View {
         let resolution = settings.readerBackgroundResolution(mode: settings.readerMode, wornTheme: readerTheme)
         return VStack(alignment: .leading, spacing: DSSpacing.sm) {

@@ -11,6 +11,7 @@ final class RSSSourceHealthChecker {
         case generatedPage
         case mediaEntry
         case interactionRequired
+        case httpFailure(Int)
         case failed(String)
         case cancelled
         var kind: Kind {
@@ -21,6 +22,7 @@ final class RSSSourceHealthChecker {
             case .generatedPage: .generatedPage
             case .mediaEntry: .mediaEntry
             case .interactionRequired: .interactionRequired
+            case .httpFailure(let status): .httpFailure(status)
             case .failed: .failed
             case .cancelled: .cancelled
             }
@@ -29,16 +31,51 @@ final class RSSSourceHealthChecker {
         var title: String {
             switch self {
             case .list(let count): String(format: localized("首頁可用：%d 個條目"), count)
+            case .httpFailure(let status): String(format: localized("RSS 請求失敗：HTTP %d"), status)
             case .failed(let reason): reason
             default: kind.title
             }
         }
 
-        enum Kind: String, CaseIterable, Sendable {
+        enum Kind: Hashable, Sendable {
+            case httpFailure(Int)
             case failed, list, emptyList, webReachable, generatedPage, mediaEntry, interactionRequired, cancelled
+
+            private static let otherOrder: [Self] = [
+                .failed, .list, .emptyList, .webReachable, .generatedPage, .mediaEntry, .interactionRequired, .cancelled
+            ]
+
+            static func ordered(_ kinds: Set<Self>) -> [Self] {
+                let statuses = kinds.compactMap { kind -> Int? in
+                    if case .httpFailure(let status) = kind { return status }
+                    return nil
+                }
+                // 直接在「全部」旁列出已出现的HTTP状态；无状态码错误仍归入普通失败。
+                return statuses.sorted().map(Self.httpFailure) + otherOrder.filter(kinds.contains)
+            }
+
+            var identifier: String {
+                switch self {
+                case .httpFailure(let status): "http-\(status)"
+                case .failed: "failed"
+                case .list: "list"
+                case .emptyList: "emptyList"
+                case .webReachable: "webReachable"
+                case .generatedPage: "generatedPage"
+                case .mediaEntry: "mediaEntry"
+                case .interactionRequired: "interactionRequired"
+                case .cancelled: "cancelled"
+                }
+            }
+
+            var isFailure: Bool {
+                if case .httpFailure = self { return true }
+                return self == .failed
+            }
 
             var title: String {
                 switch self {
+                case .httpFailure(let status): String(format: localized("HTTP %d"), status)
                 case .failed: localized("驗證失敗")
                 case .list: localized("首頁有條目")
                 case .emptyList: localized("首頁解析成功，列表為空")
@@ -63,6 +100,11 @@ final class RSSSourceHealthChecker {
         let ticket: RSSRequestTicket
     }
 
+    private struct QueuedSource: Sendable {
+        let source: RSSSource
+        let feedHost: String?
+    }
+
     private(set) var results: [String: Outcome] = [:]
     private(set) var isRunning = false
     private(set) var completed = 0
@@ -71,11 +113,12 @@ final class RSSSourceHealthChecker {
     private(set) var resultVersion: UInt64 = 0
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
-    @ObservationIgnored private var currentID: String?
+    @ObservationIgnored private var activeIDs: Set<String> = []
     @ObservationIgnored private var checkedSources: [String: CheckedSource] = [:]
 
     func start(sources: [RSSSource], owner: RSSStore, session: URLSession? = nil) {
         cancel()
+        let previous = task
         total = sources.count; completed = 0
         guard !sources.isEmpty else { return }
         // 整批排队时先撤回旧结果；取消后未轮到的源不冒充本次已验证。
@@ -94,19 +137,48 @@ final class RSSSourceHealthChecker {
         let requests = session ?? URLSession(configuration: config)
         task = Task { [weak self] in
             defer { if session == nil { requests.invalidateAndCancel() } }
-            guard let self else { return }
-            for source in sources {
-                guard !Task.isCancelled, generation == version else { return }
-                guard let ticket = owner.requestTicket(for: source.id, allowsDisabledDiagnostic: true), owner.source(id: source.id) == source else { continue }
-                currentID = source.id
-                checkedSources[source.id] = .init(source: source, ticket: ticket)
-                let outcome = await Self.check(source: source, owner: owner, session: requests)
-                guard !Task.isCancelled, generation == version else { return }
-                // 删除、改配置或登录变化后，不把晚到检查结果贴到新源上。
-                if owner.accepts(ticket), owner.source(id: source.id) == source { results[source.id] = outcome }
-                completed += 1
+            // 重开批次时，先等取消沿请求/脚本真正收口。
+            await previous?.value
+            guard let self, !Task.isCancelled, generation == version else { return }
+            var pending = (await Self.prepareQueue(sources))[...]
+            let hostLimit = PerHostSemaphore()
+            await withTaskGroup(of: (CheckedSource, Outcome).self) { group in
+                var feedHosts: [String: String] = [:]
+                while !Task.isCancelled, generation == version {
+                    while activeIDs.count < 2, let next = pending.first {
+                        // 仍按原顺序：同主机不叠加，规则/登录/不确定的源须等其它检查结束。
+                        if !activeIDs.isEmpty {
+                            guard let host = next.feedHost, feedHosts.count == activeIDs.count,
+                                  !feedHosts.values.contains(host) else { break }
+                        }
+                        pending.removeFirst()
+                        let source = next.source
+                        guard let ticket = owner.requestTicket(for: source.id, allowsDisabledDiagnostic: true),
+                              owner.source(id: source.id) == source else { continue }
+                        let checked = CheckedSource(source: source, ticket: ticket)
+                        checkedSources[source.id] = checked
+                        activeIDs.insert(source.id)
+                        feedHosts[source.id] = next.feedHost
+                        let limit = next.feedHost == nil ? nil : hostLimit
+                        group.addTask {
+                            let outcome = await SourceRequestExecutor.$serialHosts.withValue(limit) {
+                                await Self.check(source: source, owner: owner, session: requests)
+                            }
+                            return (checked, outcome)
+                        }
+                    }
+                    guard let (checked, outcome) = await group.next(),
+                          !Task.isCancelled, generation == version else { return }
+                    let id = checked.source.id
+                    activeIDs.remove(id)
+                    feedHosts[id] = nil
+                    // 删除、改配置或登录变化后，不把晚到检查结果贴到新源上。
+                    if owner.accepts(checked.ticket), owner.source(id: id) == checked.source { results[id] = outcome }
+                    completed += 1
+                }
             }
-            currentID = nil; isRunning = false; task = nil
+            guard !Task.isCancelled, generation == version else { return }
+            isRunning = false; task = nil
             resultVersion &+= 1
         }
     }
@@ -116,8 +188,43 @@ final class RSSSourceHealthChecker {
         if isRunning { resultVersion &+= 1 }
         // 保留已取消的Task句柄供调用者等待真正收口；下一次start会替换它。
         task?.cancel()
-        if let currentID { results[currentID] = .cancelled }
-        currentID = nil; isRunning = false
+        for id in activeIDs { results[id] = .cancelled }
+        activeIDs.removeAll()
+        isRunning = false
+    }
+
+    nonisolated private static func prepareQueue(_ sources: [RSSSource]) async -> [QueuedSource] {
+        SourcePerfTrace.span("rss.health.queue", "main=\(Thread.isMainThread) sources=\(sources.count)") {
+            var queue: [QueuedSource] = []
+            queue.reserveCapacity(sources.count)
+            for source in sources {
+                guard !Task.isCancelled else { return [] }
+                queue.append(.init(source: source, feedHost: plainFeedHost(for: source)))
+            }
+            return queue
+        }
+    }
+
+    /// 并行只用于静态HTTP(S)标准Feed；拿不准仍走原串行路径，不改变URL、规则或认证。
+    nonisolated private static func plainFeedHost(for source: RSSSource) -> String? {
+        guard !source.usesLegadoRuntime, !source.singleUrl, !source.enabledCookieJar,
+              source.contentType == nil || source.contentType == .web,
+              source.preservedLegadoFields == nil,
+              [source.loginUrl, source.loginUi, source.coverDecodeJs, source.startJs, source.preloadJs, source.injectJs,
+               source.shouldOverrideUrlLoading, source.customRule, source.ruleNextPage, source.nextContentUrl, source.variable]
+                .allSatisfy({ $0?.isEmpty != false }),
+              LoginManager.shared.getLoginHeader(sourceUrl: RSSRuntime.authenticationKey(for: source)) == nil else { return nil }
+        func staticHost(_ raw: String) -> String? {
+            guard raw.range(of: "@js:", options: .caseInsensitive) == nil, !AnalyzeUrl.hasOptions(raw),
+                  !raw.contains(where: { "{}<>".contains($0) }),
+                  let url = URL(string: raw, encodingInvalidCharacters: false),
+                  SourceRequestHeaderScope.origin(url) != nil, url.user == nil, url.password == nil else { return nil }
+            return PerHostSemaphore.hostKey(for: url)
+        }
+        guard let sourceHost = staticHost(source.sourceKey) else { return nil }
+        // 标准Feed检查优先用发现的地址，不能按原始sourceKey的主机限流。
+        if let feed = source.resolvedFeedURL, feed != source.sourceKey { return staticHost(feed) }
+        return sourceHost
     }
 
     /// 调用者需要收口运行时可等待已启动任务；不轮询结果或猜测延迟。
@@ -142,7 +249,7 @@ final class RSSSourceHealthChecker {
                           check.source == source, revisions.matches(check.ticket) else { continue }
                     idsByKind[outcome.kind, default: []].insert(source.id)
                 }
-                return Outcome.Kind.allCases.compactMap { kind in
+                return Outcome.Kind.ordered(Set(idsByKind.keys)).compactMap { kind in
                     idsByKind[kind].map { SelectionGroup(kind: kind, sourceIDs: $0) }
                 }
             }
@@ -169,6 +276,7 @@ final class RSSSourceHealthChecker {
         catch ScraperError.interactionRequired { return .interactionRequired }
         catch ScraperError.httpStatus(401) { return .interactionRequired }
         catch ScraperError.httpStatus(403) { return .interactionRequired }
+        catch ScraperError.httpStatus(let status) { return .httpFailure(status) }
         catch is SourceRuntimeRequirement { return .interactionRequired }
         catch { return .failed(RSSSourceDebugger.describe(error)) }
     }

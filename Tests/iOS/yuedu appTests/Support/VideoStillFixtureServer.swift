@@ -21,6 +21,8 @@ final class VideoStillFixtureServer: @unchecked Sendable {
         var headers: [String: String] = [:]
         var requiredHeaders: [String: String] = [:]
         var allowedMethods: Set<String> = ["GET", "HEAD"]
+        /// 固定响应可以等测试信号再发送，不阻塞接收其他连接。
+        var beforeSending: (@Sendable () async throws -> Void)? = nil
     }
 
     private let directory: URL
@@ -202,7 +204,19 @@ final class VideoStillFixtureServer: @unchecked Sendable {
             extra["Content-Range"] = "bytes \(bounds.lowerBound)-\(bounds.upperBound - 1)/\(response.body.count)"
             return send(connection, status: "206 Partial Content", body: response.body.subdata(in: bounds), headers: extra)
         }
-        send(connection, status: response.status, body: response.body, headers: extra, headOnly: method == "HEAD")
+        let replyHeaders = extra
+        if let beforeSending = response.beforeSending {
+            Task {
+                do {
+                    try await beforeSending()
+                    self.send(connection, status: response.status, body: response.body, headers: replyHeaders, headOnly: method == "HEAD")
+                } catch {
+                    self.close(connection)
+                }
+            }
+        } else {
+            send(connection, status: response.status, body: response.body, headers: replyHeaders, headOnly: method == "HEAD")
+        }
     }
 
     /// HTTP与custom-scheme PoC使用同一Range解释，避免因fixture差异误判平台支持。
