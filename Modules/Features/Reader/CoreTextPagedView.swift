@@ -507,6 +507,8 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
         /// The one owner of "may the page stack be rewritten right now?", shared by
         /// every page-turn style. See `ReaderStackWriteGate`.
         private var stackWriteGate = ReaderStackWriteGate()
+        // UIKit 可能持有离屏的「载入中」邻页，章节就绪时要让它重新取页。
+        private var heldPlaceholderSpines: Set<Int> = []
         /// Snapshot of the page count used by UIKit's cached double-sided neighbours.
         /// Hold a shrinking count until the next stack write so an in-flight curl
         /// never loses a controller that UIKit already requested.
@@ -927,6 +929,7 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
             let stackWriteTrace = pageTurnTrace.beginStackWrite(targetVC)
             defer { pageTurnTrace.endStep(stackWriteTrace) }
             applyPlaybackHighlight(to: targetVC)
+            heldPlaceholderSpines.removeAll()
             pageViewController.setViewControllers(
                 viewControllerStack(startingWith: targetVC),
                 direction: direction,
@@ -1298,6 +1301,7 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
             callbackEngineObject = nil
             callbackEngineIdentifier = nil
             unresolvedChapters.removeAll()
+            heldPlaceholderSpines.removeAll()
         }
 
         fileprivate func displayViewController(at index: Int) -> UIViewController {
@@ -1553,12 +1557,14 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
         ///
         /// A placeholder must never take that shortcut: `committedReadingPosition` refuses to
         /// guess a position for one, which is exactly the stuck-載入中 case this path exists
-        /// to resolve.
+        /// to resolve. UIKit 缓存的离屏占位页也不能走这条捷径。
         private func handleChapterReady(
             _ spineIndex: Int?,
             on pageViewController: UIPageViewController
         ) {
+            let replacesHeldPlaceholder = spineIndex.map { heldPlaceholderSpines.remove($0) != nil } ?? false
             if let spineIndex,
+               !replacesHeldPlaceholder,
                pendingNavigation == nil,
                externalTargetPosition == nil,
                let visible = readingPage(of: pageViewController),
@@ -2152,6 +2158,7 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
             }
             pageTurnTrace.endNeighbour(neighbourTrace, neighbour)
             if neighbour == nil { recordCurlBoundary(asked: "before", from: viewController, on: pvc) }
+            recordHeldPlaceholders(in: neighbour)
             return neighbour
         }
 
@@ -2165,7 +2172,18 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
             }
             pageTurnTrace.endNeighbour(neighbourTrace, neighbour)
             if neighbour == nil { recordCurlBoundary(asked: "after", from: viewController, on: pvc) }
+            recordHeldPlaceholders(in: neighbour)
             return neighbour
+        }
+
+        private func recordHeldPlaceholders(in viewController: UIViewController?) {
+            if let spread = viewController as? ReaderSpreadPageViewController {
+                for page in spread.pageViewControllers { recordHeldPlaceholders(in: page) }
+            } else if let placeholder = viewController as? PlaceholderPageViewController {
+                let spine = placeholder.coreTextReadingPosition?.spineIndex
+                    ?? currentEngine.localPosition(for: placeholder.globalPageIndex).spineIndex
+                heldPlaceholderSpines.insert(spine)
+            }
         }
 
         /// Crashlytics c5efe011 / 658b2c27, "The number of view controllers provided (0) doesn't
@@ -2368,11 +2386,11 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
             transitionCompleted completed: Bool
         ) {
             SourcePerfTrace.span("reader.page.didFinish", "completed=\(completed)", thresholdMs: 50) {
-                nativeTurnDidFinish(pvc, completed: completed)
+                nativeTurnDidFinish(pvc, completed: completed, previous: previousViewControllers)
             }
         }
 
-        private func nativeTurnDidFinish(_ pvc: UIPageViewController, completed: Bool) {
+        private func nativeTurnDidFinish(_ pvc: UIPageViewController, completed: Bool, previous: [UIViewController]) {
             pageTurnTrace.endNativeTurn(
                 completed: completed,
                 landed: (readingPage(of: pvc) as? any PageIndexProviding & UIViewController)?.globalPageIndex
@@ -2397,6 +2415,10 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
                 continueQueuedTransitionIfNeeded(on: pvc, showing: settledPage)
                 return
             }
+
+            // 成功翻页后，UIKit 会把刚离开的页当邻页，不一定重新向数据源取页。
+            heldPlaceholderSpines.removeAll()
+            for page in previous { recordHeldPlaceholders(in: page) }
 
             if pvc.viewControllers?.first is PageBackViewController {
                 if let resolvedPage = syncStablePosition(

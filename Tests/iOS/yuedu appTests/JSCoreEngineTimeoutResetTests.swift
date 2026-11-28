@@ -9,6 +9,25 @@ import Testing
 /// script and a new job writing `source.put` on the same bridge from two threads at once.
 @Suite("JSCoreEngine timeout reset", .serialized)
 struct JSCoreEngineTimeoutResetTests {
+    @Test func timeoutDoesNotWaitForAbandonedContext() {
+        let engine = JSCoreEngine(executionTimeout: 0.25)
+        let generation = engine.generation
+        let start = ContinuousClock.now
+
+        // 只在本地有限运行。脚本持有旧 VM 的锁，不能靠它先结束来完成重建。
+        let result = engine.evaluate("""
+        var until = Date.now() + 3000;
+        while (Date.now() < until) {}
+        'finished';
+        """)
+
+        #expect(result == nil)
+        #expect(engine.generation == generation + 1)
+        #expect(ContinuousClock.now - start < .seconds(2))
+        #expect(engine.evaluate("1 + 1") == "2")
+        #expect(engine.evaluate("__yueduLegadoErrorContext.stage") != nil)
+    }
+
     @Test("a script abandoned by the timeout writes source.put to its own bridge, not the next job's")
     func abandonedScriptDoesNotShareSourceBridge() {
         let engine = JSCoreEngine()

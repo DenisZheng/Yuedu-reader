@@ -437,6 +437,44 @@ struct BrowserLayoutPageEngineTests {
         #expect(engine.totalPages >= pagesBefore, "page count collapsed to the browser estimate")
     }
 
+    @Test func openingRestoreWaitsForLayoutToReachTheSavedOffset() async throws {
+        let text = String(repeating: "The quick brown fox jumps over the lazy dog. ", count: 200)
+        let (engine, _, _) = await makeEngine(chapters: [plainChapter("Cover"), plainChapter(text, index: 1)])
+        let chapterStart = engine.pageIndex(forSpine: 1, charOffset: 0)
+        let saved = CoreTextReadingPosition(spineIndex: 1, charOffset: 6000)
+        let restore = ReaderOpeningRestore()
+
+        // 占位页是可用的导航提示，不是精确续读结果。
+        #expect(engine.estimatedGlobalPage(for: saved) == chapterStart)
+        #expect(engine.pageIndex(for: saved) == nil)
+        restore.target = (1, saved.charOffset)
+        #expect(!restore.pageSettled(chapterStart, pageIndex: { engine.pageIndex(for: $0) }))
+
+        // 首屏来了也不能交付尚未排到的页内位置。
+        restore.target = (1, saved.charOffset)
+        var settledOnFirstPublish: Bool?
+        engine.onChapterReady = { spine in
+            guard spine == 1, settledOnFirstPublish == nil else { return }
+            settledOnFirstPublish = restore.pageSettled(chapterStart, pageIndex: { engine.pageIndex(for: $0) })
+        }
+        defer { engine.onChapterReady = nil }
+        let resolution = await restore.resolve(
+            chapterCount: 2,
+            preload: { _ = await engine.preloadChapter(at: $0) },
+            pageIndex: { engine.pageIndex(for: $0) }
+        )
+
+        #expect(settledOnFirstPublish == false)
+        guard case let .restore(position, page) = resolution else {
+            Issue.record("未恢复到目标位置：\(resolution)")
+            return
+        }
+        #expect(position == saved)
+        #expect(page > chapterStart)
+        #expect(engine.charOffset(forPage: page).spineIndex == saved.spineIndex)
+        #expect(engine.charOffset(forPage: page).charOffset <= saved.charOffset)
+    }
+
     @Test func anchorNavigation() async throws {
         let html = """
         <html><body><p id="mark">Target paragraph with anchor.</p><p>More text.</p></body></html>

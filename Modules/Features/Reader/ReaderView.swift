@@ -3345,6 +3345,8 @@ struct ReaderView: View {
         // shelf progress, which syncs with the shelf, names the chapter instead (FB-179).
         let position = shelfProgressOpeningPosition() ?? restored.coreTextPosition
         savedCoreTextRestoreTarget = (position.spineIndex, max(0, position.charOffset))
+        // 先记录这是续读，再移动页面，避免把途中切章记为异常跳转。
+        declarePositionIntent(for: .restored, target: position)
         setCoreTextExternalTarget(position)
         currentChapterIndex = position.spineIndex
         scrollVisibleChapter = position.spineIndex

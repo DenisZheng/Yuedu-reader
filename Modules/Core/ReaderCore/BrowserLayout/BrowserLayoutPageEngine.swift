@@ -529,12 +529,12 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
         }
         delegate.onNavigateToPage = { [weak self] page in
             guard let self, let position = self.delegate.readingPosition(forPage: page),
-                  let mapped = self.pageIndex(for: position) else { return }
+                  let mapped = self.estimatedGlobalPage(for: position) else { return }
             self.onNavigateToPage?(mapped)
         }
         delegate.onLinkNavigate = { [weak self] page in
             guard let self, let position = self.delegate.readingPosition(forPage: page),
-                  let mapped = self.pageIndex(for: position) else { return }
+                  let mapped = self.estimatedGlobalPage(for: position) else { return }
             self.onLinkNavigate?(mapped)
         }
     }
@@ -1178,7 +1178,7 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
             guard isCurrentWork(generation) else { return }
         }
         rebuildOffsets()
-        if let restore, let page = pageIndex(for: restore) {
+        if let restore, let page = estimatedGlobalPage(for: restore) {
             currentPage = page
             onNavigateToPage?(page)
         }
@@ -1247,7 +1247,7 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
 
     func updateReadingPosition(_ position: CoreTextReadingPosition) {
         delegate.updateReadingPosition(position)
-        if let page = pageIndex(for: position) {
+        if let page = estimatedGlobalPage(for: position) {
             currentPage = max(0, min(page, max(totalPages - 1, 0)))
         }
     }
@@ -1257,12 +1257,29 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
         return base + localPageIndex(in: spineIndex, charOffset: charOffset)
     }
 
+    /// 占位页和未排到的正文不能确认续读成功。需要导航提示时单独使用估算页。
     func pageIndex(for position: CoreTextReadingPosition) -> Int? {
-        pageIndex(forSpine: position.spineIndex, charOffset: position.charOffset)
+        let spine = position.spineIndex
+        guard spinePageOffsets.indices.contains(spine) else { return nil }
+        switch choices[spine] ?? .browser {
+        case .browser:
+            if chapterLayoutStates[spine]?.diagnosticPage == nil {
+                // 取消未完成的排版也会移除 ready，不能把残留的部分页面当成完整章节。
+                guard case .ready? = chapterLayoutStates[spine],
+                      let layout = browserChapters[spine], !layout.pages.isEmpty else { return nil }
+                if browserSessions[spine] != nil {
+                    let coveredEnd = layout.pageSourceRanges.last.map { $0.location + $0.length } ?? 0
+                    guard position.charOffset < coveredEnd else { return nil }
+                }
+            }
+        case .legacyFallback, .legacyEngineFailure:
+            guard delegate.pageIndex(for: position) != nil else { return nil }
+        }
+        return pageIndex(forSpine: spine, charOffset: position.charOffset)
     }
 
     func estimatedGlobalPage(for position: CoreTextReadingPosition) -> Int? {
-        pageIndex(for: position)
+        pageIndex(forSpine: position.spineIndex, charOffset: position.charOffset)
     }
 
     func readingPosition(forPage page: Int) -> CoreTextReadingPosition? {

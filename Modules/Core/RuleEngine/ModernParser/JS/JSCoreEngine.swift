@@ -667,8 +667,8 @@ class JSCoreEngine {
         }
     }
 
-    private func updateRuntimeErrorContext(in target: JSContext? = nil) {
-        (target ?? context).setObject([
+    private func updateRuntimeErrorContext(in target: JSContext) {
+        target.setObject([
             "stage": executionStage,
             "sourceName": bookSource?.bookSourceName ?? "?",
             "sourceId": Self.redactedSourceIdentifier(bookSource?.bookSourceUrl),
@@ -1687,7 +1687,8 @@ class JSCoreEngine {
 
         // Install the authoritative registry-backed Java/Android contract.
         LegadoJavaInteropRuntime.install(in: ctx)
-        updateRuntimeErrorContext()
+        // 超时重建尚未发布新上下文，访问旧 VM 会等它的脚本放开锁。
+        updateRuntimeErrorContext(in: ctx)
 
         // org.jsoup.Jsoup polyfill.
         // Legado Android uses Rhino with full Java interop, so book sources can call

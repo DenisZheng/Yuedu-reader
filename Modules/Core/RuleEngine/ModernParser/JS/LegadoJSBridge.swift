@@ -269,8 +269,10 @@ final class LegadoScriptWaits: Sendable {
 
     /// The time spent waiting so far, the wait in progress included.
     var waitedSeconds: TimeInterval {
-        let now = DispatchTime.now().uptimeNanoseconds
-        let nanos = state.withLock { $0.ended + ($0.count > 0 ? now - $0.since : 0) }
+        // 和写入 since 一样在锁内读时间，避免并发开始等待后用旧时间相减。
+        let nanos = state.withLock {
+            $0.ended + ($0.count > 0 ? DispatchTime.now().uptimeNanoseconds - $0.since : 0)
+        }
         return TimeInterval(nanos) / 1_000_000_000
     }
 
