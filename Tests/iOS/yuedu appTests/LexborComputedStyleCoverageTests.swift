@@ -121,8 +121,9 @@ struct LexborComputedStyleCoverageTests {
     func cssWideBackgroundComponentsWithoutImageRetainGap(_ keyword: String) {
         var parent = ComputedStyle()
         var image = BackgroundImageStyle(source: "Parent.JPG")
-        image.size = .cover; image.positionX = .keyword(1); image.positionY = .keyword(1)
-        image.repeatMode = .noRepeat; image.attachment = .fixed; parent.backgroundImage = image
+        image.size = .cover; image.positionX = .percent(1); image.positionY = .percent(1)
+        image.repeatsX = false; image.repeatsY = false
+        image.attachment = .fixed; parent.backgroundImage = image
         let properties = ["background-size", "background-position", "background-repeat", "background-attachment"]
         let (style, facts) = mapped(properties.map { ($0, keyword) }, parent: parent)
         #expect(style.backgroundImage == nil)
@@ -131,8 +132,9 @@ struct LexborComputedStyleCoverageTests {
         let (withImage, supportedFacts) = mapped(properties.map { ($0, keyword) } + [("background-image", "url(Child.JPG)")], parent: parent)
         #expect(withImage.backgroundImage?.source == "Child.JPG"); #expect(!supportedFacts.blocksCutover)
         if keyword == "inherit" {
-            #expect(withImage.backgroundImage?.size == .cover); #expect(withImage.backgroundImage?.repeatMode == .noRepeat)
-            #expect(withImage.backgroundImage?.positionX == .keyword(1)); #expect(withImage.backgroundImage?.attachment == .fixed)
+            #expect(withImage.backgroundImage?.size == .cover)
+            #expect(withImage.backgroundImage?.repeatsX == false && withImage.backgroundImage?.repeatsY == false)
+            #expect(withImage.backgroundImage?.positionX == .percent(1)); #expect(withImage.backgroundImage?.attachment == .fixed)
         }
     }
 
@@ -145,17 +147,19 @@ struct LexborComputedStyleCoverageTests {
         ])
         #expect(style.fontFamilies == ["Mixed Case, Family", "MyFont", "Other Face"])
         #expect(style.backgroundImage?.source == "../Images/Cover Art.JPG")
-        #expect(style.backgroundImage?.size == .cover); #expect(style.backgroundImage?.positionX == .keyword(1))
-        #expect(style.backgroundImage?.positionY == .keyword(1)); #expect(style.backgroundImage?.repeatMode == .noRepeat)
+        #expect(style.backgroundImage?.size == .cover); #expect(style.backgroundImage?.positionX == .percent(1))
+        #expect(style.backgroundImage?.positionY == .percent(1))
+        #expect(style.backgroundImage?.repeatsX == false && style.backgroundImage?.repeatsY == false)
         #expect(style.backgroundImage?.attachment == .fixed); #expect(!facts.blocksCutover)
     }
 
-    @Test func backgroundPositionUsesEachAxisAndCurrentFont() {
+    @Test func backgroundPositionPreservesAuthoredUnitsOnEachAxis() {
         let (style, facts) = mapped([("background-position", "2em 30%"), ("background-image", "url(Cover.JPG)"), ("font-size", "25px")])
-        #expect(style.backgroundImage?.positionX == .length(50)); #expect(style.backgroundImage?.positionY == .percent(0.3))
+        #expect(style.backgroundImage?.positionX == .length(.em(2), fromEnd: false))
+        #expect(style.backgroundImage?.positionY == .percent(0.3))
         #expect(!facts.blocksCutover)
         let (vertical, _) = mapped([("background-image", "url(Cover.JPG)"), ("background-position", "top")])
-        #expect(vertical.backgroundImage?.positionX == .keyword(0.5)); #expect(vertical.backgroundImage?.positionY == .keyword(0))
+        #expect(vertical.backgroundImage?.positionX == .percent(0.5)); #expect(vertical.backgroundImage?.positionY == .percent(0))
     }
 
     @Test func imageNoneAndNormalLineHeightClearEarlierValues() {
@@ -203,12 +207,18 @@ struct LexborComputedStyleCoverageTests {
         #expect(!facts.blocksCutover)
     }
 
+    @Test func signedTextIndentKeepsItsRelativeUnit() {
+        let (style, facts) = mapped([("text-indent", "-1em")])
+        #expect(style.textIndent == .length(.em(-1)))
+        #expect(!facts.blocksCutover)
+    }
+
     @Test(arguments: [
         ("min-width", "10px"), ("min-height", "2em"), ("max-height", "none"), ("display", "flex"),
         ("background-image", "linear-gradient(red, blue)"), ("background-size", "10px 20px"),
         ("background-repeat", "repeat-x"), ("background-attachment", "local"), ("background-position", "right 10px bottom 20px"),
         ("border-top-style", "double"), ("border-top-color", "red"), ("border-radius", "10%"),
-        ("font-style", "oblique 20deg"), ("text-indent", "-1em"), ("ruby-align", "space-around"),
+        ("font-style", "oblique 20deg"), ("text-indent", "1ex"), ("ruby-align", "space-around"),
         ("padding-top", "auto"), ("padding-left", "-1px"), ("width", "calc(100% - 2px)"), ("font-size", "10"),
         ("visibility", "hidden"), ("visibility", "collapse")
     ])

@@ -202,11 +202,16 @@ struct BrowserLayoutPageEngineTests {
         #expect(engine.chapterText(forSpine: 0)?.contains("quick brown fox") == true)
     }
 
+    // 合并边框的表格现在可排版；测试真正不支持的嵌套浮动，保住新旧引擎混排的回归。
+    private var fallbackChapter: MockBrowserLayoutResource.Chapter {
+        .init(title: "Fallback", href: "chapter1.xhtml",
+              html: "<html><body><div style=\"float: left\"><div style=\"float: right\">Nested float</div></div></body></html>", css: [])
+    }
+
     @Test func everyPageStartRoundTripsAndTapWalkerAdvances() async throws {
         let (engine, _, _) = await makeEngine(chapters: [
             plainChapter(String(repeating: "每一頁的起點必須屬於該頁，點擊翻頁不能返回原頁。", count: 120)),
-            .init(title: "Table fallback", href: "chapter1.xhtml",
-                  html: "<html><body><table style=\"border-collapse: collapse\"><tr><td>Fallback content</td></tr></table></body></html>", css: []),
+            fallbackChapter,
             plainChapter(String(repeating: "Browser prose after the fallback chapter. ", count: 60), index: 2)
         ])
         _ = await engine.preloadChapter(at: 1)
@@ -232,8 +237,7 @@ struct BrowserLayoutPageEngineTests {
     @Test func fallbackNavigationCallbacksTranslateDelegatePageSpace() async throws {
         let (engine, _, delegate) = await makeEngine(chapters: [
             plainChapter(String(repeating: "Browser has more pages than its legacy test builder. ", count: 120)),
-            .init(title: "Fallback", href: "chapter1.xhtml",
-                  html: "<html><body><table style=\"border-collapse: collapse\"><tr><td>Link destination</td></tr></table></body></html>", css: [])
+            fallbackChapter
         ])
         _ = await engine.preloadChapter(at: 1)
         let position = CoreTextReadingPosition.chapterStart(1)
@@ -255,6 +259,27 @@ struct BrowserLayoutPageEngineTests {
         delegate.onNavigateToPage?(legacyPage)
         #expect(linkedPage == compositePage)
         #expect(navigatedPage == compositePage)
+    }
+
+    @Test func collapsedBorderTableRendersBothCellsInTheBrowserEngine() async throws {
+        let chapter = MockBrowserLayoutResource.Chapter(
+            title: "Table", href: "table.xhtml",
+            html: """
+            <html><body><table style="border-collapse: collapse">
+            <tr><td>Left cell</td><td>Right cell</td></tr>
+            </table></body></html>
+            """,
+            css: []
+        )
+        let (engine, _, _) = await makeEngine(chapters: [chapter])
+        #expect(engine.choice(for: 0)?.isBrowser == true)
+        let page = try #require(engine.pageViewController(at: 0) as? BrowserLayoutPageViewController)
+        let text = page.pageView.displayList.items.compactMap { item -> String? in
+            if case .text(let display) = item { return display.text }
+            return nil
+        }.joined(separator: " ")
+        #expect(text.contains("Left cell"))
+        #expect(text.contains("Right cell"))
     }
 
     @Test func longPressSelectsSemanticParagraphWithoutChangingSourceOffsets() async throws {

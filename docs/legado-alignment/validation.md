@@ -2,6 +2,10 @@
 
 本文件只记录实际执行证据和阻碍。计划见 [implementation-plan.md](implementation-plan.md)，不能把环境检查或文档完成当作 RSS 已实现。
 
+## 上游精选修复与排版依赖（2026-11-28）
+
+[分支验收记录](upstream-integration-2026-11-28.md)：两批修复分别通过 44、16 项回归；`YueduCoreText 0.30.1` 在 iPhone／iPad 通过 82／6 项。覆盖共享脚本、EPUB 续读、RSS 原生媒体和书架操作，不替代实源或 S8 验收。
+
 ## 模拟器从订阅页点开随机列表与 403 列表（2026-11-27）
 
 在 iPhone 18 Pro Max／iOS 27.2 上启动普通 `Reader-Fork-Dev` App，用简体中文 [UI 测试](../../Tests/iOS-UI/RSSRuleListOpeningUITests.swift) 从「订阅」Tab 实际点开两条隔离样本，不直接调用列表服务。地址、脚本与数据均为自建样本，[响应器](../../scripts/rss_rule_opening_fixture.py)只监听本机回环地址。未修改应用代码、原始源包或已有订阅数据。

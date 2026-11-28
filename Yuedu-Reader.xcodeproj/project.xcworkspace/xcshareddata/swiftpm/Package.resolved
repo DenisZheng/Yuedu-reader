@@ -78,8 +78,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/CHANG-JUI-LIN/YueduCoreText",
       "state" : {
-        "revision" : "5cc346abddd5801fd82d10509bf7f78af5ec0d49",
-        "version" : "0.18.1"
+        "revision" : "e23db26946f11f4d6b103dea46733b8717de5377",
+        "version" : "0.30.1"
       }
     },
     {

@@ -524,22 +524,28 @@ struct BrowserLayoutFloatLayoutTests {
         #expect(following.rect.minX >= fittedImage.rect.width)
     }
 
-    @Test func oversizedNonReplacedFloatTriggersWholeChapterFallback() async {
+    @Test func floatTallerThanAPageBreaksAlongsideText() async throws {
+        let floated = (0..<14).map { "左\($0 % 10)" }.joined(separator: "<br/>")
+        let beside = (0..<14).map { "右\($0 % 10)" }.joined(separator: "<br/>")
         let html = """
-        <html><body style="margin: 0">
-        <div style="float: left; width: 100px; height: 240px">Too tall</div>
-        <p style="margin: 0">Following text</p>
+        <html><body style="margin: 0; font-size: 20px; line-height: 1">
+        <div style="float: left; width: 100px">\(floated)</div>
+        <p style="margin: 0">\(beside)</p>
+        <p style="margin: 0">後</p>
         </body></html>
         """
-        let doc = BrowserLayoutDocument(
-            html: html,
-            cssTexts: [],
-            config: makeConfig(renderHeight: 200)
-        )
+        let size = CGSize(width: 390, height: 100)
+        let doc = BrowserLayoutDocument(html: html, cssTexts: [], config: makeConfig(renderHeight: size.height))
+        let pages = try await doc.renderPages(containerSize: size)
 
-        await #expect(throws: BrowserLayoutDocument.BrowserLayoutError.self) {
-            _ = try await doc.renderPages(containerSize: CGSize(width: 390, height: 200))
-        }
+        // 0.30.1 将超高浮动盒跨页；检查两列正文都画出来，且没有掉到页外。
+        try #require(pages.count >= 3)
+        let inked = pages.map { textFragments(in: $0).map(\.rect.rawValue).filter { $0.width > 0 } }
+        #expect(inked.reduce(0) { $0 + $1.count } == 29)
+        #expect(inked.flatMap { $0 }.allSatisfy { $0.minY >= -0.5 && $0.maxY <= size.height + 0.5 })
+        #expect(inked.prefix(2).allSatisfy { rects in
+            rects.contains { $0.minX < 1 } && rects.contains { $0.minX >= 99.5 }
+        })
     }
 
     // MARK: - 13. Percentage width float
@@ -562,17 +568,24 @@ struct BrowserLayoutFloatLayoutTests {
         #expect(pBox.lines[0].contentX == 200)
     }
 
-    // MARK: - 14. Unsupported width:auto fallback in scanner
-
-    @Test func unsupportedWidthAutoFallbackInScanner() {
+    @Test func automaticWidthFloatShrinksAndLeavesSpaceForText() throws {
         let html = """
-        <html><body>
-        <div style="float: left;">Text inside float without width</div>
+        <html><body style="margin: 0;">
+        <div style="float: left;">Short float</div>
+        <p style="margin: 0;">Text beside the float.</p>
         </body></html>
         """
-        let res = BrowserLayoutCapabilityScanner.scan(html: html, cssTexts: [])
-        #expect(!res.supported, "Non-replaced float with width:auto must be rejected for fallback")
-        #expect(res.unsupportedFeatures.contains(.float))
+        // 旧断言要求回退，但 0.18.1 已支持浮动盒的自动宽度。验证实际排版而不只看准入结果。
+        #expect(BrowserLayoutCapabilityScanner.scan(html: html, cssTexts: []).supported)
+        let size = CGSize(width: 390, height: 800)
+        let doc = BrowserLayoutDocument(html: html, cssTexts: [], config: makeConfig())
+        let boxes = try doc.makeLayout(containerSize: size).rootBox.children
+        try #require(boxes.count == 2)
+        let float = boxes[0]
+        let firstLine = try #require(boxes[1].lines.first)
+        #expect(float.isFloated)
+        #expect(0 < float.frame.width && float.frame.width < size.width / 2)
+        #expect(firstLine.contentX >= float.frame.maxX)
     }
 
     // MARK: - 15. Replaced <img> float without explicit width is supported in scanner
