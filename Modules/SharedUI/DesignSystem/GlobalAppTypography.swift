@@ -17,6 +17,8 @@ enum GlobalAppTypography {
     /// reads it so a view that sets its own font redraws with the new face or weight.
     @MainActor
     private static func observeTypography() {
+        // 隔离宿主不加载用户字体，只构造设计字体也不能启动偏好迁移。
+        guard !RSSPoCTestHost.isEnabled else { return }
         _ = GlobalSettings.shared.typographyRevision
     }
     nonisolated(unsafe) private static var bolderFaceCache: [String: Bool] = [:]

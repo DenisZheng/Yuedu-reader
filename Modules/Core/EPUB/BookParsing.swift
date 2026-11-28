@@ -136,6 +136,14 @@ enum BookParserRegistry {
 }
 
 struct JSONBookParser: BookParser {
+    private static let explicitChapterKeys = ["chapters", "chapterList", "chapter_list", "toc"]
+    private static let chapterCollectionKeys = explicitChapterKeys + ["list", "items", "data"]
+
+    /// 仅根层要求明确的章节键；其内容用正文解析的同一查找路径，找到一章即可。
+    static func hasExplicitChapters(in root: Any) -> Bool {
+        !extractChapters(from: root, explicitRootOnly: true, firstOnly: true).isEmpty
+    }
+
     func parse(url: URL) async throws -> ParsedBookDocument {
         let data = try Data(contentsOf: url)
         let root = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
@@ -169,26 +177,32 @@ struct JSONBookParser: BookParser {
         )
     }
 
-    private static func extractChapters(from value: Any) -> [String] {
-        if let array = value as? [Any], looksLikeChapterArray(array) {
+    private static func extractChapters(
+        from value: Any, explicitRootOnly: Bool = false, firstOnly: Bool = false
+    ) -> [String] {
+        if !explicitRootOnly, let array = value as? [Any], looksLikeChapterArray(array) {
+            if firstOnly {
+                for item in array {
+                    if let text = chapterText(from: item) { return [text] }
+                }
+                return []
+            }
             return array.compactMap(chapterText(from:))
         }
 
         guard let dictionary = value as? [String: Any] else { return [] }
-        let preferredKeys = [
-            "chapters", "chapterList", "chapter_list", "toc", "list", "items", "data"
-        ]
-        for key in preferredKeys {
-            guard let candidate = Self.value(for: key, in: dictionary) else { continue }
-            if let array = candidate as? [Any], looksLikeChapterArray(array) {
-                return array.compactMap(chapterText(from:))
-            }
-            let nested = extractChapters(from: candidate)
+        var visitedKeys: Set<String> = []
+        for key in explicitRootOnly ? explicitChapterKeys : chapterCollectionKeys {
+            guard let field = entry(for: key, in: dictionary) else { continue }
+            visitedKeys.insert(field.key)
+            let nested = extractChapters(from: field.value, firstOnly: firstOnly)
             if !nested.isEmpty { return nested }
         }
 
-        for candidate in dictionary.values {
-            let nested = extractChapters(from: candidate)
+        guard !explicitRootOnly else { return [] }
+        // 跳过实际查过的键，而不是其小写形式；同名不同大小写的其他字段仍可回退。
+        for (key, candidate) in dictionary where !visitedKeys.contains(key) {
+            let nested = extractChapters(from: candidate, firstOnly: firstOnly)
             if !nested.isEmpty { return nested }
         }
         return []
@@ -277,9 +291,13 @@ struct JSONBookParser: BookParser {
     }
 
     private static func value(for key: String, in dictionary: [String: Any]) -> Any? {
-        if let direct = dictionary[key] { return direct }
+        entry(for: key, in: dictionary)?.value
+    }
+
+    private static func entry(for key: String, in dictionary: [String: Any]) -> (key: String, value: Any)? {
+        if let direct = dictionary[key] { return (key, direct) }
         let lower = key.lowercased()
-        return dictionary.first { $0.key.lowercased() == lower }?.value
+        return dictionary.first { $0.key.lowercased() == lower }
     }
 
     private static func stringify(_ value: Any) -> String {

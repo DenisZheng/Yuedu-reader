@@ -138,30 +138,22 @@ enum RuleSubscriptionUpdateService {
     }
     @concurrent static func compareReplacements(_ subscription: RuleSubscription, bytes: Data, existing: [ReplaceRule]) async throws -> ReplacementChanges {
         guard bytes.count <= maximumBytes else { throw RuleSubscriptionFailure.tooLarge }
-        let raw = try JSONSerialization.jsonObject(with: bytes)
-        let objects: [[String: Any]]
-        if let array = raw as? [[String: Any]] { objects = array }
-        else if let object = raw as? [String: Any] { objects = [object] }
-        else { throw RuleSubscriptionFailure.invalidPack }
-        guard objects.count <= 10_000 else { throw RuleSubscriptionFailure.tooLarge }
-        // 当前替换语义尚未全面对齐：不能静默丢弃标题规则或排除范围后提示订阅成功。
-        func boolean(_ value: Any?, default fallback: Bool) -> Bool {
-            if let value = value as? Bool { return value }
-            if let value = value as? String { return value.lowercased() == "true" || value == "1" }
-            return fallback
+        let review: ReplaceRuleImportReview
+        do { review = try await ReplaceRuleImportParser.review(data: bytes) }
+        catch is CancellationError { throw CancellationError() }
+        catch ReplaceRuleImportError.tooLarge { throw RuleSubscriptionFailure.tooLarge }
+        catch { throw RuleSubscriptionFailure.invalidPack }
+
+        // 订阅必须整包可用；手动预览才允许用户明确确认部分导入。
+        if review.rows.contains(where: { if case .invalid = $0.outcome { return true }; return false }) {
+            throw RuleSubscriptionFailure.invalidPack
         }
-        guard objects.allSatisfy({ boolean($0["scopeContent"], default: true)
-            && !boolean($0["scopeTitle"], default: false) && !boolean($0["scopeSource"], default: false)
-            && ($0["excludeScope"] as? String ?? "").isEmpty
-            && ($0["timeoutMillisecond"] == nil || $0["timeoutMillisecond"] is NSNull
-                || ($0["timeoutMillisecond"] as? NSNumber)?.doubleValue == 3000 || $0["timeoutMillisecond"] as? String == "3000")
-        }) else { throw RuleSubscriptionFailure.unsupportedPack }
-        let incoming = objects.isEmpty ? [] : try ReplaceRuleImportParser.parse(data: bytes)
-        guard incoming.count == objects.count, Set(incoming.map(\.id)).count == incoming.count,
-              objects.allSatisfy({ object in
-                  if let number = object["id"] as? NSNumber { return Int64(number.stringValue) != nil }
-                  if let id = object["id"] as? String { return Int64(id) != nil || UUID(uuidString: id) != nil }
-                  return false
+        guard !review.hasIssues else { throw RuleSubscriptionFailure.unsupportedPack }
+        let incoming = review.rules
+        guard Set(incoming.map(\.id)).count == incoming.count,
+              review.rows.allSatisfy({ row in
+                  guard case let .supported(_, id?) = row.outcome else { return false }
+                  return Int64(id) != nil || UUID(uuidString: id) != nil
               }) else { throw RuleSubscriptionFailure.invalidPack }
         var ids = subscription.replacementIDs ?? [:]
         var selected: [ReplaceRule] = []

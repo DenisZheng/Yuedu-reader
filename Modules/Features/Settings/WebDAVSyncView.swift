@@ -280,8 +280,17 @@ struct WebDAVRestoreVersionView: View {
     let manifest: WebDAVBackupManifest
     @State private var chosen: Set<WebDAVBackupCategory>
     @State private var confirming = false
+    @State private var prepared: WebDAVPreparedRestore?
     @State private var result: String?
+    @State private var operation: Operation?
     @State private var task: Task<Void, Never>?
+
+    private enum Operation { case preview, restore }
+
+    private var currentPreview: WebDAVPreparedRestore? {
+        guard let prepared, prepared.matches(manager, version: manifest.name, categories: chosen) else { return nil }
+        return prepared
+    }
 
     init(manager: WebDAVManager, manifest: WebDAVBackupManifest) {
         self.manager = manager
@@ -307,21 +316,38 @@ struct WebDAVRestoreVersionView: View {
                                 .font(DSFont.caption).foregroundStyle(DSColor.textSecondary)
                         }
                     }
+                    .disabled(operation != nil || manager.isSyncing)
                     .accessibilityIdentifier("webdav.restore.\(entry.category.rawValue)")
                 }
             } header: {
                 Text(localized("還原分類")).foregroundStyle(DSColor.textSecondary)
             } footer: {
-                Text(localized("所選分類會覆蓋本機對應資料；RSS 不含正文、媒體與登入狀態。")).dsSectionFooter()
+                Text(localized("所選分類會覆蓋對應的本機資料。書架只含書籍資料，不含原檔；RSS 不含正文、媒體或登入狀態。"))
+                    .dsSectionFooter()
             }
             .interfaceSectionSurface()
+            if let preview = currentPreview {
+                Section(localized("備份內容")) {
+                    ForEach(manifest.files, id: \.category) { entry in
+                        if let contents = preview.contents[entry.category] {
+                            LabeledContent(localized(entry.category.titleKey), value: summary(for: contents))
+                        }
+                    }
+                }
+                .interfaceSectionSurface()
+            }
             Section {
-                if manager.isSyncing {
+                if let operation {
+                    ProgressView(localized(operation == .preview ? "正在讀取備份內容…" : "還原中…"))
                     Button(localized("取消"), role: .cancel) { task?.cancel() }
-                } else {
+                } else if currentPreview != nil {
                     Button(localized("還原所選分類"), role: .destructive) { confirming = true }
-                        .disabled(chosen.isEmpty)
+                        .disabled(manager.isSyncing)
                         .accessibilityIdentifier("webdav.restore.start")
+                } else {
+                    Button(localized("預覽所選分類")) { previewSelection() }
+                        .disabled(chosen.isEmpty || manager.isSyncing)
+                        .accessibilityIdentifier("webdav.restore.preview")
                 }
                 if let result { Text(result).font(DSFont.footnote).foregroundStyle(DSColor.textSecondary) }
             }
@@ -331,28 +357,73 @@ struct WebDAVRestoreVersionView: View {
         .toolbarTitleDisplayMode(.inline)
         .themedAppSurface(for: .settings)
         .confirmationDialog(localized("確定還原？"), isPresented: $confirming, titleVisibility: .visible) {
-            Button(localized("還原所選分類"), role: .destructive) { start() }
-            Button(localized("取消"), role: .cancel) {}
+            Button(localized("還原所選分類"), role: .destructive) { restoreSelection() }
+            Button(localized("取消"), role: .cancel) { discardPreview() }
         } message: {
             Text(localized("本機對應資料會被備份內容取代。"))
         }
-        .onDisappear { task?.cancel() }
+        .onChange(of: chosen) { _, _ in discardPreview() }
+        .onChange(of: manager.connectionRevision) { _, _ in discardPreview() }
+        .onChange(of: manifest) { _, _ in discardPreview() }
+        .onDisappear {
+            discardPreview()
+            task?.cancel()
+        }
     }
 
-    private func start() {
-        manager.isSyncing = true
-        result = localized("還原中…")
-        let chosen = chosen, manifest = manifest, local = manager.productionBackupData
+    private func summary(for contents: WebDAVRestoreContents) -> String {
+        switch contents {
+        case .books(let count): String(format: localized("%d 本書的資料"), count)
+        case .bookSources(let count): String(format: localized("%d 個書源"), count)
+        case .rules(let count): String(format: localized("%d 條替換規則"), count)
+        case .rss(let sources, let states): String(format: localized("%d 個訂閱源，%d 筆狀態"), sources, states)
+        }
+    }
+
+    private func discardPreview() {
+        prepared = nil
+        confirming = false
+        if operation == .preview { task?.cancel() }
+    }
+
+    private func previewSelection() {
+        let selection = chosen
+        run(.preview) {
+            let preview = try await manager.prepareRestore(manifest.name, categories: selection,
+                                                           local: manager.productionBackupData, matching: manifest)
+            try Task.checkCancellation()
+            guard preview.matches(manager, version: manifest.name, categories: chosen) else { throw WebDAVBackupError.previewExpired }
+            prepared = preview
+        }
+    }
+
+    private func restoreSelection() {
+        guard let preview = currentPreview else {
+            result = WebDAVBackupError.previewExpired.localizedDescription
+            return
+        }
+        let selection = chosen
+        run(.restore) {
+            prepared = nil
+            let restored = try await manager.applyPreparedRestore(preview, version: manifest.name, categories: selection)
+            result = String(format: localized("已還原 %d 個分類"), restored.count)
+        }
+    }
+
+    private func run(_ operation: Operation, _ action: @escaping @MainActor () async throws -> Void) {
+        guard self.operation == nil, !manager.isSyncing else { return }
+        self.operation = operation
+        result = nil
+        if operation == .restore { manager.isSyncing = true }
         task = Task {
-            defer { manager.isSyncing = false }
-            do {
-                let restored = try await manager.restoreVersion(manifest.name, categories: chosen, local: local)
-                result = String(format: localized("已還原 %d 個分類"), restored.count)
-            } catch is CancellationError {
-                result = localized("已取消，本機資料未修改")
-            } catch {
-                result = DiagnosticRedactor.redact((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            defer {
+                self.operation = nil
+                task = nil
+                if operation == .restore { manager.isSyncing = false }
             }
+            do { try await action() }
+            catch is CancellationError { result = localized("已取消，本機資料未修改") }
+            catch { result = DiagnosticRedactor.redact(error.localizedDescription) }
         }
     }
 }
@@ -363,4 +434,13 @@ struct WebDAVRestoreVersionView: View {
 
 #Preview("WebDAV RSS backup scope") {
     NavigationStack { WebDAVSyncView() }
+}
+
+#Preview("WebDAV restore selection") {
+    NavigationStack {
+        WebDAVRestoreVersionView(manager: .shared, manifest: .init(format: 1,
+            name: "20261128T120000Z-00000000-abcdef", created: .now, deviceName: "iPhone", appVersion: "3.0.4",
+            files: [.init(category: .bookshelf, size: 1024, sha256: String(repeating: "0", count: 64)),
+                    .init(category: .rss, size: 2048, sha256: String(repeating: "0", count: 64))]))
+    }
 }

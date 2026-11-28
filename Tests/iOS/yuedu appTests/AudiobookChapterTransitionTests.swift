@@ -521,12 +521,46 @@ struct AudiobookChapterTransitionTests {
         player.startTransient(book: book, store: BookStore(metadataFileURL: tempMetadataURL()))
         try await waitUntil(timeout: 10) { player.isPlaying && player.currentTime > 0 }
 
+        postRouteChange(.oldDeviceUnavailable)
+        try await waitUntil(timeout: 5) { !player.isPlaying }
+    }
+
+    enum InterruptionOverride: CaseIterable, Sendable {
+        case outputRemoved, newOutput, listenerPaused, listenerStopped
+    }
+
+    @Test("中断期间拔掉输出或主动暂停／停止，不会被系统许可自动续播", arguments: InterruptionOverride.allCases)
+    func interruptionRespectsRouteAndListener(_ action: InterruptionOverride) async throws {
+        let (book, folderURL) = try makeBook("audiobook-interruption-override", durations: [8]) { _ in }
+        defer {
+            do { try FileManager.default.removeItem(at: folderURL) }
+            catch { Issue.record("无法清理本地静音夹具") }
+        }
+        let player = AudiobookPlayer.shared
+        defer { player.stop() }
+        player.startTransient(book: book, store: BookStore(metadataFileURL: tempMetadataURL()))
+        try await waitUntil(timeout: 10) { player.isPlaying }
+
+        postInterruption(.began)
+        await settle()
+        try #require(!player.isPlaying)
+        switch action {
+        case .outputRemoved: postRouteChange(.oldDeviceUnavailable)
+        case .newOutput: postRouteChange(.newDeviceAvailable)
+        case .listenerPaused: player.pause()
+        case .listenerStopped: player.stop()
+        }
+        postInterruption(.ended, options: .shouldResume)
+        await settle()
+        #expect(player.isPlaying == (action == .newOutput))
+    }
+
+    private func postRouteChange(_ reason: AVAudioSession.RouteChangeReason) {
         NotificationCenter.default.post(
             name: AVAudioSession.routeChangeNotification,
             object: AVAudioSession.sharedInstance(),
-            userInfo: [AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue]
+            userInfo: [AVAudioSessionRouteChangeReasonKey: reason.rawValue]
         )
-        try await waitUntil(timeout: 5) { !player.isPlaying }
     }
 
     // MARK: Helpers

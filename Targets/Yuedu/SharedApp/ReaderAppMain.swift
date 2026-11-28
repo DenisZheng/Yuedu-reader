@@ -43,12 +43,75 @@ private struct RSSPoCApplication: App {
             } else if let path = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_FIXTURE"],
                let storage = ProcessInfo.processInfo.environment["RSS_IMPORT_UI_STORAGE"] {
                 RSSImportUIFixtureHost(file: URL(fileURLWithPath: path), directory: URL(fileURLWithPath: storage))
+            } else if let path = ProcessInfo.processInfo.environment["REPLACE_RULE_IMPORT_UI_STORAGE"],
+                      URL(fileURLWithPath: path).lastPathComponent.hasPrefix("ReplaceRuleImportUITests-") {
+                ReplaceRuleImportFixtureHost(directory: URL(fileURLWithPath: path))
             } else if ProcessInfo.processInfo.arguments.contains("-rss-audio-host-comparison") {
                 RSSAudioHostComparison.probeView()
             } else {
                 Color.clear.accessibilityIdentifier("rss-poc-isolated-host")
             }
         }
+    }
+}
+
+private struct ReplaceRuleImportFixtureHost: View {
+    @StateObject private var store: ReplaceRuleStore
+    @State private var showRules = false
+    @State private var preferenceAudit = ReplaceRuleImportPreferenceAudit()
+    @State private var canOpenRules = false
+    @State private var completedRuleSessions = 0
+    @State private var preferencesUnchanged: Bool?
+
+    init(directory: URL) {
+        _store = StateObject(wrappedValue: ReplaceRuleStore(file: directory.appendingPathComponent("replace-rules.json")))
+    }
+
+    var body: some View {
+        Button(localized("替換規則")) {
+            preferencesUnchanged = nil
+            showRules = true
+        }
+        .disabled(!canOpenRules)
+        .accessibilityIdentifier("replace-rule-fixture-open")
+        .accessibilityValue(preferencesUnchanged.map { $0 ? "unchanged" : "changed" } ?? "pending")
+        .task(id: completedRuleSessions) {
+            let unchanged: Bool?
+            if completedRuleSessions == 0 {
+                await preferenceAudit.captureBaseline()
+                unchanged = nil
+            } else {
+                unchanged = await preferenceAudit.matchesBaseline()
+            }
+            guard !Task.isCancelled else { return }
+            preferencesUnchanged = unchanged
+            canOpenRules = true
+        }
+        .sheet(isPresented: $showRules, onDismiss: {
+            canOpenRules = false
+            completedRuleSessions += 1
+        }) { ReplaceRuleListView(store: store) }
+        .environment(\.usesUserAppearance, false)
+    }
+}
+
+/// 仅在 Debug 模拟器测试读取和比较；偏好快照不离开这个 actor，页面只接收布尔值。
+private actor ReplaceRuleImportPreferenceAudit {
+    private var baseline: NSDictionary?
+
+    func captureBaseline() {
+        if baseline == nil { baseline = snapshot() }
+    }
+
+    func matchesBaseline() -> Bool {
+        guard let baseline else { return false }
+        return baseline.isEqual(snapshot())
+    }
+
+    private func snapshot() -> NSDictionary {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        guard let domain = Bundle.main.bundleIdentifier else { preconditionFailure("缺少测试宿主标识") }
+        return (UserDefaults.standard.persistentDomain(forName: domain) ?? [:]) as NSDictionary
     }
 }
 #endif

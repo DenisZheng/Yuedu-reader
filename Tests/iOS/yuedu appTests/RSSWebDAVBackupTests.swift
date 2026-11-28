@@ -31,6 +31,14 @@ struct RSSWebDAVBackupTests {
         manager.username = "synthetic"; manager.password = "synthetic"
         try await manager.backupRSS(store: store)
         let data = try #require(try await manager.downloadRSSBackup())
+        try await store.flushPersistence()
+        let writes = store.writeCounts
+        let local = WebDAVProductionLocalData(rss: store, bookStore: nil)
+        #expect(try await local.validate(.rss, data) == .rss(sources: 1, states: 1))
+        #expect(store.writeCounts == writes, "统计RSS订阅源和状态不会恢复或写入备份")
+        let cancelled = Task { try await local.validate(.rss, data) }
+        cancelled.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await cancelled.value }
         try await store.restoreBackup(data)
         #expect(store.article(id: item.id)?.isFavorite == true)
         #expect(RSSWebDAVFixture.state.withLock { $0.paths } == [

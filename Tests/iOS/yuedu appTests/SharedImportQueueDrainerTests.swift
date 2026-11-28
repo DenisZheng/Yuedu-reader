@@ -134,8 +134,52 @@ struct SharedImportQueueDrainerTests {
         #expect(!FileManager.default.fileExists(atPath: fileURL.path))
     }
 
-    @Test("generic book JSON routes to local book importer instead of book source")
-    func genericBookJSONRoutesToBookImporter() async throws {
+    @Test("共享拒绝坏规则，通用 data 字段即使像书也不能掩盖歧义", arguments: [
+        #"[{"pattern":"x"},null]"#,
+        #"{"replaceRules":[],"data":[{"name":"疑似章名"}]}"#,
+        #"{"data":[{"replaceRules":{"rules":[{"pattern":"A"}],"data":[]}},{"name":"第一章"}]}"#,
+        #"{"data":[[{"replaceRuleList":{"rules":[{"regex":"A"}],"data":[]}}]]}"#,
+        #"{"data":[{"replaceRules":{"rules":[],"data":[]}},{"name":"第一章"}]}"#
+    ])
+    func mixedReplaceRuleFileDoesNotImportBook(json: String) async throws {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = try makePayloadDirectory()
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { Issue.record("无法清理共享导入夹具") }
+        }
+        let filename = "mixed.json"
+        try Data(json.utf8).write(to: root.appendingPathComponent(filename))
+        try queuePayload(.init(storageKind: .file, relativePath: filename, suggestedFilename: filename), in: defaults)
+        let rules = ReplaceRuleStore(file: root.appendingPathComponent("rules.json"))
+        var classifiedAsRules = false
+        var classifiedAsBook = false
+        let drainer = SharedImportQueueDrainer(defaults: defaults, payloadDirectoryURL: root,
+            importBookFile: { _ in classifiedAsBook = true; return 1 },
+            importReplaceRuleData: { bytes in classifiedAsRules = true; return try await rules.importFromLegadoData(bytes) })
+
+        let outcome = await drainer.drain()
+        #expect(classifiedAsRules && !classifiedAsBook)
+        #expect(outcome.importedCount == 0 && outcome.failureCount == 1)
+        #expect(rules.rules.isEmpty && rules.revision == 0)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("rules.json").path))
+    }
+
+    @Test("明确有章节的 JSON 不被空规则字段改道", arguments: [
+        #"{"title":"測試小說","chapters":["第一章"]}"#,
+        #"{"title":"測試小說","chapters":["第一章"],"replaceRules":[]}"#,
+        #"{"title":"測試小說","chapterList":["第一章"],"replaceRules":[]}"#,
+        #"{"title":"測試小說","chapter_list":["第一章"],"replaceRules":[]}"#,
+        #"{"title":"測試小說","TOC":["第一章"],"replaceRules":[]}"#,
+        #"{"title":"測試小說","toc":{"chapterList":["第一章"]},"replaceRules":[]}"#,
+        #"{"title":"測試小說","toc":{"items":["第一章"]},"replaceRules":[]}"#,
+        #"{"title":"測試小說","toc":{"data":["第一章"]},"replaceRules":[]}"#,
+        #"{"title":"測試小說","toc":{"payload":{"chapters":[null,"第一章"]}},"replaceRules":[]}"#,
+        #"{"title":"測試小說","toc":{"data":null,"DATA":{"items":["第一章"]}},"replaceRules":[]}"#,
+        #"{"title":"測試小說","toc":{"items":["第一章"]},"replaceRules":[],"metadata":{"pattern":"不是规则"}}"#
+    ])
+    func genericBookJSONRoutesToBookImporter(json: String) async throws {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -144,7 +188,9 @@ struct SharedImportQueueDrainerTests {
 
         let filename = "novel.json"
         let fileURL = payloadDirectory.appendingPathComponent(filename)
-        try Data(#"{"title":"測試小說","chapters":["第一章"]}"#.utf8).write(to: fileURL)
+        try Data(json.utf8).write(to: fileURL)
+        let expectedBook = try await JSONBookParser().parse(url: fileURL)
+        try #require(expectedBook.title == "測試小說" && expectedBook.chapters == ["第一章"])
         try queuePayload(
             .init(storageKind: .file, relativePath: filename, suggestedFilename: filename),
             in: defaults
@@ -159,6 +205,9 @@ struct SharedImportQueueDrainerTests {
             fetchURL: { _ in Data() },
             importBookFile: { url in
                 recorder.importedBookFileExtensions.append(url.pathExtension)
+                let parsed = try await JSONBookParser().parse(url: url)
+                #expect(parsed.title == "測試小說")
+                #expect(parsed.chapters == ["第一章"])
                 return 1
             },
             importOPMLData: { _ in throw WrongRoute() },
@@ -173,6 +222,25 @@ struct SharedImportQueueDrainerTests {
         #expect(outcome.importedBookSourceCount == 0)
         #expect(outcome.failureCount == 0)
         #expect(recorder.importedBookFileExtensions == ["json"])
+    }
+
+    @Test("只有单凭规则包装名无法定类时才检查章节", arguments: [
+        (#"{"pattern":"A","toc":["第一章"]}"#, true, 0),
+        (#"{"replaceRules":[{"pattern":"A"}],"toc":["第一章"]}"#, true, 0),
+        (#"{"title":"书","toc":["第一章"],"metadata":{"pattern":"A"}}"#, false, 0),
+        (#"[{"name":"第一章","replaceRules":[]}]"#, false, 0),
+        (#"{"replaceRules":[],"toc":["第一章"]}"#, false, 1)
+    ])
+    func chapterLookupOnlyForNamedRulePack(json: String, isPack: Bool, expectedLookups: Int) throws {
+        let root = try JSONSerialization.jsonObject(with: Data(json.utf8))
+        var lookups = 0
+        func hasChapters() -> Bool {
+            lookups += 1
+            return JSONBookParser.hasExplicitChapters(in: root)
+        }
+        let result = ReplaceRuleImportParser.recognizesPack(root, requiresRuleMarker: hasChapters())
+        #expect(result == isPack)
+        #expect(lookups == expectedLookups)
     }
 
     /// A document with no title of its own is titled after its file, so a payload

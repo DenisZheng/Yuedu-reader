@@ -96,6 +96,36 @@ struct ShelfVersionSwitchTests {
 
     // MARK: - Switching
 
+    @Test("换书源时详情页与阅读器共用的提交会保存较近的同名章", arguments: [false, true])
+    func sourceSwitchKeepsNearestRepeatedTitle(hasLiveAnchor: Bool) async throws {
+        try await withFixture { store, positions, _ in
+            let oldChapters = (0..<20).map { index in
+                OnlineChapterRef(index: index, title: index == 12 ? "番外" : "旧目录\(index)",
+                    url: "https://version-switch-a.test/\(index)")
+            }
+            let newChapters = (0..<20).map { index in
+                OnlineChapterRef(index: index, title: [4, 13].contains(index) ? "番外" : "新目录\(index)",
+                    url: "https://version-switch-b.test/\(index)")
+            }
+            let book = store.addOnlineBook(name: "同名章测试", author: "作者", sourceId: sourceA.id,
+                bookInfoURL: "https://version-switch-a.test/book", chapters: oldChapters)
+            let origin = BookOrigin(sourceId: sourceB.id, sourceName: "來源乙", bookUrl: "https://version-switch-b.test/book",
+                tocUrl: "https://version-switch-b.test/toc", coverUrl: "", intro: "", lastChapter: "", wordCount: "", kind: "", runtimeVariables: nil)
+            let toc = TOCPackage(sourceId: sourceB.id, sourceName: "來源乙", tocURL: origin.tocUrl, runtimeVariables: nil,
+                chapters: newChapters, rawHTMLFilename: nil, savedAt: Date())
+            let oldPosition = CoreTextReadingPosition(spineIndex: 12, charOffset: 43)
+            let anchor = hasLiveAnchor ? OnlineBookSourceSwitch.Anchor(chapterIndex: 12, position: oldPosition) : nil
+            if !hasLiveAnchor { await positions.save(oldPosition, for: book.id.uuidString) }
+
+            let expected = CoreTextReadingPosition(spineIndex: 13, charOffset: 0)
+            let mapped = try await sourceSwitch(store, positions).commit(bookId: book.id, origin: origin, toc: toc, readingFrom: anchor)
+            #expect(mapped == expected)
+            #expect(await positions.load(for: book.id.uuidString) == expected)
+            #expect(store.readingBook(id: book.id)?.bookSourceId == sourceB.id)
+            #expect(store.readingBook(id: book.id)?.onlineChapters?[13].url == newChapters[13].url)
+        }
+    }
+
     @Test("the shelf moves to the version, and the imported book is kept beside it")
     func switchMovesShelfAndKeepsImport() async throws {
         try await withFixture { store, positions, switcher in

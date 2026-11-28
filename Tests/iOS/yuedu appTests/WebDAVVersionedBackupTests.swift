@@ -13,10 +13,18 @@ import os
         var applied: [[WebDAVBackupCategory]] = []
         var space: Int64 = .max
         var rejects: Set<WebDAVBackupCategory> = []
+        var afterValidate: (@Sendable (WebDAVBackupCategory) async -> Void)?
         init(_ data: [WebDAVBackupCategory: Data]) { self.data = data }
         func export(_ category: WebDAVBackupCategory) async throws -> Data? { lock.withLock { data[category] } }
-        func validate(_ category: WebDAVBackupCategory, _ data: Data) async throws {
+        func validate(_ category: WebDAVBackupCategory, _ data: Data) async throws -> WebDAVRestoreContents {
             if lock.withLock({ rejects.contains(category) }) { throw WebDAVBackupError.corrupt(category) }
+            await lock.withLock { afterValidate }?(category)
+            switch category {
+            case .bookSources: return .bookSources(0)
+            case .bookshelf: return .books(0)
+            case .replaceRules: return .rules(0)
+            case .rss: return .rss(sources: 0, states: 0)
+            }
         }
         func apply(_ staged: [(WebDAVBackupCategory, Data)]) async throws {
             lock.withLock { applied.append(staged.map(\.0)); for (k, v) in staged { data[k] = v } }
@@ -42,6 +50,119 @@ import os
             #expect(restored == [.bookSources])
             #expect(local.data[.bookSources] == Data("[1]".utf8))
             #expect(local.data[.rss] == Data("rss-local".utf8), "未选分类不改动")
+        }
+    }
+
+    @Test("预览旧格式书架与规则的真实数量，取消不写；确认只用看过的字节")
+    func previewAndRestoreVerifiedData() async throws {
+        try await withManager { manager in
+            let root = URL.temporaryDirectory.appendingPathComponent("WebDAVPreview-\(UUID())")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { do { try FileManager.default.removeItem(at: root) } catch { Issue.record(error) } }
+            let shelfFile = root.appendingPathComponent("shelf.json"), rulesFile = root.appendingPathComponent("rules.json")
+            let journal = root.appendingPathComponent("journal")
+            let rss = RSSStore(storageDirectory: root.appendingPathComponent("rss"))
+            rss.addSource(RSSSource(id: "synthetic-local", name: "Local", url: "https://local.invalid/rss"))
+            try await rss.flushPersistence()
+            let writes = rss.writeCounts
+            let original = Data("[]\n".utf8)
+            try original.write(to: shelfFile)
+            try original.write(to: rulesFile)
+            let books = try JSONEncoder().encode((1...2).map {
+                ReadingBook(title: "Book \($0)", author: "Fixture", source: "local", contentFilename: "book-\($0).txt")
+            })
+            let rules = try JSONEncoder().encode((1...3).map { ReplaceRule(name: "Rule \($0)", pattern: "\($0)") })
+            let source = RSSSource(id: "synthetic-remote", name: "Remote", url: "https://remote.invalid/rss")
+            let rssBytes = try await RSSBackupCodec.encode(sources: [source], folders: [], records: [:], statuses: [:])
+            let version = try await manager.backupVersion(categories: [.bookshelf, .replaceRules, .rss],
+                local: FakeLocal([.bookshelf: books, .replaceRules: rules, .rss: rssBytes]), now: Date(timeIntervalSince1970: 1000.5))
+            let local = WebDAVProductionLocalData(rss: rss, bookStore: nil,
+                fileOverrides: [.bookshelf: shelfFile, .replaceRules: rulesFile], recoveryDirectory: journal)
+            let categories: Set<WebDAVBackupCategory> = [.bookshelf, .replaceRules]
+            let prefix = WebDAVBackupLayout.root + version.name + "/"
+            let paths = ["GET " + prefix + "manifest.json", "GET " + prefix + "bookshelf.json", "GET " + prefix + "replaceRules.json"]
+            let beforePreview = manager.lastSyncDate
+
+            do {
+                let cancelled = try await manager.prepareRestore(version.name, categories: categories, local: local)
+                #expect(cancelled.contents == [.bookshelf: .books(2), .replaceRules: .rules(3)])
+                #expect(WebDAVMemory.state.withLock { $0.log.filter { $0.hasPrefix("GET ") } } == paths)
+            }
+            #expect(try Data(contentsOf: shelfFile) == original)
+            #expect(try Data(contentsOf: rulesFile) == original)
+            #expect(!FileManager.default.fileExists(atPath: journal.path))
+            #expect(manager.lastSyncDate == beforePreview)
+            #expect(rss.writeCounts == writes)
+
+            let preview = try await manager.prepareRestore(version.name, categories: categories, local: local, matching: version)
+            // 服务端同一名字的文件变了；确认应使用用户看过的校验结果，不再请求服务器。
+            WebDAVMemory.state.withLock { $0.files[prefix + "replaceRules.json"] = Data("[]".utf8) }
+            #expect(try await manager.applyPreparedRestore(preview, version: version.name, categories: categories) == [.bookshelf, .replaceRules])
+            #expect(WebDAVMemory.state.withLock { $0.log.filter { $0.hasPrefix("GET ") } } == paths + paths)
+            #expect(try Data(contentsOf: shelfFile) == books)
+            #expect(try Data(contentsOf: rulesFile) == rules)
+            #expect(rss.sources.map(\.id) == ["synthetic-local"])
+            #expect(rss.writeCounts == writes)
+            await #expect(throws: WebDAVBackupError.previewExpired) {
+                try await manager.applyPreparedRestore(preview, version: version.name, categories: categories)
+            }
+            var changed = version
+            changed.files[0].sha256 = String(repeating: "0", count: 64)
+            await #expect(throws: WebDAVBackupError.previewExpired) {
+                try await manager.prepareRestore(version.name, categories: categories, local: local, matching: changed)
+            }
+            #expect(WebDAVMemory.state.withLock { $0.log.filter { $0.hasPrefix("GET ") } } == paths + paths + [paths[0]])
+        }
+    }
+
+    @Test("预览绑定版本、选择和账户；取件中改账户不能拿下一类文件")
+    func previewExpiresAfterSelectionOrConnectionChange() async throws {
+        try await withManager { manager in
+            let local = FakeLocal([.bookSources: Data("[]".utf8), .replaceRules: Data("[]".utf8)])
+            let categories: Set<WebDAVBackupCategory> = [.bookSources, .replaceRules]
+            let version = try await manager.backupVersion(categories: categories, local: local)
+            let preview = try await manager.prepareRestore(version.name, categories: categories, local: local)
+            await #expect(throws: WebDAVBackupError.previewExpired) {
+                try await manager.applyPreparedRestore(preview, version: version.name, categories: [.bookSources])
+            }
+            await #expect(throws: WebDAVBackupError.previewExpired) {
+                try await manager.applyPreparedRestore(preview, version: "another-version", categories: categories)
+            }
+            manager.username = "different-fixture"
+            manager.username = "synthetic"
+            await #expect(throws: WebDAVBackupError.previewExpired) {
+                try await manager.applyPreparedRestore(preview, version: version.name, categories: categories)
+            }
+            local.lock.withLock {
+                local.afterValidate = { category in
+                    if category == .bookSources { await MainActor.run { manager.username = "new-fixture" } }
+                }
+            }
+            WebDAVMemory.state.withLock { $0.log = [] }
+            await #expect(throws: WebDAVBackupError.previewExpired) {
+                try await manager.prepareRestore(version.name, categories: categories, local: local)
+            }
+            let prefix = WebDAVBackupLayout.root + version.name + "/"
+            #expect(WebDAVMemory.state.withLock { $0.log } == ["GET " + prefix + "manifest.json", "GET " + prefix + "bookSources.json"])
+            #expect(local.applied.isEmpty)
+        }
+    }
+
+    @Test("合计大小超预算时只下载清单，不下载任何分类")
+    func previewRejectsCombinedSizeBeforeDownloading() async throws {
+        try await withManager { manager in
+            let local = FakeLocal([.bookshelf: Data("[]".utf8), .replaceRules: Data("[]".utf8)])
+            let categories: Set<WebDAVBackupCategory> = [.bookshelf, .replaceRules]
+            var oversized = try await manager.backupVersion(categories: categories, local: local)
+            for index in oversized.files.indices { oversized.files[index].size = WebDAVBackupLayout.maximumFileBytes }
+            let path = WebDAVBackupLayout.root + oversized.name + "/manifest.json"
+            let bytes = try WebDAVBackupLayout.encodeManifest(oversized)
+            WebDAVMemory.state.withLock { $0.files[path] = bytes; $0.log = [] }
+            await #expect(throws: WebDAVBackupError.previewTooLarge) {
+                try await manager.prepareRestore(oversized.name, categories: categories, local: local)
+            }
+            #expect(WebDAVMemory.state.withLock { $0.log } == ["GET " + path])
+            #expect(local.applied.isEmpty)
         }
     }
 

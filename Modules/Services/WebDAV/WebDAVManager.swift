@@ -41,14 +41,31 @@ final class WebDAVManager: @MainActor ObservableObject {
 
     // MARK: Settings (persisted to UserDefaults)
 
+    // 预览只保留连接修订，不持有账号、密码。改回原值也必须重新预览。
+    private(set) var connectionRevision: UInt64 = 0
+
     @Published var serverUrl: String {
-        didSet { defaults.set(serverUrl, forKey: "webdav_url") }
+        didSet {
+            if oldValue != serverUrl { connectionRevision &+= 1 }
+            defaults.set(serverUrl, forKey: "webdav_url")
+        }
     }
     @Published var username: String {
-        didSet { defaults.set(username, forKey: "webdav_username") }
+        didSet {
+            if oldValue != username { connectionRevision &+= 1 }
+            defaults.set(username, forKey: "webdav_username")
+        }
     }
     @Published var password: String {
-        didSet { defaults.set(password, forKey: "webdav_password") }
+        didSet {
+            if oldValue != password { connectionRevision &+= 1 }
+            defaults.set(password, forKey: "webdav_password")
+        }
+    }
+
+    func checkRestoreConnection(_ expected: UInt64) throws {
+        try Task.checkCancellation()
+        guard expected == connectionRevision else { throw WebDAVBackupError.previewExpired }
     }
 
     // MARK: State
@@ -277,8 +294,9 @@ final class WebDAVManager: @MainActor ObservableObject {
     }
 
     /// GET: Download data from the specified path.
-    nonisolated func get(path: String, maximumBytes: Int = WebDAVBackupLayout.maximumFileBytes) async throws -> Data {
-        var request = try await makeRequest(path: path)
+    nonisolated func get(path: String, maximumBytes: Int = WebDAVBackupLayout.maximumFileBytes,
+                         restoreConnection: UInt64? = nil) async throws -> Data {
+        var request = try await makeRequest(path: path, restoreConnection: restoreConnection)
         request.httpMethod = "GET"
 
         do {
@@ -303,8 +321,11 @@ final class WebDAVManager: @MainActor ObservableObject {
 
     /// Reads the settings on the main actor that owns them; the request is still built here,
     /// off the main thread, as before.
-    nonisolated private func makeRequest(path: String) async throws -> URLRequest {
-        let (serverUrl, username, password) = await MainActor.run { (self.serverUrl, self.username, self.password) }
+    nonisolated private func makeRequest(path: String, restoreConnection: UInt64? = nil) async throws -> URLRequest {
+        let (serverUrl, username, password) = try await MainActor.run {
+            if let restoreConnection { try checkRestoreConnection(restoreConnection) }
+            return (self.serverUrl, self.username, self.password)
+        }
         let base = serverUrl.hasSuffix("/") ? String(serverUrl.dropLast()) : serverUrl
         guard !base.isEmpty, let url = URL(string: base + path) else {
             throw WebDAVError.invalidURL

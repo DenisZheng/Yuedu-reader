@@ -12,7 +12,8 @@ import Foundation
 ///    character order ("標題12" / "標題21") do not count as the same.
 /// 3. Second pass: extract the chapter number ("第一百零三章" → 103, Chinese
 ///    numerals included) and take an exact number match.
-/// 4. Otherwise fall back to the old index clamped into the new TOC.
+/// 4. For equal scores or repeated chapter numbers, prefer the chapter
+///    nearest to the clamped old index. With no match, use that index itself.
 ///
 /// As in Legado, the first chapter maps to the first chapter without a search
 /// (`alignedIndex` searches for it too).
@@ -41,7 +42,12 @@ enum ChapterAlignment {
         guard !newTitles.isEmpty else { return max(0, oldIndex) }
 
         let newCount = newTitles.count
-        let clampedFallback = min(max(0, newCount - 1), oldIndex)
+        let clampedFallback = min(max(0, oldIndex), newCount - 1)
+        func isNearer(_ candidate: Int, than current: Int) -> Bool {
+            let candidateDistance = abs(candidate - clampedFallback)
+            let currentDistance = abs(current - clampedFallback)
+            return candidateDistance == currentDistance ? candidate < current : candidateDistance < currentDistance
+        }
 
         let scaledIndex = oldCount > 0
             ? Int(Double(oldIndex) * Double(newCount) / Double(oldCount))
@@ -59,7 +65,7 @@ enum ChapterAlignment {
         if !oldPure.isEmpty {
             for i in windowLow...windowHigh {
                 let sim = jaccardSimilarity(oldPure, purifiedTitle(newTitles[i]))
-                if sim > bestSimilarity {
+                if sim > bestSimilarity || (sim == bestSimilarity && isNearer(i, than: bestSimilarityIndex)) {
                     bestSimilarity = sim
                     bestSimilarityIndex = i
                 }
@@ -69,21 +75,18 @@ enum ChapterAlignment {
             }
         }
 
-        // Pass 2: chapter-number match.
+        // 章号只比较相等。由近到远查找，同距先查较小下标，命中后无需继续扫描。
         if let oldNumber, oldNumber > 0 {
-            var bestNumberIndex: Int? = nil
-            var bestNumberDiff = Int.max
-            for i in windowLow...windowHigh {
-                guard let num = chapterNumber(in: newTitles[i]) else { continue }
-                let diff = abs(num - oldNumber)
-                if diff < bestNumberDiff {
-                    bestNumberDiff = diff
-                    bestNumberIndex = i
-                    if diff == 0 { break }
+            let center = min(max(clampedFallback, windowLow), windowHigh)
+            let left = center - windowLow
+            let right = windowHigh - center
+            for distance in 0...max(left, right) {
+                if distance <= left, chapterNumber(in: newTitles[center - distance]) == oldNumber {
+                    return center - distance
                 }
-            }
-            if let bestNumberIndex, bestNumberDiff == 0 {
-                return bestNumberIndex
+                if distance > 0, distance <= right, chapterNumber(in: newTitles[center + distance]) == oldNumber {
+                    return center + distance
+                }
             }
         }
 

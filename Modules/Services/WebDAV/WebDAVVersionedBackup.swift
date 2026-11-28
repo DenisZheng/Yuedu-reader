@@ -47,6 +47,7 @@ struct WebDAVBackupManifest: Codable, Equatable, Sendable {
 
 enum WebDAVBackupError: LocalizedError, Equatable {
     case nothingSelected, nothingToBackUp, invalidName, unsupportedFormat, corrupt(WebDAVBackupCategory?), tooLarge, insufficientSpace, rollbackFailed
+    case previewTooLarge, previewExpired
     var errorDescription: String? {
         switch self {
         case .nothingSelected: localized("請至少選擇一個備份分類")
@@ -56,6 +57,8 @@ enum WebDAVBackupError: LocalizedError, Equatable {
         case .corrupt(let category):
             category.map { String(format: localized("備份檔案已損壞：%@"), localized($0.titleKey)) } ?? localized("備份清單已損壞")
         case .tooLarge: localized("備份檔案過大")
+        case .previewTooLarge: localized("所選備份內容過大，請減少選取的分類。")
+        case .previewExpired: localized("備份預覽已失效，請重新預覽。")
         case .insufficientSpace: localized("裝置空間不足，未修改任何資料")
         case .rollbackFailed: localized("還原失敗，原始資料副本已保留，請勿繼續同步")
         }
@@ -65,6 +68,8 @@ enum WebDAVBackupError: LocalizedError, Equatable {
 enum WebDAVBackupLayout {
     static let root = "/readerfork-dev/backups/"
     static let maximumFileBytes = 64 * 1_024 * 1_024
+    // 保留一份可还原的单类上限，但不让所有类别累积到四倍。
+    static let maximumPreviewBytes = maximumFileBytes
 
     static func name(date: Date, deviceID: String, nonce: String = UUID().uuidString) -> String {
         let formatter = DateFormatter()
@@ -154,12 +159,53 @@ enum WebDAVBackupLayout {
     }
 }
 
+enum WebDAVRestoreContents: Equatable, Sendable {
+    case books(Int), bookSources(Int), rules(Int), rss(sources: Int, states: Int)
+}
+
+/// 只在内存中保存一次预览的数据；只有创建它的连接可以在确认后取出这些字节。
+@MainActor final class WebDAVPreparedRestore {
+    fileprivate struct Payload: Sendable {
+        let staged: [(WebDAVBackupCategory, Data)]
+        let local: any WebDAVBackupLocalData
+    }
+
+    let contents: [WebDAVBackupCategory: WebDAVRestoreContents]
+    fileprivate let version: String
+    fileprivate let categories: Set<WebDAVBackupCategory>
+    fileprivate let connection: UInt64
+    private let owner: ObjectIdentifier
+    private var payload: Payload?
+
+    fileprivate init(contents: [WebDAVBackupCategory: WebDAVRestoreContents], version: String,
+                     categories: Set<WebDAVBackupCategory>, connection: UInt64, owner: WebDAVManager, payload: Payload) {
+        self.contents = contents
+        self.version = version
+        self.categories = categories
+        self.connection = connection
+        self.owner = ObjectIdentifier(owner)
+        self.payload = payload
+    }
+
+    func matches(_ manager: WebDAVManager, version: String, categories: Set<WebDAVBackupCategory>) -> Bool {
+        owner == ObjectIdentifier(manager) && connection == manager.connectionRevision && self.version == version
+            && self.categories == categories && payload != nil
+    }
+
+    fileprivate func take(_ manager: WebDAVManager, version: String, categories: Set<WebDAVBackupCategory>) throws -> Payload {
+        try Task.checkCancellation()
+        guard matches(manager, version: version, categories: categories), let payload else { throw WebDAVBackupError.previewExpired }
+        self.payload = nil
+        return payload
+    }
+}
+
 /// 本机数据读写的接缝：生产实现直接读写各 store；测试注入隔离实现，不碰真实书库。
 protocol WebDAVBackupLocalData: Sendable {
     /// 本机没有该分类数据时返回 nil。
     func export(_ category: WebDAVBackupCategory) async throws -> Data?
-    /// 只校验，不修改本机。
-    func validate(_ category: WebDAVBackupCategory, _ data: Data) async throws
+    /// 只校验并返回快照数量，不修改本机。
+    @discardableResult func validate(_ category: WebDAVBackupCategory, _ data: Data) async throws -> WebDAVRestoreContents
     /// 全部写入；任何一步失败都要回滚已写入的分类再抛出。
     func apply(_ staged: [(WebDAVBackupCategory, Data)]) async throws
     func availableBytes() throws -> Int64
@@ -210,17 +256,36 @@ struct WebDAVProductionLocalData: WebDAVBackupLocalData {
         }
     }
 
-    func validate(_ category: WebDAVBackupCategory, _ data: Data) async throws {
+    @discardableResult @concurrent
+    func validate(_ category: WebDAVBackupCategory, _ data: Data) async throws -> WebDAVRestoreContents {
+        try Task.checkCancellation()
+        let started = SourcePerfTrace.now
+        let onMain = { Thread.isMainThread }()
+        defer {
+            SourcePerfTrace.record("webdav.restore.validate", "main=\(onMain) category=\(category.rawValue) bytes=\(data.count)",
+                since: started, mainThreadStallBreadcrumb: false)
+        }
+        let contents: WebDAVRestoreContents
         do {
+            let decoder = JSONDecoder()
             switch category {
-            case .bookSources: _ = try JSONDecoder().decode([BookSource].self, from: data)
+            case .bookSources: contents = .bookSources(try decoder.decode([BookSource].self, from: data).count)
             case .bookshelf:
-                let books = try JSONDecoder().decode([ReadingBook].self, from: data)
+                let books = try decoder.decode([ReadingBook].self, from: data)
                 guard Set(books.map(\.id)).count == books.count else { throw WebDAVBackupError.corrupt(category) }
-            case .replaceRules: _ = try JSONDecoder().decode([ReplaceRule].self, from: data)
-            case .rss: _ = try await RSSBackupCodec.decode(data)
+                contents = .books(books.count)
+            case .replaceRules: contents = .rules(try decoder.decode([ReplaceRule].self, from: data).count)
+            case .rss:
+                let snapshot = try await RSSBackupCodec.decode(data)
+                contents = .rss(sources: snapshot.sources.count, states: snapshot.statuses.count)
             }
-        } catch { throw WebDAVBackupError.corrupt(category) }
+        } catch is CancellationError { throw CancellationError() }
+        catch {
+            try Task.checkCancellation()
+            throw WebDAVBackupError.corrupt(category)
+        }
+        try Task.checkCancellation()
+        return contents
     }
 
     private struct PendingRestore {
@@ -468,41 +533,73 @@ extension WebDAVManager {
         return result
     }
 
-    nonisolated func backupManifest(_ name: String) async throws -> WebDAVBackupManifest {
-        let data = try await get(path: try WebDAVBackupLayout.directory(name) + "manifest.json", maximumBytes: 65_536)
+    nonisolated func backupManifest(_ name: String, restoreConnection: UInt64? = nil) async throws -> WebDAVBackupManifest {
+        let data = try await get(path: try WebDAVBackupLayout.directory(name) + "manifest.json", maximumBytes: 65_536,
+                                 restoreConnection: restoreConnection)
         return try WebDAVBackupLayout.decodeManifest(data, expectedName: name)
     }
 
-    /// 先下载并逐一校验大小、SHA-256 与内容格式，再检查空间，全部通过后才修改本机。
-    @discardableResult
-    nonisolated func restoreVersion(_ name: String, categories: Set<WebDAVBackupCategory>,
-                                    local: any WebDAVBackupLocalData) async throws -> [WebDAVBackupCategory] {
+    /// 只下载所选分类，校验大小、SHA-256 与内容格式；不创建恢复日志，不改本机库。
+    @concurrent nonisolated func prepareRestore(_ name: String, categories: Set<WebDAVBackupCategory>,
+                                                local: any WebDAVBackupLocalData,
+                                                matching expectedManifest: WebDAVBackupManifest? = nil) async throws -> WebDAVPreparedRestore {
         try Task.checkCancellation()
         guard !categories.isEmpty else { throw WebDAVBackupError.nothingSelected }
-        let manifest = try await backupManifest(name)
+        let connection = await connectionRevision
+        let manifest = try await backupManifest(name, restoreConnection: connection)
+        // 比较 format 1 实际保存的完整清单：ISO 8601 写入时不保留小数秒。
+        if let expectedManifest,
+           try WebDAVBackupLayout.encodeManifest(expectedManifest) != WebDAVBackupLayout.encodeManifest(manifest) {
+            throw WebDAVBackupError.previewExpired
+        }
+        let entries = manifest.files.filter { categories.contains($0.category) }
+        guard !entries.isEmpty else { throw WebDAVBackupError.nothingToBackUp }
+        guard entries.count == categories.count else { throw WebDAVBackupError.previewExpired }
+        guard entries.reduce(0, { $0 + $1.size }) <= WebDAVBackupLayout.maximumPreviewBytes else {
+            throw WebDAVBackupError.previewTooLarge
+        }
         let directory = try WebDAVBackupLayout.directory(name)
         var staged: [(WebDAVBackupCategory, Data)] = []
-        for entry in manifest.files where categories.contains(entry.category) {
+        var contents: [WebDAVBackupCategory: WebDAVRestoreContents] = [:]
+        for entry in entries {
             try Task.checkCancellation()
             let data: Data
             do {
-                data = try await get(path: directory + entry.category.fileName, maximumBytes: max(1, entry.size))
+                data = try await get(path: directory + entry.category.fileName, maximumBytes: max(1, entry.size),
+                                     restoreConnection: connection)
             } catch let error as URLError where error.code == .dataLengthExceedsMaximum {
                 throw WebDAVBackupError.corrupt(entry.category)
             }
             guard data.count == entry.size, WebDAVBackupLayout.digest(data) == entry.sha256 else {
                 throw WebDAVBackupError.corrupt(entry.category)
             }
-            try await local.validate(entry.category, data)
+            contents[entry.category] = try await local.validate(entry.category, data)
             staged.append((entry.category, data))
         }
-        guard !staged.isEmpty else { throw WebDAVBackupError.nothingToBackUp }
+        try await checkRestoreConnection(connection)
+        return await WebDAVPreparedRestore(contents: contents, version: name, categories: categories,
+            connection: connection, owner: self, payload: .init(staged: staged, local: local))
+    }
+
+    @discardableResult
+    @concurrent nonisolated func applyPreparedRestore(_ prepared: WebDAVPreparedRestore, version: String,
+                                                      categories: Set<WebDAVBackupCategory>) async throws -> [WebDAVBackupCategory] {
+        let payload = try await prepared.take(self, version: version, categories: categories)
+        let staged = payload.staged
         let needed = Int64(staged.reduce(0) { $0 + $1.1.count }) * 2 + 16 * 1_024 * 1_024
-        guard try local.availableBytes() >= needed else { throw WebDAVBackupError.insufficientSpace }
-        // 取消只在修改前生效；开始写入后完成或整体回滚。
+        guard try payload.local.availableBytes() >= needed else { throw WebDAVBackupError.insufficientSpace }
+        // 走唯一的本机恢复事务；确认后不再向远端请求或切换至其他快照。
+        try await checkRestoreConnection(prepared.connection)
         try Task.checkCancellation()
-        try await local.apply(staged)
+        try await payload.local.apply(staged)
         await MainActor.run { self.lastSyncDate = Date() }
         return staged.map(\.0)
+    }
+
+    @discardableResult
+    nonisolated func restoreVersion(_ name: String, categories: Set<WebDAVBackupCategory>,
+                                    local: any WebDAVBackupLocalData) async throws -> [WebDAVBackupCategory] {
+        let prepared = try await prepareRestore(name, categories: categories, local: local)
+        return try await applyPreparedRestore(prepared, version: name, categories: categories)
     }
 }

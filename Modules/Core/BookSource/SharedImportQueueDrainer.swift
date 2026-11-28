@@ -287,7 +287,7 @@ final class SharedImportQueueDrainer: ObservableObject {
     private let importBookFileOverride: ((URL) async throws -> Int)?
     private let importOPMLData: (Data) throws -> Int
     private let importLegadoRSSData: ((Data) throws -> Int)?
-    private let importReplaceRuleData: (Data) throws -> Int
+    private let importReplaceRuleData: (Data) async throws -> Int
     private weak var bookStore: BookStore?
     private var isDraining = false
 
@@ -306,8 +306,8 @@ final class SharedImportQueueDrainer: ObservableObject {
             return RSSStore.shared.addSourcesReturningAdded(sources).count
         },
         importLegadoRSSData: ((Data) throws -> Int)? = nil,
-        importReplaceRuleData: @escaping (Data) throws -> Int = {
-            try ReplaceRuleStore.shared.importFromLegadoData($0)
+        importReplaceRuleData: @escaping (Data) async throws -> Int = {
+            try await ReplaceRuleStore.shared.importFromLegadoData($0)
         }
     ) {
         self.defaults = defaults
@@ -482,7 +482,7 @@ final class SharedImportQueueDrainer: ObservableObject {
             if let importLegadoRSSData { return .init(count: try importLegadoRSSData(data), category: .rss) }
             return try await reviewRSS(.data(data))
         case .replaceRules(let data):
-            return .init(count: try importReplaceRuleData(data), category: .replaceRule)
+            return .init(count: try await importReplaceRuleData(data), category: .replaceRule)
         case .localBook(let staged):
             guard let staged else {
                 return try await importBookFile(url)
@@ -529,7 +529,12 @@ final class SharedImportQueueDrainer: ObservableObject {
         case .rssLegadoJSON:
             return .rssLegadoJSON(try Data(contentsOf: url))
         case .replaceRules:
-            return .replaceRules(try Data(contentsOf: url))
+            do {
+                let data = try DocumentImportReader.read(url, maximumBytes: ReplaceRuleImportParser.maximumBytes)
+                return .replaceRules(data)
+            } catch DocumentImportReader.Failure.tooLarge {
+                throw ReplaceRuleImportError.tooLarge
+            }
         case .localBook(let ext):
             let name = SharedImportPayloadClassifier.stagedFilename(
                 suggestedFilename: suggestedFilename ?? url.lastPathComponent,
@@ -562,7 +567,7 @@ final class SharedImportQueueDrainer: ObservableObject {
             if let importLegadoRSSData { return .init(count: try importLegadoRSSData(data), category: .rss) }
             return try await reviewRSS(.data(data))
         case .replaceRules:
-            return .init(count: try importReplaceRuleData(data), category: .replaceRule)
+            return .init(count: try await importReplaceRuleData(data), category: .replaceRule)
         case .localBook(let ext):
             let tempURL = try writeTemporaryPayload(
                 data,
@@ -782,10 +787,12 @@ enum SharedImportPayloadClassifier {
             if looksLikeBookSourceRoot(root) {
                 return .bookSource(fileExtension: ext.isEmpty ? "json" : ext)
             }
-            if looksLikeReplaceRuleRoot(root) {
-                return .replaceRules
+            return SourcePerfTrace.span("import.classify.rulesOrBook", "main=\(Thread.isMainThread) bytes=\(data.count)") {
+                if ReplaceRuleImportParser.recognizesPack(root, requiresRuleMarker: JSONBookParser.hasExplicitChapters(in: root)) {
+                    return .replaceRules
+                }
+                return .localBook(fileExtension: "json")
             }
-            return .localBook(fileExtension: "json")
         }
 
         if directLocalBookExtensions.contains(ext) || textLocalBookExtensions.contains(ext) || looksLikeText(data) {
@@ -905,28 +912,4 @@ enum SharedImportPayloadClassifier {
         return dictionary["ruleArticles"] != nil
     }
 
-    private static func looksLikeReplaceRuleRoot(_ root: Any) -> Bool {
-        if let array = root as? [[String: Any]] {
-            return array.contains(where: looksLikeReplaceRule)
-        }
-        guard let dictionary = root as? [String: Any] else {
-            return false
-        }
-        if looksLikeReplaceRule(dictionary) { return true }
-        for key in ["replaceRules", "replaceRule", "replaceRuleList", "rules"] {
-            if let nested = dictionary[key], looksLikeReplaceRuleRoot(nested) {
-                return true
-            }
-        }
-        if let nested = dictionary["data"] {
-            return looksLikeReplaceRuleRoot(nested)
-        }
-        return false
-    }
-
-    private static func looksLikeReplaceRule(_ dictionary: [String: Any]) -> Bool {
-        dictionary["pattern"] != nil
-            || dictionary["regex"] != nil
-            || dictionary["replaceRegex"] != nil
-    }
 }

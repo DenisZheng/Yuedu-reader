@@ -65,7 +65,7 @@ extension View {
     /// - Parameter fill: The opaque card color — what the section looks like with
     ///   分組卡片 off, and the fill 透明度 fades in over the glass.
     func interfaceSectionSurface(fill: Color = DSColor.surface) -> some View {
-        modifier(InterfaceSectionSurfaceModifier(fill: fill))
+        modifier(UserAppearanceSectionSurfaceModifier(fill: fill))
     }
 
     /// The surface a hand-drawn card sits on — settings rows built as buttons or
@@ -245,6 +245,19 @@ private struct InterfaceCardSurfaceModifier<SurfaceShape: Shape>: ViewModifier {
 /// row boundaries inside a section can show a faint seam that a single section-wide
 /// glass would not have. SwiftUI has no section-level material to paint instead; if
 /// one ships, this is the place to switch.
+private struct UserAppearanceSectionSurfaceModifier: ViewModifier {
+    let fill: Color
+    @Environment(\.usesUserAppearance) private var usesUserAppearance
+
+    func body(content: Content) -> some View {
+        if usesUserAppearance {
+            content.modifier(InterfaceSectionSurfaceModifier(fill: fill))
+        } else {
+            content.listRowBackground(fill)
+        }
+    }
+}
+
 private struct InterfaceSectionSurfaceModifier: ViewModifier {
     let fill: Color
 

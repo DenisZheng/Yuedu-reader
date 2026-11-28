@@ -1623,7 +1623,10 @@ final class AudiobookPlayer: NSObject, ObservableObject {
         }
         // legado's ACTION_AUDIO_BECOMING_NOISY: the headphones are gone, so playback
         // doesn't carry on out of the speaker.
-        guard reason == .oldDeviceUnavailable, isPlaying else { return }
+        guard reason == .oldDeviceUnavailable else { return }
+        // 来电可能已经暂停播放，拔耳机仍应取消来电结束后的自动续播。
+        shouldResumeAfterInterruption = false
+        guard isPlaying else { return }
         audiobookLog("audio output device went away; pausing")
         AppLogger.info("[Audiobook] headphones disconnected; playback paused", level: .notice)
         pause()

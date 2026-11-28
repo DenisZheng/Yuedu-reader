@@ -1092,7 +1092,7 @@ struct RegexExtractorTests {
 struct ReplaceRuleImportParserTests {
 
     @Test("parses Legado replace-rule export fields")
-    func parsesLegadoReplaceRuleExportFields() throws {
+    func parsesLegadoReplaceRuleExportFields() async throws {
         let json = """
         [
           {
@@ -1117,9 +1117,12 @@ struct ReplaceRuleImportParserTests {
         ]
         """
 
-        let rules = try ReplaceRuleImportParser.parse(data: Data(json.utf8))
+        let review = try await ReplaceRuleImportParser.review(data: Data(json.utf8))
+        let rules = review.rules
 
-        #expect(rules.count == 1)
+        #expect(review.rows.map(\.id) == [1, 2])
+        #expect(review.rows.last?.outcome == .unsupported(["scopeTitle", "scopeContent"]))
+        try #require(rules.count == 1)
         #expect(rules[0].name == "廣告清理 (正文)")
         #expect(rules[0].pattern == #"(?m)^廣告.*$"#)
         #expect(rules[0].replacement == "")
@@ -1130,12 +1133,13 @@ struct ReplaceRuleImportParserTests {
     }
 
     @Test("parses wrapped replacement rules with legacy regex keys")
-    func parsesWrappedReplacementRulesWithLegacyRegexKeys() throws {
+    func parsesWrappedReplacementRulesWithLegacyRegexKeys() async throws {
         let json = """
         {
           "replaceRules": [
             {
               "name": "純文字替換",
+              "pattern": "",
               "regex": "foo",
               "replacement": "bar",
               "scope": "",
@@ -1147,9 +1151,11 @@ struct ReplaceRuleImportParserTests {
         }
         """
 
-        let rules = try ReplaceRuleImportParser.parse(data: Data(json.utf8))
+        let review = try await ReplaceRuleImportParser.review(data: Data(json.utf8))
+        let rules = review.rules
 
-        #expect(rules.count == 1)
+        #expect(!review.hasIssues)
+        try #require(rules.count == 1)
         #expect(rules[0].name == "純文字替換")
         #expect(rules[0].pattern == "foo")
         #expect(rules[0].replacement == "bar")
@@ -1157,6 +1163,73 @@ struct ReplaceRuleImportParserTests {
         #expect(!rules[0].enabled)
         #expect(!rules[0].isRegex)
         #expect(rules[0].sortOrder == 3)
+    }
+
+    @Test("只接受可解释的限定范围，不丢失原始地址或脚本样式的普通文本")
+    func scopeAndReplacementCompatibility() async throws {
+        let bytes = Data(#"""
+        [
+          {"pattern":"x","scope":"https://one.example.invalid/source?key=1#part；https://two.example.invalid"},
+          {"pattern":"x","scope":"某本书"},
+          {"pattern":"x","scope":"   "},
+          {"pattern":"x","scope":21},
+          {"pattern":"x","scopeSource":1},
+          {"pattern":"x","scopeTitle":0.25},
+          {"pattern":"x","timeoutMillisecond":100},
+          {"pattern":"x","timeoutMillisecond":3000.1},
+          {"pattern":"x","replacement":"@js:不用執行"},
+          {"pattern":" x ","replacement":"@js:普通文字","isRegex":false,"timeoutMillisecond":"3000","scope":null},
+          null
+        ]
+        """#.utf8)
+        let review = try await ReplaceRuleImportParser.review(data: bytes)
+        #expect(review.rows.map(\.id) == Array(1...11))
+        #expect(Array(review.rows[1...8].map(\.outcome)) == [
+            .unsupported(["scope"]), .unsupported(["scope"]), .invalid(["scope"]),
+            .unsupported(["scopeSource"]), .invalid(["scopeTitle"]), .unsupported(["timeoutMillisecond"]),
+            .invalid(["timeoutMillisecond"]), .unsupported(["replacement"])
+        ])
+        #expect(review.rows.last?.outcome == .invalid([]))
+        try #require(review.rules.count == 2)
+        let addressList = try #require(review.rules.first?.scope)
+        #expect(addressList == "https://one.example.invalid/source?key=1#part；https://two.example.invalid")
+        #expect(ReplaceRuleStore.scope(addressList, matches: "https://one.example.invalid/source?key=1#part"))
+        #expect(ReplaceRuleStore.scope(addressList, matches: "https://two.example.invalid"))
+        #expect(review.rules.last?.pattern == " x ")
+        #expect(review.rules.last?.replacement == "@js:普通文字")
+        #expect(review.rules.last?.scope == "global")
+    }
+
+    @Test("预览在每层只接受一个规则清单", arguments: [
+        #"{"rules":[],"data":[{"id":42,"pattern":"("}]}"#,
+        #"{"replaceRuleList":{"data":[{"pattern":"A"}],"replaceRules":[]}}"#,
+        #"{"pattern":"A","rules":[],"data":[]}"#,
+        #"[{"pattern":"A","rules":[],"data":[]}]"#,
+        #"{"data":[{"pattern":"A","rules":[],"data":[]}]}"#,
+        #"[{"pattern":"A","data":null}]"#
+    ])
+    func rejectsAmbiguousRuleEnvelopes(json: String) async {
+        await #expect(throws: ReplaceRuleImportError.ambiguousPack) {
+            _ = try await ReplaceRuleImportParser.review(data: Data(json.utf8))
+        }
+    }
+
+    @Test("数组行不展平普通内层清单，规则的无关元数据不参与包装校验")
+    func invalidNestedRuleRowDoesNotChangePackShape() async throws {
+        let bytes = Data(#"[{"pattern":"A","metadata":{"rules":[],"data":[]}},{"data":[{"pattern":"B"}]}]"#.utf8)
+        let review = try await ReplaceRuleImportParser.review(data: bytes)
+        #expect(review.rows.count == 2)
+        #expect(review.rules.map(\.pattern) == ["A"])
+        #expect(review.rows.last?.outcome == .invalid([]))
+    }
+
+    @Test("只检查正则模式的语法，纯文本括号仍可导入")
+    func invalidRegexVsLiteral() async throws {
+        let bytes = Data(#"[{"regex":"(","isEnabled":false},{"pattern":"(","isRegex":false,"replacement":"B"}]"#.utf8)
+        let review = try await ReplaceRuleImportParser.review(data: bytes)
+        #expect(review.rows.first?.outcome == .invalid(["regex"]))
+        #expect(review.rules.count == 1)
+        #expect(ReplaceRuleEngine.apply(review.rules, to: "(") == "B")
     }
 }
 

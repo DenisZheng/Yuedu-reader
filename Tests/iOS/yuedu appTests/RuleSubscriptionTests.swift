@@ -189,6 +189,112 @@ struct RuleSubscriptionTests {
         }
     }
 
+    @Test("订阅不允许把非标准布尔值当作关闭标题作用域")
+    func replacementSubscriptionRejectsNonBooleanScope() async {
+        let bytes = Data(#"[{"id":1,"pattern":"正文"},{"id":2,"pattern":"标题","scopeTitle":"sometimes"}]"#.utf8)
+        await #expect(throws: RuleSubscriptionFailure.self) {
+            _ = try await RuleSubscriptionUpdateService.compareReplacements(
+                RuleSubscription(name: "替换包", url: "https://example.invalid/rules.json"), bytes: bytes, existing: []
+            )
+        }
+    }
+
+    @Test("同一混合包从订阅入口整包拒绝，不改磁盘上的现有规则")
+    func mixedReplacementSubscriptionDoesNotWrite() async throws {
+        let root = try directory(); defer { clean(root) }
+        let file = root.appendingPathComponent("replace.json")
+        let rules = ReplaceRuleStore(file: file)
+        rules.add(ReplaceRule(id: "legado:42", name: "本地正文", pattern: "原样"))
+        try await rules.persistPendingChanges()
+        let before = try Data(contentsOf: file)
+        let revision = rules.revision
+
+        let store = RuleSubscriptionStore(file: root.appendingPathComponent("subscriptions.json"),
+            fetch: { _, _ in MixedReplaceRuleFixture.data },
+            prepare: { value, bytes in try await RuleSubscriptionUpdateService.replacements(value, bytes: bytes, store: rules) })
+        var value = RuleSubscription(name: "替换包", url: "https://example.invalid/replace.json")
+        value.type = .replaceRules
+        value.silentUpdate = true
+        try await store.upsert(value)
+        await store.check(value.id)
+        #expect(store.outcomes[value.id] == .failed(RuleSubscriptionFailure.invalidPack.localizedDescription))
+        #expect(store.subscriptions.first?.lastSuccessfulCheck == nil)
+        #expect(rules.revision == revision)
+        #expect(try Data(contentsOf: file) == before)
+    }
+
+    @Test("订阅保留非空替换别名，规则在原始地址列表中的每个源生效", arguments: [
+        [""],
+        ["https://news.example.invalid/feed?editions=morning,evening;late#day"],
+        ["https://a.example.invalid/feed", "https://b.example.invalid/feed"],
+        ["https://a.example.invalid/feed?editions=morning,evening", "https://b.example.invalid/feed"],
+        ["https://a.invalid/?v=x,", "https://b.invalid/feed"],
+        ["https://a.invalid/?q=x,http://"],
+        ["https://a.invalid/?q=x,http://", "https://b.invalid/feed"]
+    ])
+    func replacementSubscriptionPreservesAliasAndScope(targets: [String]) async throws {
+        let root = try directory(); defer { clean(root) }
+        let rules = ReplaceRuleStore(file: root.appendingPathComponent("replace.json"))
+        let scope = targets.joined(separator: targets.first?.contains(",") == true ? ";" : ",\n")
+        let bytes = try JSONSerialization.data(withJSONObject: [
+            ["id": 42, "pattern": "A", "replacement": "", "replace": "B", "scope": scope]
+        ])
+        let store = RuleSubscriptionStore(file: root.appendingPathComponent("subscriptions.json"), fetch: { _, _ in bytes },
+            prepare: { value, bytes in try await RuleSubscriptionUpdateService.replacements(value, bytes: bytes, store: rules) })
+        var value = RuleSubscription(name: "替换包", url: "https://example.invalid/replace.json")
+        value.type = .replaceRules
+        value.silentUpdate = true
+
+        try await store.upsert(value)
+        await store.check(value.id)
+        #expect(store.outcomes[value.id] == .updated(1))
+        #expect(rules.rules.map(\.scope) == [scope.isEmpty ? "global" : scope])
+        for target in targets {
+            let applicable = ReplaceRuleStore.rules(for: target, from: rules.rules)
+            #expect(ReplaceRuleEngine.apply(applicable, to: "A") == "B")
+        }
+        if !scope.isEmpty {
+            for target in ["https://unrelated.example.invalid", "https://a.invalid/?v=x", "https://a.invalid/?q=x"] {
+                let other = ReplaceRuleStore.rules(for: target, from: rules.rules)
+                #expect(ReplaceRuleEngine.apply(other, to: "A") == "A")
+            }
+        }
+    }
+
+    @Test("订阅整包拒绝坏行或多个外层候选，既有同 ID 规则不变", arguments: [
+        #"[{"id":42,"pattern":"(","isRegex":true}]"#,
+        #"[{"id":42,"pattern":"A","replacement":"B"},null]"#,
+        #"{"rules":[],"data":[{"id":42,"pattern":"("}]}"#,
+        #"{"data":[{"id":42,"pattern":"("}],"rules":[{"id":42,"pattern":"A","replacement":"B"}]}"#,
+        #"{"id":42,"pattern":"A","replacement":"B","rules":[],"data":[]}"#,
+        #"[{"id":42,"pattern":"A","replacement":"B","rules":[],"data":[]}]"#,
+        #"{"data":[{"id":42,"pattern":"A","replacement":"B","rules":[],"data":[]}]}"#,
+        #"[{"id":42,"pattern":"A","replacement":"B"},{"id":43,"pattern":"C","data":null}]"#
+    ])
+    func replacementSubscriptionRejectsInvalidRows(json: String) async throws {
+        let root = try directory(); defer { clean(root) }
+        let file = root.appendingPathComponent("replace.json")
+        let rules = ReplaceRuleStore(file: file)
+        rules.add(ReplaceRule(id: "legado:42", name: "有效规则", pattern: "A", replacement: "旧"))
+        try await rules.persistPendingChanges()
+        let before = try Data(contentsOf: file)
+        let revision = rules.revision
+        let store = RuleSubscriptionStore(file: root.appendingPathComponent("subscriptions.json"), fetch: { _, _ in Data(json.utf8) },
+            prepare: { value, bytes in try await RuleSubscriptionUpdateService.replacements(value, bytes: bytes, store: rules) })
+        var value = RuleSubscription(name: "替换包", url: "https://example.invalid/replace.json")
+        value.type = .replaceRules
+        value.silentUpdate = true
+
+        value.lastSuccessfulCheck = 111_000
+        try await store.upsert(value)
+        await store.check(value.id, now: Date(timeIntervalSince1970: 222))
+        #expect(store.outcomes[value.id] == .failed(RuleSubscriptionFailure.invalidPack.localizedDescription))
+        #expect(store.subscriptions.first?.lastSuccessfulCheck == 111_000)
+        #expect(rules.revision == revision)
+        #expect(try Data(contentsOf: file) == before)
+        #expect(ReplaceRuleEngine.apply(rules.rules, to: "A") == "旧")
+    }
+
     @Test("替换规则确认后实际落盘，重复检查不写，更新保留本地开关和名称")
     func replacementPersistence() async throws {
         let root = try directory(); defer { clean(root) }
@@ -209,7 +315,7 @@ struct RuleSubscriptionTests {
         #expect(store.outcomes[value.id] == .upToDate && unchanged == bytes)
         var local = try #require(rules.rules.first); local.enabled = false; local.name = "本地名称"
         rules.update(local); try await rules.persistPendingChanges()
-        await fixture.set(Data(#"[{"id":42,"name":"远端名称","pattern":"next","replacement":"B"}]"#.utf8))
+        await fixture.set(Data(#"{"data":[{"id":42,"name":"远端名称","pattern":"next","replacement":"B"}]}"#.utf8))
         await store.check(value.id); await store.confirm(value.id)
         #expect(rules.rules.count == 1 && rules.rules.first?.id == local.id)
         #expect(rules.rules.first?.enabled == false && rules.rules.first?.name == "本地名称")

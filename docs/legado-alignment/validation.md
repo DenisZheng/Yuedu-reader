@@ -2028,3 +2028,220 @@ bash .artifacts/batch-review/run-regressions.sh .artifacts/batch-review/final-re
 用户随后要求把当前项目状态写入文档。统一入口为 [项目状态页](STATUS.md)，根 README、文档索引、执行计划和批次文档链接到该入口；旧差距审计明确标为历史快照。S8／发布门槛保持未全部接受，Files 文件夹导航限制、段评写动作及其他后置项继续单列。上述合并 SHA 是最新业务合入点，后续纯文档提交不改变业务树。
 
 本次文档校验实际输出 `Documentation OK: 13 files, UTF-8/LF, paired code fences, 293 local links`，随后 `git diff --check: OK`；同时再次确认业务／测试／配置树等于已验收功能提交。仅更新状态及链接，不新增代码、依赖或发布操作。
+
+## legado-ios 吸收第一批：净化规则导入与同名章（2026-11-28）
+
+按 [吸收方案](legado-ios-adoption-plan.md) 从 `5f2bea2d` 建立 `feat/legado-ios-adoption`。对照同级 legado-ios `2ea3814` 和 Android `330e606c`，独立实现行为，不复制 GPL 源码、素材或真实规则包；未改规则落盘格式、换源提交链、播放或 RSS 路由。
+
+- 设置页读本地 JSON 后逐条预览；标题／书源替换、排除范围、无法解释的限定范围、非默认超时、正则 JS 替换明确列为不支持，坏字段列为无效。只在确认后导入受支持项；共享文件和规则包订阅没有部分确认路径，因此整包拒绝。现有全局和 HTTP(S) 源地址列表规则保留；不把书名解释成全局。预览不是正则试跑，不能恢复旧版本已丢弃的字段。
+- 目录匹配仍是高分标题优先、其次相同章号、最后回到原位置；只有同分或同章号时改选离旧位置最近的候选，同距取较小下标。对照用例原位置 12、同名下标 4／13，旧结果 4，新结果 13。实际换源提交测试覆盖读取已保存位置以及收到阅读器现场锚点两种调用；未用真实网站从详情或阅读器 UI 重开验收。
+- 用 Xcode 27.2（27B52）、`Reader-Fork-Dev`、iPhone 18 Pro Max／iOS 27.2。日志在 `.artifacts/legado-ios-adoption.J3iPZf/`：`rules-red.log` 两项失败，确认未授权的混合包原来会写入且订阅误接收非法开关；`chapter-red.log` 在导入修正后两项导入回归通过，换源原策略的标题、章号和提交断言仍失败。两次均是实际测试失败，不是编译失败。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+LOGDIR=.artifacts/legado-ios-adoption.J3iPZf
+export YUEDU_DEST="id=$(<"$LOGDIR/ui-device")"
+bash scripts/xctest.sh -l "$LOGDIR/final-regression.log" -- \
+  -only-testing:'yuedu appTests/ReplaceRuleDisplayTimeTests' \
+  -only-testing:'yuedu appTests/ReplaceRuleImportParserTests' \
+  -only-testing:'yuedu appTests/RuleSubscriptionTests' \
+  -only-testing:'yuedu appTests/SharedImportQueueDrainerTests' \
+  -only-testing:'yuedu appTests/ChapterAlignmentTests' \
+  -only-testing:'yuedu appTests/ShelfVersionSwitchTests' \
+  -only-testing:'yuedu appUITests/ReplaceRuleImportUITests'
+caffeinate -is bash scripts/xctest.sh -t 240 -l "$LOGDIR/ui-root-awake.log" -- \
+  -only-testing:'yuedu appUITests/ReplaceRuleImportUITests'
+```
+
+第一条实际输出 `Test run with 74 tests in 6 suites passed after 9.572 seconds`，但当次 UI 卡在文件夹导航，整次 `** TEST FAILED **`。按既有 [Files 根层验证办法](main-js-source-batch.md) 把合成的 `replace-review-fixture.json` 独占复制到新模拟器的「我的 iPhone」根层（SHA-256 `a517451444caa42a567bd48480819a0b9588525785e40b31ba13570e3b7af76a`），不改用户数据或文件系统权限。根层第一轮 `ui-root-regression.log` 已显示 4 条及原因，随后主机休眠导致点「取消」事件超时；仅对复跑命令使用 `caffeinate`。实际结果 `Executed 1 test, with 0 failures (0 unexpected)`、`** TEST SUCCEEDED **`；验证真实系统选择器→看见四条→取消后未出现新规则→重新选择并确认→只出现支持项。相应 xcresult 见日志结尾 `Test-Reader-Fork-Dev-2026.11.28_14-06-49-+0800.xcresult`。文件夹导航的原有问题没有修复。
+
+最低 iOS 17、iPad、VoiceOver 和真人阅读时的换源未实机验证；不改变 S8 和发布状态。若撤掉预览，保留混合包整包拒绝；换源只回退候选策略，不批量回写用户进度。未提交、推送或发布。
+
+## legado-ios 吸收第二批：WebDAV 恢复内容预览（2026-11-28）
+
+在 `feat/legado-ios-adoption` 增加「预览所选分类」。历史列表仍只读清单；预览显式下载并校验选中的分类、显示文件内的书架元数据／书源／规则／RSS 源及状态数。预览期间不写目标文件、不创建恢复日志、不改上次同步时间；确认使用同一份已校验数据，仍进入现有空间检查和事务回滚，不再下载。改账号、选择或版本使旧预览失效；已应用的预览不能重放。每分类及选中分类合计的下载上限均为 64 MiB，超出可减少选择。保留 format 1、Fork 远端路径和按分类替换语义，不做整包合并、自动清理或原书上传。
+
+沿用第一批的 Xcode、`Reader-Fork-Dev` 与独立 iPhone／iOS 27.2 模拟器，运行：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+LOGDIR=.artifacts/legado-ios-adoption.J3iPZf
+export YUEDU_DEST="id=$(<"$LOGDIR/ui-device")"
+caffeinate -is bash scripts/xctest.sh -l "$LOGDIR/webdav-regression.log" -- \
+  -only-testing:'yuedu appTests/WebDAVVersionedBackupTests' \
+  -only-testing:'yuedu appTests/RSSWebDAVBackupTests' \
+  -only-testing:'yuedu appUITests/WebDAVRestoreUITests'
+```
+
+- 实际输出 `Test run with 10 tests in 2 suites passed after 0.345 seconds`、`Executed 3 tests, with 0 failures (0 unexpected)`、`** TEST SUCCEEDED **`。xcresult 见日志结尾 `Test-Reader-Fork-Dev-2026.11.28_15-08-38-+0800.xcresult`。版本化模拟服务返回 format 1 的 2 本书／3 条规则；每次预览只发 3 次 GET（清单和两类），取消零本机写入；确认即使服务端已换掉文件仍使用已展示的字节，额外请求为 0，未勾选的 RSS 原样。另验了取件期间切换连接、超出总预算、损坏及空间不足时不写入。
+- RSS 实际快照 1 个源／1 条状态的数量与内容同步校验；取消不是损坏。3 项 UI 回归覆盖已有恢复日志故障和强杀恢复，**不是**新预览页在真实服务器或各设备的实测。没有接入真实账户，未验证最低 iOS 17、iPad 或 VoiceOver。
+- 回退只撤下预览步骤并保留原恢复入口的校验、空间检查和中断恢复；不删除本机数据、云端版本或恢复日志。
+
+### 第二批增量：有声书中断期间旧输出断开
+
+借用 legado-ios 的事件顺序提醒，不搬它的 TTS 状态机。用本地静音 WAV 启动真实 `AudiobookPlayer`，发送系统通知形状的合成事件。原实现中断时先暂停，旧输出断开分支因 `isPlaying == false` 提前结束，随后收到系统续播许可仍记着恢复；`audio-red.log` 的 `.outputRemoved` 参数实际失败（`audio interruption ended resume=true options=1`）。修正后，旧输出断开立即清除原恢复标记，只有仍在播放才再暂停，不加第二份状态或播放器。
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+LOGDIR=.artifacts/legado-ios-adoption.J3iPZf
+export YUEDU_DEST="id=$(<"$LOGDIR/ui-device")"
+caffeinate -is bash scripts/xctest.sh -l "$LOGDIR/audio-regression.log" -- \
+  -only-testing:'yuedu appTests/AudiobookChapterTransitionTests/interruptionRespectsRouteAndListener(_:)' \
+  -only-testing:'yuedu appTests/AudiobookChapterTransitionTests/interruptionPausesAndResumes()' \
+  -only-testing:'yuedu appTests/AudiobookChapterTransitionTests/interruptionWithoutResumeStaysPaused()' \
+  -only-testing:'yuedu appTests/AudiobookChapterTransitionTests/interruptionDoesNotResumeAPausedBook()' \
+  -only-testing:'yuedu appTests/AudiobookChapterTransitionTests/headphonesUnpluggedPauses()'
+```
+
+同一隔离模拟器实际输出 `Test run with 5 tests in 1 suite passed after 4.311 seconds`、`** TEST SUCCEEDED **`。xcresult 见日志结尾 `Test-Reader-Fork-Dev-2026.11.28_15-16-19-+0800.xcresult`。覆盖暂停时拔耳机、手动暂停／停止、普通新输出通知、活动播放时拔耳机、系统允许／拒绝续播。普通新输出通知不等于真实蓝牙切换；没有做真机来电、拔插及扬声器验收。回退只影响这条恢复标记清理，不修改用户播放进度或 App 设置。
+
+## legado-ios 吸收分支审查修正（2026-11-28）
+
+按用户要求留在 `feat/legado-ios-adoption`，HEAD 仍为 `5f2bea2d`，未提交、合并或推送。以自建规则和目录为输入，优先修正导入会把「替换」变成「删除」的回归。
+
+- 主机取基线与分支的解析代码运行同一包 `{"pattern":"A","replacement":"","replace":"B"}`；`alias-before.log` 为 `baseline="B" branch="" preview_accepted=true`，`alias-after.log` 为 `baseline="B" branch="B" preview_accepted=true`。恢复旧版首个非空文本别名；没有非空替换值仍表示删除，显式坏类型仍报无效。
+- 手动与订阅复用同一审查。完整源地址保留逗号、分号和片段，不匹配截断的地址；只有各段均为完整地址才按列表匹配。坏正则由阅读器同一编译器检查、不试跑；在手动包里标无效，订阅整包拒绝且同 ID 的有效本机规则不变。共享 `[{"pattern":"x"},null]` 先识别为规则包，再由规则审查拒绝，不进入书籍导入。修前 iOS `red.log` 实际输出 `Test run with 6 tests in 4 suites failed ... with 15 issues`，包含这些路径和 WebDAV 日期断言。
+- 换源章号从旧位置向两边找，同距先小下标，命中即停止，不改标题评分或搜索窗口。主机 `python3 "$LOGDIR/probe.py" chapters` 用 5,000 章选中同一下标 `1000`；除首轮初始化外，修前约 17.7–18.5 ms、修后约 0.018–0.034 ms。这是相同合成输入上对匹配函数的测量，不是 App 换源端到端耗时。
+- WebDAV 按 format 1 规范化后的完整清单比较；刚创建的 `1000.5` 秒经编码写成整数秒不会误报，摘要不符仍在下载分类前拒绝。备份格式和恢复事务不变。
+- 替换规则 UI 用例每次自行在 Files 根层写入唯一夹具、启动 Debug 模拟器隔离规则库，通过真实管理页和文件选择器。验证五条审查结果，取消无规则文件；再次打开确认后，文件仅有一条规则，替换值为 `B` 且完整源地址不变。不需要预置输入、清除模拟器或触碰已有规则库。
+
+Xcode 27.2、`Reader-Fork-Dev`、iPhone 18 Pro Max／iOS 27.2。日志目录 `.artifacts/legado-ios-review.QNl7uS/`，xcresult 路径在各日志末尾。实际命令与决定性输出：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+LOGDIR=.artifacts/legado-ios-review.QNl7uS
+export YUEDU_DEST="id=$(<.artifacts/legado-ios-adoption.J3iPZf/ui-device)"
+caffeinate -is bash scripts/xctest.sh -l "$LOGDIR/import-regression.log" -- \
+  -only-testing:'yuedu appTests/ReplaceRuleDisplayTimeTests' \
+  -only-testing:'yuedu appTests/ReplaceRuleImportParserTests' \
+  -only-testing:'yuedu appTests/RuleSubscriptionTests' \
+  -only-testing:'yuedu appTests/SharedImportQueueDrainerTests'
+export YUEDU_DEST="id=$(<"$LOGDIR/device")"
+caffeinate -is bash scripts/xctest.sh -l "$LOGDIR/remaining-regression.log" -- \
+  -only-testing:'yuedu appTests/ChapterAlignmentTests' \
+  -only-testing:'yuedu appTests/ShelfVersionSwitchTests' \
+  -only-testing:'yuedu appTests/WebDAVVersionedBackupTests' \
+  -only-testing:'yuedu appUITests/ReplaceRuleImportUITests'
+caffeinate -is bash scripts/xctest.sh -t 240 -l "$LOGDIR/ui-rerun.log" -- \
+  -only-testing:'yuedu appUITests/ReplaceRuleImportUITests'
+```
+
+三条均输出 `** TEST SUCCEEDED **`：导入 51 项／4 套；换源及 WebDAV 38 项／3 套，新模拟器 UI 1 项零失败；同一模拟器不清数据重跑 UI 1 项零失败。`ruby scripts/check_localizations.rb` 输出 `Localization OK: Resources/*.lproj/Localizable.strings (5 files, 4414 keys)`。不以这些结果替代真机、最低 iOS 17 或真实 WebDAV 验收。回退时保留不安全规则整包拒绝，不自动恢复会误删或扩大作用范围的旧路径；不修改用户已有规则、书架进度或服务端备份。
+
+## legado-ios 吸收分支复审修正（2026-11-28）
+
+仍在 `feat/legado-ios-adoption`，HEAD 为 `5f2bea2d`，未提交、合并或推送。只改净化规则范围、规则包解包和共享 JSON 的类型识别，不改保存格式或迁移现有规则。
+
+- 导入与阅读共用地址列表解析：只有分隔符后跟下一个 HTTP(S) 地址才拆分，连续逗号和换行算一处分界。保留查询、路径和片段里的其他标点，按原地址精确匹配。已有落盘规则与新导入规则在两种复现列表的两个目标源上都实际替换正文；无关源、截断地址和本地书的正文不变。订阅更新用同一套范围验证。
+- 每一层只允许一组规则。`rules` 与 `data` 同时存在时，不论第一组为空还是含有效规则，订阅都报无效，不替换原有文件、不推进成功时间；单独的 `data` 包裹仍可更新。手动预览遇到多个候选明确提示只保留一组，不提供部分保存。
+- 共享时复用 JSON 书籍解析器的章节识别。确实有 `chapters` 但只有空 `replaceRules` 的输入仍按书籍打开，已验证读到原章节；`[{"pattern":"x"},null]` 仍按坏规则包拒绝，不会导入成书。
+
+修前 `red.log` 的三个参数化测试实际报告 `Test run with 3 tests in 3 suites failed ... with 17 issues`。主机执行 `python3 "$LOGDIR/scope-probe.py"`，修前两组均为 `a=false b=false truncated=false`，修后一致为 `a=true b=true truncated=false`。App 回归使用 Xcode 27.2、`Reader-Fork-Dev`、既有隔离 iPhone 18 Pro Max／iOS 27.2 模拟器：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+export YUEDU_DEST="id=$(<.artifacts/legado-ios-review.QNl7uS/device)"
+LOGDIR=.artifacts/legado-ios-recheck.Hzz8Ih
+caffeinate -is bash scripts/xctest.sh -l "$LOGDIR/regression.log" -- \
+  -only-testing:'yuedu appTests/ReplaceRuleDisplayTimeTests' \
+  -only-testing:'yuedu appTests/ReplaceRuleImportParserTests' \
+  -only-testing:'yuedu appTests/RuleSubscriptionTests' \
+  -only-testing:'yuedu appTests/SharedImportQueueDrainerTests' \
+  -only-testing:'yuedu appUITests/ReplaceRuleImportUITests'
+```
+
+实际输出 `Test run with 53 tests in 4 suites passed after 9.417 seconds`、`Executed 1 test, with 0 failures (0 unexpected)`、`** TEST SUCCEEDED **`。xcresult 见 `regression.log` 末尾 `Test-Reader-Fork-Dev-2026.11.28_16-54-57-+0800.xcresult`。`ruby scripts/check_localizations.rb` 输出 `Localization OK: Resources/*.lproj/Localizable.strings (5 files, 4415 keys)`；本轮未跑全量、真机或最低 iOS 17。回退不得恢复多候选包静默更新、不安全部分导入或把不识别的范围改成全局；不改用户落盘规则。
+
+## 替换规则相邻输入复审修正（2026-11-28）
+
+仍在主工作树 `feat/legado-ios-adoption`，HEAD `5f2bea2d`。未提交、合并或推送。本轮使用同一份修前源码（`ReplaceRuleStore.swift` 指纹 `dd422aad115d4e7cf9c986fe03bb0e5a9982563b`）复现；`red.log` 的 3 项参数化测试报 35 个问题。
+
+- 单对象、数组行及 `data` 包里的数组行使用同一歧义检查。即使合法更新排在歧义行前，订阅也整包拒绝；原规则字节、修订、正文行为和成功时间 `111000` 都不变，不推进到 `222000`。手动预览同样报歧义，不能确认部分导入。
+- `,;` 的分号才是本例的列表边界，前面的查询逗号保留；分隔符后只有 `http://` 而没有有效主机时不拆分。保留既有逗号加换行分界。落盘旧规则、手动导入和订阅都实际替换完整目标源上的正文；截断地址、无关源和本地书不变。测试调用与生产阅读共用的规则选择，另验证停用过滤和排序。
+- `JSONBookParser` 共用 `chapters`、`chapterList`、`chapter_list`、`toc` 的字段和章节数组判断。带这些字段及空 `replaceRules` 的书正常读出原章；通用 `data` 容器不能凭相似内容盖过歧义规则包，规则数组混入 `null` 也仍拒绝。
+- 隔离宿主不启动用户主题或字体观察，正常启动仍走原外观路径。UI 继续用真实 Files 选择器、预览和落盘；另比较打开到关闭规则页前后的 App 标准持久偏好域，只报告一致与否。诊断中曾定位到字体观察触发 `yd_reader_overlay_layout_data` 改写；移除该依赖后两次断言均通过。未在有用户数据的模拟器上写入探针值。
+
+日志目录 `.artifacts/legado-ios-review-boundaries.ooUSID/`；Xcode 27.2、`Reader-Fork-Dev`、本轮创建的隔离 iPhone 18 Pro Max／iOS 27.2 模拟器。以下两个命令串行运行，同机不清数据：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+LOGDIR=.artifacts/legado-ios-review-boundaries.ooUSID
+export YUEDU_DEST="id=$(<"$LOGDIR/ui-device")"
+caffeinate -is bash scripts/xctest.sh -l "$LOGDIR/final-regression.log" -- \
+  -only-testing:'yuedu appTests/ReplaceRuleDisplayTimeTests' \
+  -only-testing:'yuedu appTests/ReplaceRuleImportParserTests' \
+  -only-testing:'yuedu appTests/RuleSubscriptionTests' \
+  -only-testing:'yuedu appTests/SharedImportQueueDrainerTests' \
+  -only-testing:'yuedu appUITests/ReplaceRuleImportUITests'
+caffeinate -is bash scripts/xctest.sh -t 300 -l "$LOGDIR/final-ui-repeat.log" -- \
+  -only-testing:'yuedu appUITests/ReplaceRuleImportUITests'
+```
+
+两条均输出 `** TEST SUCCEEDED **`。核心 `Test run with 54 tests in 4 suites passed after 9.415 seconds`；两次 UI 各 `Executed 1 test, with 0 failures (0 unexpected)`。`python3 "$LOGDIR/scope-probe.py"` 的尾逗号用例从 `a=false b=true truncated=true` 变为 `a=true b=true truncated=false`，含残缺 `http://` 的两个用例从 `supported=false` 变为 `supported=true`。`ruby scripts/check_localizations.rb` 输出 `Localization OK: Resources/*.lproj/Localizable.strings (5 files, 4415 keys)`；`git diff --check` 无报错。未跑全量、最低 iOS 17、真机或真实 WebDAV；本轮未改换源、WebDAV 或播放器。无需迁移或回退数据，若回退代码须保留歧义整包拒绝和精确范围语义。
+
+交接时用 `git hash-object Modules/Core/Replace/ReplaceRuleStore.swift` 核对 `5d872b2dab1a6be68be42125b50651cbd28afd3e`；`JSONBookParser` 所在 `Modules/Core/EPUB/BookParsing.swift` 为 `aaec1f25ef90cd823d22bee71e1c7f1a79cd75bf`。14 个受测文件指纹见 `final-tested-files.txt`，包括目前未跟踪的 `Tests/iOS-UI/ReplaceRuleImportUITests.swift`，普通 `git diff` 不显示该文件。
+
+## 规则包结构、嵌套目录与旧范围兼容（2026-11-28）
+
+在主工作树 `feat/legado-ios-adoption`、HEAD `5f2bea2d` 开始前，14 个上轮指纹全部匹配；不是看到了旧工作树。上轮把数组里的包装形状直接归为坏行，没有遍历其子清单；章节识别共享了键名却没共享查找；范围扫描保留了合法查询逗号，但没处理应当丢弃的主机后空分隔。本轮没有修改规则落盘格式、用户偏好迁移和生产外观。
+
+- 沿已知包装和数组递归做歧义检查；即使是格式不支持的内层行，遇到双清单也拒绝整包。`[{"pattern":"A"},{"data":{"rules":[],"data":[]}}]` 及多一层数组的变体不提供手动确认，实际存储文件不存在，修订仍为零。没有歧义的内层包装仍是无效行，不展平成规则；不扫描规则任意元数据。
+- 共享分流根层仍要求明确章节字段。字段以内复用正文查找，读出首个章节即可；`toc.items`、`toc.data` 及更深目录能读出「第一章」并走书籍导入。根级 `data` 不作为明确章节证据，原歧义规则包仍拒绝。
+- 连续分隔符优先保留能成为前一个完整地址的标点，不能留在主机/端口时按旧空分隔处理。已保存规则与新导入规则实际覆盖双逗号、混合分隔、路径/查询/片段末尾标点和残缺 `http://`；没有把应保留的尾逗号截掉，也没有让整份列表命中为一个地址。
+- Debug 模拟器宿主的偏好快照与比较由 actor 持有，读取入口断言不在主队列，页面只拿比较结果。实测打开、取消、确认、关页之后，标准持久偏好域未变；测试不输出偏好内容。外观修饰器的非阻断重复未混入本轮改动。
+
+日志在 `.artifacts/legado-ios-contracts.VRw62I/`。`python3 "$LOGDIR/probe.py"` 抽取本地生产解析与分流分支，修前 `nested-pack: confirmable=1/2`、`toc.items`／`toc.data` 的 `route=replaceRules`、`legacy-repeated` 的 `current=[false, false, false] accepted=false`；修后分别为 `ambiguousPack (no confirmation)`、`route=localBook(fileExtension: "json")`、`current=[true, true, false] accepted=true`，根级 `data` 对照仍为 `replaceRules`。实际 iOS 回归另覆盖手动确认、共享队列和规则文件：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)"
+export YUEDU_SCHEME=Reader-Fork-Dev
+LOGDIR=.artifacts/legado-ios-contracts.VRw62I
+export YUEDU_DEST="$(<"$LOGDIR/destination")"
+caffeinate -is bash scripts/xctest.sh -l "$LOGDIR/regression.log" -- \
+  -only-testing:'yuedu appTests/ReplaceRuleDisplayTimeTests' \
+  -only-testing:'yuedu appTests/ReplaceRuleImportParserTests' \
+  -only-testing:'yuedu appTests/RuleSubscriptionTests' \
+  -only-testing:'yuedu appTests/SharedImportQueueDrainerTests' \
+  -only-testing:'yuedu appUITests/ReplaceRuleImportUITests'
+caffeinate -is bash scripts/xctest.sh -t 300 -l "$LOGDIR/ui-repeat.log" -- \
+  -only-testing:'yuedu appUITests/ReplaceRuleImportUITests'
+```
+
+Xcode 27.2、iOS 27.2，复用上轮隔离模拟器，同机不清数据。两次均 `** TEST SUCCEEDED **`：`Test run with 56 tests in 4 suites passed after 9.409 seconds`，UI 各 `Executed 1 test, with 0 failures (0 unexpected)`。`ruby scripts/check_localizations.rb` 输出 `Localization OK: Resources/*.lproj/Localizable.strings (5 files, 4415 keys)`；`git diff --check` 无报错。未跑全量、最低 iOS 17、真机或真实 WebDAV。无需回滚数据；若调整实现，须保留内层歧义不得部分保存、目录与正文共用查找及不截断源地址。
+
+复审指纹：`git hash-object Modules/Core/Replace/ReplaceRuleStore.swift` → `8a138a0a20182dfb350f9fb2c3acbf5884c34a4f`；`Modules/Core/EPUB/BookParsing.swift` → `2797d3325a94b83f5391e836d62f173ead64b87e`。完整 14 项见 `tested-files.txt`，包括未跟踪的 UI 测试文件。未提交、合并或推送。
+
+## 共享嵌套规则包不入书架（2026-11-28）
+
+修前同一份 `data` 数组里含有歧义规则包装和一个带章名的对象：手动审查拒绝，系统共享却调用书籍导入。新增共享队列回归在修改生产代码前实跑，`red.log` 输出 `14 tests in 1 suite failed … with 7 issues`：两个输入路由错误，另有三个输入本可直接定类却执行了章节探测。
+
+- 规则识别只沿数组和已知包装字段查找 `pattern` 及其别名。出现明确规则时直接送审；只有包装名不足以区分书籍和规则时才探测章节。共享回归断言：坏包失败、不调用书籍导入、不写规则；带空 `replaceRules` 的 `toc.items`、`toc.data` 仍可读出原章。RSS、书源的识别顺序和规则的保存方式不变。
+- 章节优先查找与兜底查找不再访问同一个实际键；若 `data` 无内容，独立的 `DATA` 字段仍可找到章节。主机在一份两章合成目录的生产函数副本上计数：分流和完整解析分别只访问一次空 `items`，后者保留两章（`chapter-visits.log`）。这是访问次数，不是真机耗时。文件和内存入口共用 `import.classify.rulesOrBook`，性能记录只带线程和字节数，不记录输入内容。
+
+Xcode 27.2、iOS 27.2，复用已有隔离模拟器、不清数据。定向命令如下（`LOGDIR` 使用新的本地日志目录，避免覆盖已有证据）：
+
+```bash
+export DEVELOPER_DIR="$(bash scripts/sim.sh xcode)" YUEDU_SCHEME=Reader-Fork-Dev
+export YUEDU_DEST="$(<.artifacts/legado-ios-contracts.VRw62I/destination)"
+LOGDIR=$(mktemp -d .artifacts/shared-rule-routing.XXXXXX)
+bash scripts/xctest.sh -t 600 -l "$LOGDIR/green.log" -- \
+  -only-testing:'yuedu appTests/SharedImportQueueDrainerTests' \
+  -only-testing:'yuedu appTests/ReplaceRuleDisplayTimeTests' \
+  -only-testing:'yuedu appTests/ReplaceRuleImportParserTests' \
+  -only-testing:'yuedu appTests/RuleSubscriptionTests' \
+  -only-testing:'yuedu appUITests/ReplaceRuleImportUITests'
+```
+
+本轮日志目录 `.artifacts/shared-rule-routing.1vD0Hy/`：`green.log` 为 `57 tests in 4 suites passed`、UI `Executed 1 test, with 0 failures`、`** TEST SUCCEEDED **`；UI 本轮跑一次。`tested-files.txt` 记录 14 个受测文件指纹，`ReplaceRuleStore.swift` 为 `60d29fe89ffd24ac1b087e042fe0d8e8b984c929`。未跑全量、最低 iOS 17 或真机。仅本地代码变更，无数据迁移；回退时只回退本节涉及的分流、查找和配套测试改动，不动既有工作树中的其他改动或用户数据。
+
+### 本地提交前核对
+
+按用户授权仅提交本批规则导入、换源、WebDAV 恢复预览、有声书中断修复及对应测试和文档；不合并、不推送。工作区另有的 3.0.4（9）版号修改、原始源包、本地日志和其他无关文件不纳入。
+
+在同一隔离 iOS 27.2 模拟器、Xcode 27.2 与 `Reader-Fork-Dev` 下执行 `bash scripts/xctest.sh -- -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile`，通过 `-only-testing` 选上一节四套核心测试、`ChapterAlignmentTests`、`ShelfVersionSwitchTests`、`WebDAVVersionedBackupTests`、`RSSWebDAVBackupTests`，以及本批五项有声书中断和输出切换用例。`.artifacts/legado-ios-commit.60Uasx/regression.log` 实际输出 `Test run with 101 tests in 9 suites passed after 14.717 seconds` 和 `** TEST SUCCEEDED **`。文件选择器 UI 未重复运行；复核上一节 UI 日志和 14 个受测文件指纹一致。`ruby scripts/check_localizations.rb` 验证五语 4415 键；五份相关 Markdown 的 UTF-8／LF、围栏和本地链接核对通过。未跑全量、最低 iOS 17、真机或真实 WebDAV；不改变发布状态与前述回退方式。

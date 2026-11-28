@@ -1,5 +1,10 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    /// 隔离宿主可只使用系统外观，避免主题修饰器读取用户偏好或触发迁移。
+    @Entry var usesUserAppearance: Bool = true
+}
+
 // MARK: - Design System: Shared Components
 
 /// Common search bar shared by HomeView and BookSourceListView.
@@ -129,6 +134,22 @@ struct PageBackgroundView: View {
 }
 
 private struct ThemedAppSurfaceModifier: ViewModifier {
+    let scope: AppearancePageBackgroundScope
+    @Environment(\.usesUserAppearance) private var usesUserAppearance
+
+    func body(content: Content) -> some View {
+        if usesUserAppearance {
+            content.modifier(UserConfiguredAppSurfaceModifier(scope: scope))
+        } else {
+            content
+                .scrollContentBackground(.hidden)
+                .background { DSColor.groupedBackground.ignoresSafeArea() }
+                .toolbarBackground(.hidden, for: .navigationBar)
+        }
+    }
+}
+
+private struct UserConfiguredAppSurfaceModifier: ViewModifier {
     let scope: AppearancePageBackgroundScope
     @Bindable private var gs = GlobalSettings.shared
 

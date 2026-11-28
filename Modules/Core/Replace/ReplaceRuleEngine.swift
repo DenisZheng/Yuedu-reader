@@ -80,6 +80,11 @@ enum ReplaceRuleEngine {
         ])
     }
 
+    /// 导入只编译，不执行表达式；选项和实际阅读时的规则一致。
+    static func compileRegex(_ pattern: String) throws -> NSRegularExpression {
+        try NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+    }
+
     /// The compiled rule, shared by both entry points so a string and an attributed string
     /// see exactly the same options (`anchorsMatchLines`).
     private static func regex(for pattern: String) -> NSRegularExpression? {
@@ -88,7 +93,7 @@ enum ReplaceRuleEngine {
         }
         let compiled: NSRegularExpression
         do {
-            compiled = try NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+            compiled = try compileRegex(pattern)
         } catch {
             AppLogger.error("Replace rule pattern does not compile", context: [
                 "pattern": String(pattern.prefix(120)),

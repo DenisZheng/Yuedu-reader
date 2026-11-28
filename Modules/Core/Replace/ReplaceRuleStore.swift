@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreFoundation
 import os
 
 /// Singleton store for user-configurable replace rules.
@@ -106,21 +107,89 @@ final class ReplaceRuleStore: @MainActor ObservableObject {
     /// Rules that apply to the given book-source URL, sorted by `sortOrder`. Safe from any
     /// thread: reads the snapshot, not the main-actor `rules`.
     nonisolated static func rules(for sourceUrl: String) -> [ReplaceRule] {
-        snapshot.withLock { $0 }
-            .filter { $0.enabled && Self.scope($0.scope, matches: sourceUrl) }
+        rules(for: sourceUrl, from: snapshot.withLock { $0 })
+    }
+
+    /// 生产快照和隔离测试共用启用过滤、范围选择与执行顺序，不修改共享快照。
+    nonisolated static func rules(for sourceUrl: String, from rules: [ReplaceRule]) -> [ReplaceRule] {
+        rules.filter { $0.enabled && Self.scope($0.scope, matches: sourceUrl) }
             .sorted { $0.sortOrder < $1.sortOrder }
     }
 
-    private nonisolated static func scope(_ scope: String, matches sourceUrl: String) -> Bool {
+    nonisolated static func scope(_ scope: String, matches sourceUrl: String) -> Bool {
         let trimmed = scope.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != "global", trimmed != "*" else { return true }
-        if trimmed == sourceUrl { return true }
+        guard !sourceUrl.isEmpty, trimmed.contains(sourceUrl) else { return false }
+        // 不能解释的旧范围只保留整体精确匹配；列表不能作为一个源地址命中。
+        return sourceAddresses(in: trimmed)?.contains(sourceUrl) ?? (trimmed == sourceUrl)
+    }
 
-        let separators = CharacterSet(charactersIn: ",，;；\n")
-        return trimmed
-            .components(separatedBy: separators)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .contains(sourceUrl)
+    private nonisolated static let scopeSeparators = CharacterSet(charactersIn: ",，;；").union(.newlines)
+
+    fileprivate nonisolated static func supportsScope(_ scope: String) -> Bool {
+        scope == "global" || scope == "*" || sourceAddresses(in: scope) != nil
+    }
+
+    /// 只在分隔处后面确实有 HTTP(S) 地址时切分。保留前一个地址能容纳的标点；
+    /// 连续标点不能留在主机或端口时，按旧列表的空分隔处理。
+    private nonisolated static func sourceAddresses(in scope: String) -> [String]? {
+        var start = scope.startIndex
+        var cursor = start
+        var addresses: [String] = []
+        func isSeparator(_ character: Character) -> Bool {
+            character.unicodeScalars.allSatisfy(scopeSeparators.contains)
+        }
+        func appendAddress(upTo end: String.Index) -> Bool {
+            let address = scope[start..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isSourceAddress(address) else { return false }
+            addresses.append(address)
+            return true
+        }
+        while cursor < scope.endIndex {
+            let boundary = cursor
+            scope.formIndex(after: &cursor)
+            guard isSeparator(scope[boundary]) else { continue }
+            var preferredBoundary = boundary
+            var sawWhitespace = scope[boundary].isWhitespace
+            var reachedPunctuationAfterWhitespace = false
+            while cursor < scope.endIndex {
+                let character = scope[cursor]
+                if character.isWhitespace {
+                    sawWhitespace = true
+                } else if !isSeparator(character) {
+                    break
+                } else if !reachedPunctuationAfterWhitespace {
+                    // 尽量保留前面的标点，但不能留下地址内部的空白。
+                    preferredBoundary = cursor
+                    reachedPunctuationAfterWhitespace = sawWhitespace
+                }
+                scope.formIndex(after: &cursor)
+            }
+            let prefix = scope[cursor...].prefix(8).lowercased()
+            let schemeLength: Int
+            if prefix.hasPrefix("http://") { schemeLength = 7 }
+            else if prefix == "https://" { schemeLength = 8 }
+            else { continue }
+            // 查询值中的 "http://" 不是下一个地址；先确认确实有有效的 authority。
+            let hostStart = scope.index(cursor, offsetBy: schemeLength)
+            var hostEnd = hostStart
+            while hostEnd < scope.endIndex, !isSeparator(scope[hostEnd]), !scope[hostEnd].isWhitespace,
+                  !"/?#".contains(scope[hostEnd]) {
+                scope.formIndex(after: &hostEnd)
+            }
+            guard isSourceAddress(String(scope[cursor..<hostEnd])) else { continue }
+            guard appendAddress(upTo: preferredBoundary) ||
+                    (preferredBoundary != boundary && appendAddress(upTo: boundary)) else { return nil }
+            start = cursor
+        }
+        return appendAddress(upTo: scope.endIndex) ? addresses : nil
+    }
+
+    private nonisolated static func isSourceAddress(_ address: String) -> Bool {
+        guard address.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              let url = URLComponents(string: address), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https", let host = url.host, !host.isEmpty else { return false }
+        return host.rangeOfCharacter(from: scopeSeparators) == nil
     }
 
     func replaceRulesFromSync(_ syncedRules: [ReplaceRule]) {
@@ -131,23 +200,37 @@ final class ReplaceRuleStore: @MainActor ObservableObject {
     }
 
     @discardableResult
-    func importFromLegadoJSON(_ json: String) throws -> Int {
-        guard let data = json.data(using: .utf8) else {
-            throw ReplaceRuleImportError.invalidData
-        }
-        return try importFromLegadoData(data)
+    func importFromLegadoJSON(_ json: String) async throws -> Int {
+        try await importFromLegadoData(Data(json.utf8))
     }
 
+    /// 共享文件等没有确认界面的入口只接收完整支持的规则包。
     @discardableResult
-    func importFromLegadoData(_ data: Data) throws -> Int {
-        let importedRules = try ReplaceRuleImportParser.parse(data: data)
-        guard !importedRules.isEmpty else {
-            throw ReplaceRuleImportError.noRules
-        }
+    func importFromLegadoData(_ data: Data) async throws -> Int {
+        let review = try await ReplaceRuleImportParser.review(data: data)
+        guard !review.hasIssues else { throw ReplaceRuleImportError.incompletePack }
+        return try await importConfirmedRules(review)
+    }
 
-        let merged = Self.merging(importedRules, into: rules)
-        if merged != rules { rules = merged; save() }
-        return importedRules.count
+    /// 手动预览确认后仅提交可支持的规则，合并时仍保留现有规则身份。
+    func importConfirmedRules(_ review: ReplaceRuleImportReview) async throws -> Int {
+        guard !review.rules.isEmpty else { throw ReplaceRuleImportError.noRules }
+        let before = revision
+        let merged = await Self.changedImport(review.rules, into: rules)
+        try Task.checkCancellation()
+        guard revision == before else { throw ReplaceRuleImportError.rulesChanged }
+        if let merged { rules = merged; save() }
+        try await persistPendingChanges()
+        return review.rules.count
+    }
+
+    @concurrent private nonisolated static func changedImport(
+        _ incoming: [ReplaceRule], into existing: [ReplaceRule]
+    ) async -> [ReplaceRule]? {
+        SourcePerfTrace.span("replace.import.merge", "main=\(Thread.isMainThread) incoming=\(incoming.count) existing=\(existing.count)") {
+            let merged = merging(incoming, into: existing)
+            return merged == existing ? nil : merged
+        }
     }
 
     /// 导入和规则订阅共用身份合并；Android数字ID映射后保持稳定，更新不插入第二条规则。
@@ -308,167 +391,239 @@ final class ReplaceRuleStore: @MainActor ObservableObject {
 }
 
 enum ReplaceRuleImportError: LocalizedError {
-    case invalidData
-    case parseError
-    case noRules
+    case invalidData, parseError, ambiguousPack, noRules, incompletePack, tooLarge, rulesChanged
 
     var errorDescription: String? {
         switch self {
-        case .invalidData:
-            return localized("無法讀取文件")
-        case .parseError:
-            return localized("替換規則 JSON 解析失敗")
-        case .noRules:
-            return localized("未找到可匯入的替換規則")
+        case .invalidData: localized("無法讀取文件")
+        case .parseError: localized("替換規則 JSON 解析失敗")
+        case .ambiguousPack: localized("檔案包含多組替換規則，請只保留一組。")
+        case .noRules: localized("未找到可匯入的替換規則")
+        case .incompletePack: localized("檔案含不支援或無效的規則，請到替換規則頁面檢查後再匯入。")
+        case .tooLarge: localized("替換規則檔案超過匯入上限")
+        case .rulesChanged: localized("本機替換規則已變更，請再試一次。")
+        }
+    }
+}
+
+struct ReplaceRuleImportReview: Sendable {
+    struct Row: Identifiable, Sendable, Equatable {
+        enum Outcome: Sendable, Equatable {
+            case supported(ReplaceRule, originalID: String?)
+            case unsupported([String])
+            case invalid([String])
+        }
+
+        let id: Int // 原始文件中的行序号（从 1 开始），不是规则 ID。
+        let outcome: Outcome
+    }
+
+    let rows: [Row]
+    let rules: [ReplaceRule]
+    var hasIssues: Bool { rows.count != rules.count }
+
+    init(rows: [Row]) {
+        self.rows = rows
+        rules = rows.compactMap {
+            if case let .supported(rule, _) = $0.outcome { return rule }
+            return nil
         }
     }
 }
 
 enum ReplaceRuleImportParser {
-    static func parse(data: Data) throws -> [ReplaceRule] {
-        let object: Any
-        do {
-            object = try JSONSerialization.jsonObject(with: data)
-        } catch {
-            throw ReplaceRuleImportError.parseError
-        }
+    static let maximumBytes = 8 * 1_024 * 1_024
+    private static let maximumRules = 10_000
+    private static let patternKeys = ["pattern", "regex", "replaceRegex"]
+    private static let namedPacks = ["replaceRules", "replaceRule", "replaceRuleList"]
+    private static let wrapperKeys = namedPacks + ["rules", "data"]
 
-        guard let rawRules = ruleObjects(from: object) else {
-            throw ReplaceRuleImportError.noRules
+    /// 只沿数组和规则包装查找实际规则。仅有包装名时才询问是否为书，且只询问一次。
+    static func recognizesPack(_ root: Any, requiresRuleMarker: @autoclosure () -> Bool = false) -> Bool {
+        var hasNamedPack = false
+        func containsPattern(_ value: Any, isArrayRow: Bool = false) -> Bool {
+            if let rows = value as? [Any] {
+                return rows.contains { containsPattern($0, isArrayRow: true) }
+            }
+            guard let object = value as? [String: Any] else { return false }
+            if hasPatternField(object) { return true }
+            for key in wrapperKeys {
+                guard let child = object[key] else { continue }
+                // 章节数组中的一行可以附带空 replaceRules；仅此不能把整本书改道。
+                if namedPacks.contains(key), !isArrayRow || (child as? [Any])?.isEmpty != true {
+                    hasNamedPack = true
+                }
+                if containsPattern(child) { return true }
+            }
+            return false
         }
-
-        let rules = rawRules.compactMap { makeRule(from: $0) }
-        guard !rules.isEmpty else {
-            throw ReplaceRuleImportError.noRules
-        }
-        return rules
+        return containsPattern(root) || (hasNamedPack && !requiresRuleMarker())
     }
 
-    private static func ruleObjects(from object: Any) -> [[String: Any]]? {
-        if let array = object as? [[String: Any]] {
-            return array
-        }
+    private static func hasPatternField(_ object: [String: Any]) -> Bool {
+        patternKeys.contains { object[$0] != nil }
+    }
 
-        guard let dictionary = object as? [String: Any] else {
+    @concurrent static func review(file url: URL) async throws -> ReplaceRuleImportReview {
+        try Task.checkCancellation()
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        let data: Data
+        do {
+            data = try SourcePerfTrace.span("replace.import.read", "main=\(Thread.isMainThread)") {
+                try DocumentImportReader.read(url, maximumBytes: maximumBytes)
+            }
+        } catch DocumentImportReader.Failure.tooLarge {
+            throw ReplaceRuleImportError.tooLarge
+        } catch {
+            throw ReplaceRuleImportError.invalidData
+        }
+        return try makeReview(data)
+    }
+
+    @concurrent static func review(data: Data) async throws -> ReplaceRuleImportReview {
+        try makeReview(data)
+    }
+
+    private static func makeReview(_ data: Data) throws -> ReplaceRuleImportReview {
+        try Task.checkCancellation()
+        guard data.count <= maximumBytes else { throw ReplaceRuleImportError.tooLarge }
+        return try SourcePerfTrace.span("replace.import.review", "main=\(Thread.isMainThread) bytes=\(data.count)") {
+            let object: Any
+            do { object = try JSONSerialization.jsonObject(with: data) }
+            catch { throw ReplaceRuleImportError.parseError }
+            let raw = try ruleObjects(from: object)
+            guard raw.count <= maximumRules else { throw ReplaceRuleImportError.tooLarge }
+            return try ReplaceRuleImportReview(rows: raw.enumerated().map { index, value in
+                .init(id: index + 1, outcome: try reviewRow(value))
+            })
+        }
+    }
+
+    private static func ruleObjects(from object: Any) throws -> [Any] {
+        if let array = object as? [Any] { return array }
+        guard let dictionary = object as? [String: Any] else { throw ReplaceRuleImportError.invalidData }
+        if let nested = try checkedWrapper(in: dictionary) { return try ruleObjects(from: nested) }
+        return [dictionary] // 单条对象即使缺少必填字段，也保留错误诊断。
+    }
+
+    /// 顶层和数组行都遵守相同的歧义约束，不能靠多包一层数组绕过检查。
+    private static func checkedWrapper(in dictionary: [String: Any]) throws -> Any? {
+        let wrappers = wrapperKeys.compactMap { dictionary[$0] }
+        guard wrappers.count <= 1, wrappers.isEmpty || !hasPatternField(dictionary) else {
+            throw ReplaceRuleImportError.ambiguousPack
+        }
+        return wrappers.first
+    }
+
+    /// 数组行只接受单条规则。即使行形状不合法，也沿已知包装查到内层：
+    /// 找到歧义就拒绝整个包，而不是把那行降为可略过的错误。
+    private static func checkedRuleDictionary(from object: Any) throws -> [String: Any]? {
+        try Task.checkCancellation()
+        if let array = object as? [Any] {
+            for child in array { _ = try checkedRuleDictionary(from: child) }
             return nil
         }
+        guard let dictionary = object as? [String: Any] else { return nil }
+        if let nested = try checkedWrapper(in: dictionary) {
+            _ = try checkedRuleDictionary(from: nested)
+            return nil
+        }
+        return dictionary
+    }
 
-        if looksLikeRule(dictionary) {
-            return [dictionary]
+    private static func reviewRow(_ object: Any) throws -> ReplaceRuleImportReview.Row.Outcome {
+        guard let dictionary = try checkedRuleDictionary(from: object) else { return .invalid([]) }
+        var invalid: [String] = []
+        func read<T>(_ keys: [String], selecting: (T) -> Bool = { _ in true }, _ decode: (Any) -> T?) -> T? {
+            var value: T?
+            for key in keys {
+                guard let raw = dictionary[key] else { continue }
+                guard let decoded = decode(raw) else { invalid.append(key); continue }
+                if value == nil, selecting(decoded) { value = decoded }
+            }
+            return value
+        }
+        // 旧包使用首个非空文本别名；空字符串不应盖掉后面的替换值。
+        func readTextAlias(_ keys: [String]) -> String? {
+            read(keys, selecting: { !$0.isEmpty }) { $0 as? String }
+        }
+        let pattern = readTextAlias(patternKeys)
+        if pattern == nil {
+            let key = patternKeys.first { dictionary[$0] != nil } ?? "pattern"
+            if !invalid.contains(key) { invalid.append(key) }
+        }
+        let name = read(["name"]) { $0 as? String }
+        let group = read(["group"], nullableString)
+        let replacement = readTextAlias(["replacement", "replace"])
+        let scope = read(["scope"], nullableString)
+        let exclusion = read(["excludeScope"], nullableString)
+        let title = read(["scopeTitle"], boolean)
+        let body = read(["scopeContent"], boolean)
+        let source = read(["scopeSource"], boolean)
+        let regex = read(["isRegex"], boolean)
+        let enabled = read(["isEnabled", "enabled"], boolean)
+        let timeout = read(["timeoutMillisecond"], integer)
+        let order = read(["sortOrder", "order"], integer)
+        let originalID = read(["id"], identifier)
+        guard invalid.isEmpty, let pattern else { return .invalid(invalid) }
+
+        let trimmedScope = scope?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var unsupported: [String] = []
+        if title == true { unsupported.append("scopeTitle") }
+        if body == false { unsupported.append("scopeContent") }
+        if source == true { unsupported.append("scopeSource") }
+        if let exclusion, !exclusion.isEmpty { unsupported.append("excludeScope") }
+        if let scope, !scope.isEmpty, !ReplaceRuleStore.supportsScope(trimmedScope) { unsupported.append("scope") }
+        if let timeout, timeout != Int(ReplaceRuleEngine.regexTimeout * 1_000) { unsupported.append("timeoutMillisecond") }
+        if regex != false, replacement?.hasPrefix("@js:") == true { unsupported.append("replacement") }
+        guard unsupported.isEmpty else { return .unsupported(unsupported) }
+
+        if regex != false {
+            do { _ = try ReplaceRuleEngine.compileRegex(pattern) }
+            catch {
+                let key = patternKeys.first { (dictionary[$0] as? String)?.isEmpty == false } ?? "pattern"
+                return .invalid([key])
+            }
         }
 
-        for key in ["replaceRules", "replaceRule", "replaceRuleList", "rules"] {
-            guard let nested = dictionary[key],
-                  let objects = ruleObjects(from: nested) else { continue }
-            return objects
-        }
+        let rawName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rawGroup = group?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayName = rawGroup.isEmpty ? rawName : (rawName.isEmpty ? rawGroup : "\(rawName) (\(rawGroup))")
+        let id = originalID.map { Int64($0) == nil ? $0 : "legado:" + $0 } ?? UUID().uuidString
+        return .supported(ReplaceRule(id: id, name: displayName, pattern: pattern,
+            replacement: replacement ?? "", isRegex: regex ?? true, enabled: enabled ?? true,
+            scope: trimmedScope.isEmpty ? "global" : trimmedScope, sortOrder: order ?? 0), originalID: originalID)
+    }
 
-        if let nested = dictionary["data"] {
-            return ruleObjects(from: nested)
-        }
+    private static func nullableString(_ raw: Any) -> String? {
+        raw is NSNull ? "" : raw as? String
+    }
 
+    private static func boolean(_ raw: Any) -> Bool? {
+        if let text = raw as? String {
+            switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1", "yes", "y": return true
+            case "false", "0", "no", "n": return false
+            default: return nil
+            }
+        }
+        guard let number = raw as? NSNumber else { return nil }
+        if number.compare(0) == .orderedSame { return false }
+        if number.compare(1) == .orderedSame { return true }
         return nil
     }
 
-    private static func looksLikeRule(_ dictionary: [String: Any]) -> Bool {
-        dictionary["pattern"] != nil
-            || dictionary["regex"] != nil
-            || dictionary["replaceRegex"] != nil
+    private static func integer(_ raw: Any) -> Int? {
+        if let text = raw as? String { return Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return number as? Int
     }
 
-    private static func makeRule(from dictionary: [String: Any]) -> ReplaceRule? {
-        guard boolValue(dictionary["scopeContent"], defaultValue: true) else {
-            return nil
-        }
-
-        let pattern = firstString(in: dictionary, keys: ["pattern", "regex", "replaceRegex"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !pattern.isEmpty else { return nil }
-
-        let group = stringValue(dictionary["group"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let rawName = stringValue(dictionary["name"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayName: String
-        if group.isEmpty {
-            displayName = rawName
-        } else if rawName.isEmpty {
-            displayName = group
-        } else {
-            displayName = "\(rawName) (\(group))"
-        }
-
-        let replacement = firstString(in: dictionary, keys: ["replacement", "replace"])
-        let rawScope = stringValue(dictionary["scope"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let scope = rawScope.isEmpty ? "global" : rawScope
-        let sortOrder = intValue(
-            dictionary["sortOrder"] ?? dictionary["order"],
-            defaultValue: 0
-        )
-
-        let importedID = stringValue(dictionary["id"])
-        let id = importedID.isEmpty ? UUID().uuidString : (Int64(importedID) == nil ? importedID : "legado:" + importedID)
-        return ReplaceRule(
-            id: id,
-            name: displayName,
-            pattern: pattern,
-            replacement: replacement,
-            isRegex: boolValue(dictionary["isRegex"], defaultValue: true),
-            enabled: boolValue(
-                dictionary["isEnabled"] ?? dictionary["enabled"],
-                defaultValue: true
-            ),
-            scope: scope,
-            sortOrder: sortOrder
-        )
-    }
-
-    private static func firstString(in dictionary: [String: Any], keys: [String]) -> String {
-        for key in keys {
-            let value = stringValue(dictionary[key])
-            if !value.isEmpty { return value }
-        }
-        return ""
-    }
-
-    private static func stringValue(_ value: Any?) -> String {
-        switch value {
-        case let string as String:
-            return string
-        case let number as NSNumber:
-            return number.stringValue
-        default:
-            return ""
-        }
-    }
-
-    private static func boolValue(_ value: Any?, defaultValue: Bool) -> Bool {
-        switch value {
-        case let bool as Bool:
-            return bool
-        case let number as NSNumber:
-            return number.boolValue
-        case let string as String:
-            let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if ["true", "1", "yes", "y"].contains(normalized) { return true }
-            if ["false", "0", "no", "n"].contains(normalized) { return false }
-            return defaultValue
-        default:
-            return defaultValue
-        }
-    }
-
-    private static func intValue(_ value: Any?, defaultValue: Int) -> Int {
-        switch value {
-        case let int as Int:
-            return int
-        case let number as NSNumber:
-            return number.intValue
-        case let string as String:
-            return Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) ?? defaultValue
-        default:
-            return defaultValue
-        }
+    private static func identifier(_ raw: Any) -> String? {
+        if let text = raw as? String { return text.isEmpty ? nil : text }
+        guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              Int64(number.stringValue) != nil else { return nil }
+        return number.stringValue
     }
 }
