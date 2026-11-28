@@ -24,6 +24,7 @@ final class BookSourceCheckBackgroundTask {
 
     private var assertion: UIBackgroundTaskIdentifier = .invalid
     private var onExpire: (@MainActor () -> Void)?
+    private var backgroundObserver: NSObjectProtocol?
     private var total = 0
     private var finished = 0
     /// The continued-processing request submitted for the run in progress.
@@ -36,12 +37,23 @@ final class BookSourceCheckBackgroundTask {
 
     private init() {}
 
-    /// - Parameter onExpire: ends the run; called when iOS is about to stop the app running.
-    func runStarted(total: Int, onExpire: @escaping @MainActor () -> Void) {
+    /// 进入后台时先保存已完成的结果；系统用完后台时间时停止验活。
+    func runStarted(
+        total: Int,
+        onBackground: @escaping @MainActor () -> Void,
+        onExpire: @escaping @MainActor () -> Void
+    ) {
         runEnded()
         self.total = total
         finished = 0
         self.onExpire = onExpire
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { onBackground() }
+        }
         assertion = UIApplication.shared.beginBackgroundTask(withName: "Source Check") { [weak self] in
             self?.assertionExpired()
         }
@@ -64,6 +76,10 @@ final class BookSourceCheckBackgroundTask {
     /// The run finished or was stopped. Safe to call more than once.
     func runEnded() {
         onExpire = nil
+        if let backgroundObserver {
+            NotificationCenter.default.removeObserver(backgroundObserver)
+            self.backgroundObserver = nil
+        }
         if assertion != .invalid {
             UIApplication.shared.endBackgroundTask(assertion)
             assertion = .invalid

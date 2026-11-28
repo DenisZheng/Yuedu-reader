@@ -23,9 +23,10 @@ final class VideoPlaybackController {
     }
 
     /// Speeds the speed menu offers (legado-E / MD3: 0.5–3.0).
-    static let rates: [Float] = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
-    /// legado-E's long-press speed default (`longPressSpeed` 30 = 3.0×).
-    static let longPressRate: Float = 3
+    private static let rates: [Float] = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
+    private static let longPressRate: Float = 3
+    // AVFoundation 会让超过 2× 的 HLS 进入跳帧扫描，不能保持正常音轨。
+    private static let streamRateLimit: Float = 2
 
     let player = AVPlayer()
     let guide: VideoEpisodeGuide
@@ -38,8 +39,10 @@ final class VideoPlaybackController {
     /// has no seekable span (still loading, or live with no window to go back in).
     private(set) var seekableRange: ClosedRange<Double>?
     /// The speed the player keeps; a long press only lends it another for a while.
-    private(set) var rate: Float = 1
+    private var rate: Float = 1
     private(set) var isLongPressing = false
+    /// 当前媒体是否为流；识别完成前以流的安全速度播放。
+    private(set) var isStream: Bool?
     /// The picture's size once the stream reports it; the player turns to match it.
     private(set) var pictureSize: CGSize?
 
@@ -60,6 +63,7 @@ final class VideoPlaybackController {
     @ObservationIgnored private var rssRefresh: RSSRefresh?
     private var rssStreamStale = false
     private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var streamKindTask: Task<Void, Never>?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
@@ -161,6 +165,8 @@ final class VideoPlaybackController {
         case .book: break
         }
         loadTask?.cancel()
+        streamKindTask?.cancel()
+        streamKindTask = nil
         player.pause()
         player.replaceCurrentItem(with: nil)
         if let timeObserver { player.removeTimeObserver(timeObserver) }
@@ -234,6 +240,9 @@ final class VideoPlaybackController {
         rssSeekRevision &+= 1
         isRSSSeeking = false
         loadTask?.cancel()
+        streamKindTask?.cancel()
+        streamKindTask = nil
+        isStream = nil
         player.pause()
         player.replaceCurrentItem(with: nil)
         statusObservation = nil
@@ -343,6 +352,24 @@ final class VideoPlaybackController {
             item.observe(\.seekableTimeRanges, options: [.new]) { item, _ in timelineChanged(item) },
         ]
         player.replaceCurrentItem(with: item)
+
+        // 查同一个 asset 的轨道；源常把 HLS 放在无扩展名的地址，不能按链接后缀判断。
+        let asset = item.asset
+        streamKindTask = Task { [weak self] in
+            do {
+                let isStream = try await asset.load(.tracks).isEmpty
+                try Task.checkCancellation()
+                guard let self, !self.closed,
+                      self.player.currentItem.map(ObjectIdentifier.init) == identity else { return }
+                self.isStream = isStream
+                self.applyRate()
+            } catch is CancellationError {
+                return
+            } catch {
+                // 播放错误仍由 item 报告；仅无法识别媒体类型时保留安全倍速。
+                AppLogger.info("[Video] Could not identify media kind for playback speed", level: .notice)
+            }
+        }
     }
 
     private func itemStatusChanged(_ status: AVPlayerItem.Status, error: String?, of item: ObjectIdentifier) {
@@ -422,7 +449,8 @@ final class VideoPlaybackController {
             phase = .paused
             return
         }
-        player.playImmediately(atRate: isLongPressing ? Self.longPressRate : rate)
+        player.defaultRate = playingRate
+        player.playImmediately(atRate: effectiveRate)
         phase = .playing
     }
 
@@ -463,17 +491,32 @@ final class VideoPlaybackController {
         seek(to: currentTime + seconds)
     }
 
-    func setRate(_ rate: Float) {
-        self.rate = rate
-        player.defaultRate = rate
-        if phase == .playing, !isLongPressing { player.rate = rate }
+    var offeredRates: [Float] {
+        isStream == false ? Self.rates : Self.rates.filter { $0 <= Self.streamRateLimit }
     }
 
-    /// legado-E's long press: a faster speed while the finger stays down.
+    var playingRate: Float { playableRate(rate) }
+    var effectiveRate: Float { playableRate(isLongPressing ? Self.longPressRate : rate) }
+
+    private func playableRate(_ rate: Float) -> Float {
+        isStream == false ? rate : min(rate, Self.streamRateLimit)
+    }
+
+    func setRate(_ rate: Float) {
+        self.rate = rate
+        applyRate()
+    }
+
+    /// 长按只临时改变速度，松开回到用户选定的速度。
     func setLongPressing(_ pressing: Bool) {
         guard pressing != isLongPressing else { return }
         isLongPressing = pressing
-        if phase == .playing { player.rate = pressing ? Self.longPressRate : rate }
+        applyRate()
+    }
+
+    private func applyRate() {
+        player.defaultRate = playingRate
+        if phase == .playing { player.rate = effectiveRate }
     }
 
     // MARK: Observation

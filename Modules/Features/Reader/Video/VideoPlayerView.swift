@@ -61,7 +61,7 @@ struct VideoPlayerView: View {
                         .transition(.opacity)
                 }
                 if controller.isLongPressing {
-                    longPressBadge
+                    longPressBadge(controller)
                 }
                 if let pan, pan.kind == .seek, let range = controller.seekableRange {
                     VideoSeekBadge(time: pan.value, end: range.upperBound, delta: pan.value - pan.origin)
@@ -218,9 +218,9 @@ struct VideoPlayerView: View {
         }
     }
 
-    private var longPressBadge: some View {
+    private func longPressBadge(_ controller: VideoPlaybackController) -> some View {
         VStack {
-            Label(VideoPlayerFormat.rate(VideoPlaybackController.longPressRate), systemImage: "forward.fill")
+            Label(VideoPlayerFormat.rate(controller.effectiveRate), systemImage: "forward.fill")
                 .font(DSFont.subheadline.weight(.semibold))
                 .foregroundStyle(DSColor.textOnFixedFill)
                 .padding(.horizontal, DSSpacing.md)
@@ -351,21 +351,24 @@ struct VideoPlayerView: View {
     private func speedMenu(_ controller: VideoPlaybackController) -> some View {
         Menu {
             Picker(localized("倍速"), selection: Binding(
-                get: { controller.rate },
+                get: { controller.playingRate },
                 set: { controller.setRate($0); touched() }
             )) {
-                ForEach(VideoPlaybackController.rates, id: \.self) { rate in
+                ForEach(controller.offeredRates, id: \.self) { rate in
                     Text(VideoPlayerFormat.rate(rate)).tag(rate)
                 }
             }
+            if controller.isStream == true {
+                Text(localized("串流最高支援 2× 播放"))
+            }
         } label: {
-            Text(VideoPlayerFormat.rate(controller.rate))
+            Text(VideoPlayerFormat.rate(controller.playingRate))
                 .font(DSFont.subheadline.weight(.semibold))
                 .monospacedDigit()
                 .frame(minWidth: DSLayout.minimumTapTarget, minHeight: DSLayout.minimumTapTarget)
         }
         .accessibilityLabel(localized("倍速"))
-        .accessibilityValue(VideoPlayerFormat.rate(controller.rate))
+        .accessibilityValue(VideoPlayerFormat.rate(controller.playingRate))
     }
 
     private func centerControls(_ controller: VideoPlaybackController) -> some View {

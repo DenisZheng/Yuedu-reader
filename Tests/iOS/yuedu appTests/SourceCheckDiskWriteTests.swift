@@ -134,6 +134,42 @@ struct SourceCheckDiskWriteTests {
         #expect((300..<180_000).contains(landed.respondTime))
     }
 
+    @Test("长时间验活仍只在结束时写盘", .timeLimit(.minutes(2)))
+    func longRunWritesTheLibraryOnce() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SourceCheckDiskWrite-\(UUID().uuidString)")
+        let sources = (0..<3).map { index in
+            var source = BookSource(bookSourceUrl: "https://long-run-\(index).yuedu.test", bookSourceName: "样本 \(index)")
+            source.searchUrl = source.bookSourceUrl + "/search?q={{key}}"
+            return source
+        }
+        let store = BookSourceStore(directory: directory)
+        store.replaceSourcesFromSync(sources)
+        await store.queuedWritesLanded()
+        let revision = store.mutationRevision
+
+        // 第二个响应跨过原来的 30 秒保存阈值，第三个响应随后才完成。
+        let checker = BookSourceHealthChecker(
+            fetcher: EndOfRunFetcher(slowURL: "", brokenURL: "", delays: [
+                sources[1].bookSourceUrl: .seconds(31),
+                sources[2].bookSourceUrl: .seconds(33),
+            ]),
+            store: store,
+            pacingCondition: BookSourceCheckPacingCondition { false }
+        )
+        checker.policy.checkDiscovery = false
+        checker.prepare(sources: sources)
+        await checker.runAll()
+
+        #expect(checker.finishedCount == 3)
+        #expect(store.mutationRevision - revision == 1)
+        await store.queuedWritesLanded()
+        let reopened = BookSourceStore(directory: directory)
+        await reopened.waitUntilLoaded()
+        #expect(reopened.sources.count == 3)
+        #expect(reopened.sources.allSatisfy { $0.respondTime < 180_000 })
+    }
+
     // MARK: - URL cache
 
     /// Source requests went through sessions backed by `URLCache.shared`, whose Cache.db
@@ -405,10 +441,12 @@ private actor DetailForwardingFetcher: BookSourceHealthCheckFetching {
 private actor EndOfRunFetcher: BookSourceHealthCheckFetching {
     private let slowURL: String
     private let brokenURL: String
+    private let delays: [String: Duration]
 
-    init(slowURL: String, brokenURL: String) {
+    init(slowURL: String, brokenURL: String, delays: [String: Duration] = [:]) {
         self.slowURL = slowURL
         self.brokenURL = brokenURL
+        self.delays = delays
     }
 
     nonisolated func search(
@@ -456,7 +494,12 @@ private actor EndOfRunFetcher: BookSourceHealthCheckFetching {
     ) async throws -> String {
         // The fixture's only job here is to make this source's total time exceed the
         // 「過慢」 threshold the test sets.
-        if source.bookSourceUrl == slowURL { try await Task.sleep(for: .milliseconds(300)) }
+        if let delay = delays[source.bookSourceUrl] {
+            // 这是合成网络响应本身的耗时，不是等待状态稳定。
+            try await Task.sleep(for: delay)
+        } else if source.bookSourceUrl == slowURL {
+            try await Task.sleep(for: .milliseconds(300))
+        }
         return "第一章的正文內容，足夠通過驗證。"
     }
 }
